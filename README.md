@@ -68,7 +68,7 @@ auf deinem eigenen Server betreibst.
 | 📝 [Angebote](https://firsttris.github.io/haben/angebote.html) | Eigener Nummernkreis, PDF und Versand, mit einem Klick zur Rechnung |
 | 📎 [Belege](https://firsttris.github.io/haben/belege.html) | Drag-and-drop, Kamera, Teilen am Handy oder per E-Mail (IMAP); E-Rechnungen direkt gelesen, sonst optional per KI |
 | 🏦 [Bankabgleich](https://firsttris.github.io/haben/bank.html) | Automatischer Abruf per PSD2 oder Import (DKB, N26, CAMT.053), Vorschläge mit Begründung, Teil- und Sammelzahlungen |
-| 📤 [Voranmeldung](https://firsttris.github.io/haben/umsatzsteuer.html) | Kennzahlen aus den Buchungen (Ist oder Soll), Herkunft jeder Zahl, Vorprüfung, Übermittlung per ERiC, Berichtigung |
+| 📤 [Voranmeldung](https://firsttris.github.io/haben/umsatzsteuer.html) | Kennzahlen aus den Buchungen (Ist oder Soll), Herkunft jeder Zahl, Vorprüfung, Übermittlung per ERiC oder ohne Hersteller-ID als XML-Import in Mein ELSTER, Berichtigung |
 | 📑 [Jahreserklärungen](https://firsttris.github.io/haben/jahreserklaerung.html) | USt-Erklärung, Anlage EÜR mit AVEÜR, Einkommensteuererklärung; vorausgefüllte Belege von ELSTER abrufen |
 | 🏛️ [Finanzamt](https://firsttris.github.io/haben/finanzamt.html) | Bescheide und Nachrichten über ELSTER, Herabsetzung der Vorauszahlungen mit Steuerprognose |
 | ⏰ [Fristen](https://firsttris.github.io/haben/fristen.html) | Alle Steuertermine auf einer Seite, als Kalender-Feed (iCal) und per E-Mail |
@@ -76,7 +76,7 @@ auf deinem eigenen Server betreibst.
 | 🖥️ [Anlagen und AfA](https://firsttris.github.io/haben/anlagen.html) | Anlagenverzeichnis, lineare AfA, GWG und Sammelposten, AfA-Buchung zum Jahresende |
 | 📊 [Auswertungen](https://firsttris.github.io/haben/auswertungen.html) | EÜR, offene Posten, Monatsverlauf, Jahresexport als ZIP mit SHA-256-Prüfsummen |
 | 📚 [Buchhaltung](https://firsttris.github.io/haben/buchhaltung.html) | Doppelte Buchführung nach SKR03/SKR04, Journal, Saldenliste, Kontenblätter, DATEV-Export |
-| 📦 [Umzug aus Lexoffice](https://firsttris.github.io/haben/lexoffice.html) | Abruf über die Public API oder Umzug nur über die Exporte, DATEV-Buchungsstapel, offene Posten und Anlagen übernehmen |
+| 📦 [Umzug aus Lexoffice](https://firsttris.github.io/haben/lexoffice.html) | Abruf über die Public API oder, ohne Tarif XL, als Sicherung über die Web-Oberfläche; DATEV-Buchungsstapel, offene Posten und Anlagen übernehmen |
 | 📦 [Umzug aus sevDesk](https://firsttris.github.io/haben/sevdesk.html) | Abruf über die sevDesk-API, gleiches Archiv, gleicher Abgleich |
 | 🔐 Anmeldung und App | Passkey (Passwort als Ersatz), installierbar als PWA auf Handy und Desktop, helle und dunkle Themes |
 | ♿ [Barrierefreiheit](https://firsttris.github.io/haben/barrierefreiheit.html) | Vollständig per Tastatur bedienbar, sichtbarer Fokus, Kontraste in allen Themes; jede Seite in der CI mit axe-core gegen WCAG 2.2 AA geprüft |
@@ -211,7 +211,7 @@ Auch als Website mit Suche: **https://firsttris.github.io/haben/**
 | [Jahreserklärungen](https://firsttris.github.io/haben/jahreserklaerung.html) | Umsatzsteuererklärung, Anlage EÜR mit AVEÜR, Einkommensteuererklärung |
 | [Finanzamt](https://firsttris.github.io/haben/finanzamt.html) · [Fristen](https://firsttris.github.io/haben/fristen.html) | ELSTER-Postfach, Vorauszahlungen, alle Steuertermine als Kalender-Feed (iCal) |
 | [Auswertungen und Jahresexport](https://firsttris.github.io/haben/auswertungen.html) | EÜR, offene Posten, Archiv-ZIP mit Prüfsummen, Aufbewahrung |
-| [Umzug aus Lexoffice](https://firsttris.github.io/haben/lexoffice.html) | API-Abruf, DATEV-Buchungsstapel, offene Posten, Abgleich vor der Kündigung |
+| [Umzug aus Lexoffice](https://firsttris.github.io/haben/lexoffice.html) | API-Abruf oder Sicherung über die Web-Oberfläche, DATEV-Buchungsstapel, offene Posten, Abgleich vor der Kündigung |
 | [Umzug aus sevDesk](https://firsttris.github.io/haben/sevdesk.html) | API-Abruf aus sevDesk ins selbe Archiv, Unterschiede zu Lexoffice |
 | [KI-Assistenten (MCP)](https://firsttris.github.io/haben/ki-assistenten.html) | Im Gespräch mit Claude Code, Claude Desktop oder einem lokalen Modell abfragen; nur lesen |
 | [Mein ELSTER mit KI-Assistent](https://firsttris.github.io/haben/elster-mit-assistent.html) | Ohne Hersteller-ID abgeben: der Assistent trägt die Voranmeldung ein, du sendest ab |

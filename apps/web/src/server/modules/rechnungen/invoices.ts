@@ -7,6 +7,7 @@ import {
   parseExchangeRate,
   rateMonth,
   totalsFromTaxes,
+  firstEmail,
   formatInvoiceNumber,
   invoiceLineInputSchema,
   invoiceDueDate,
@@ -64,6 +65,8 @@ export const draftSchema = z
     serviceTo: isoDate.nullable(),
     paymentTermDays: z.number().int().min(0).max(120),
     format: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
+    /** Einleitung über den Positionen, etwa aus einem Textbaustein */
+    intro: z.string().max(2000).default(""),
     note: z.string().max(2000),
     taxTreatment: z.enum(TAX_TREATMENT_KEYS).default("regulaer"),
     exemptionReason: z.string().trim().max(300).default(""),
@@ -450,6 +453,7 @@ function draftValues(input: DraftInput, bundesland: Company["bundesland"], lines
     paymentTermDays: input.paymentTermDays,
     dueDate: invoiceDueDate(input.issueDate, input.paymentTermDays, bundesland),
     format: input.format,
+    intro: input.intro ?? "",
     note: input.note,
     taxTreatment: input.taxTreatment ?? "regulaer",
     exemptionReason: input.taxTreatment && input.taxTreatment !== "regulaer" ? (input.exemptionReason ?? "").trim() : "",
@@ -543,6 +547,7 @@ export async function newDraftDefaults(today: string) {
     serviceTo: null,
     paymentTermDays: company.paymentTermDays,
     format: company.defaultFormat,
+    intro: "",
     note: "",
     taxTreatment: (company.kleinunternehmer ? "kleinunternehmer" : "regulaer") as TaxTreatment,
     exemptionReason: "",
@@ -658,7 +663,8 @@ export function buyerFrom(contact: Contact): Buyer {
     plz: contact.plz,
     ort: contact.ort,
     land: contact.land,
-    ...(contact.email ? { email: contact.email } : {}),
+    // Die E-Rechnung kennt nur eine Adresse des Käufers (BT-49); weitere Empfänger nimmt der Versand aus dem Kontakt
+    ...(firstEmail(contact.email) ? { email: firstEmail(contact.email) } : {}),
     ...(contact.ustId ? { ustId: contact.ustId } : {}),
     ...(contact.leitwegId ? { leitwegId: contact.leitwegId } : {}),
     ...(contact.kundennummer ? { kundennummer: contact.kundennummer } : {}),
@@ -709,6 +715,7 @@ function documentFor(
     })),
     totals,
     ...(corrects ? { corrects } : {}),
+    ...(invoice.intro ? { intro: invoice.intro } : {}),
     ...(invoice.note ? { note: invoice.note } : {}),
     ...(invoice.taxTreatment !== "regulaer" ? { taxTreatment: invoice.taxTreatment } : {}),
     ...(invoice.exemptionReason ? { exemptionReason: invoice.exemptionReason } : {}),
@@ -1106,9 +1113,6 @@ export async function setNextNumber(actor: string, year: number, next: number) {
 export async function invoiceSummary(today: string) {
   const list = await listInvoices(today);
   const open = list.filter((i) => i.kind === "rechnung" && i.open !== 0);
-  const openIds = new Set(open.map((i) => i.id));
-  // Offene Korrekturen mindern die Forderung ihrer Rechnung
-  const corrections = list.filter((i) => i.kind === "korrektur" && i.open !== 0 && i.correctsId && openIds.has(i.correctsId));
   const month = today.slice(0, 7);
   const previousMonth = (() => {
     const [y, m] = month.split("-").map(Number) as [number, number];
@@ -1118,7 +1122,9 @@ export async function invoiceSummary(today: string) {
   const revenue = (prefix: string) =>
     finals.filter((i) => i.issueDate.startsWith(prefix)).reduce((sum, i) => sum + i.net, 0);
   return {
-    openTotal: [...open, ...corrections].reduce((sum, i) => sum + i.open, 0),
+    // Wie die offenen Forderungen in den Auswertungen (openPositions): alles Festgeschriebene mit offenem Betrag,
+    // also auch Korrekturen und Erstattungen aus Stornos bezahlter Rechnungen
+    openTotal: list.filter((i) => i.status === "final" && i.open !== 0).reduce((sum, i) => sum + i.open, 0),
     openCount: open.length,
     overdueCount: open.filter((i) => i.listStatus === "ueberfaellig").length,
     revenueMonth: { key: month, net: revenue(month) },

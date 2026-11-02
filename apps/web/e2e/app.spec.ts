@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
-import { mkdirSync } from "node:fs";
+import { zipSync } from "fflate";
+import { mkdirSync, readFileSync } from "node:fs";
 
 /**
  * Ein Durchlauf wie im echten Betrieb, in einer leeren Datenbank: Konto einrichten, Kunden anlegen,
@@ -171,6 +172,15 @@ test("Beleg hochladen und buchen", async ({ browser }) => {
   await page.getByRole("button", { name: "Bestätigen und buchen" }).click();
   await page.getByRole("button", { name: "Jetzt buchen" }).click();
   await expect(page.getByText(/Gebucht .*festgeschrieben/)).toBeVisible();
+
+  // Bis zur Zahlung steht der Beleg in der Übersicht unter den offenen Verbindlichkeiten
+  await go("/");
+  const payables = page.getByRole("link", { name: /Offene Verbindlichkeiten/ });
+  await expect(payables).toContainText("45,90");
+  await expect(payables).toContainText("1 Beleg");
+  await payables.click();
+  await page.waitForURL(/\/auswertungen#payables$/);
+  await expect(page.locator("#payables")).toBeInViewport();
 });
 
 test("Kontoauszug importieren und zuordnen", async () => {
@@ -353,6 +363,26 @@ test("Artikelkatalog: anlegen und im Rechnungseditor einfügen", async () => {
   await expect(page.getByRole("status").filter({ hasText: "„Wartungspauschale“ ist jetzt im Artikelkatalog." })).toBeVisible();
   await expect(page.getByRole("button", { name: "Position 3 als Artikel speichern" })).toBeDisabled();
   await expect(page.getByLabel("Aus dem Artikelkatalog einfügen").locator("option", { hasText: "Wartungspauschale · 250,00" })).toHaveCount(1);
+});
+
+test("Textbausteine: Kopftext für einen Kunden anlegen und im Rechnungseditor einfügen", async () => {
+  await go("/textbausteine");
+  await page.getByRole("button", { name: "Neuer Textbaustein" }).click();
+  const form = page.getByRole("form", { name: "Neuer Textbaustein" });
+  await form.getByLabel("Bezeichnung").fill("Bestellnummer Nordwerk");
+  await form.getByRole("textbox", { name: /^Text / }).fill("Bestellnummer 4500012345 laut Rahmenvertrag 2026.");
+  await form.getByLabel("Kunde (optional)").selectOption({ label: "Nordwerk Software GmbH · Hamburg" });
+  await form.getByRole("button", { name: "Anlegen" }).click();
+  await expect(page.getByRole("region", { name: "Textbausteine" })).toContainText("Bestellnummer Nordwerk");
+
+  // Für diesen Kunden steht der Baustein oben; eingefügt wird eine Kopie in die Einleitung, gespeichert wird nichts
+  await go("/rechnungen/neu");
+  await page.getByLabel("Kunde").selectOption({ label: "Nordwerk Software GmbH · Hamburg" });
+  const insert = page.getByLabel("Kopftext aus den Textbausteinen einfügen");
+  await expect(insert.locator('optgroup[label="Für diesen Kunden"] option')).toHaveText(["Bestellnummer Nordwerk"]);
+  await insert.selectOption({ label: "Bestellnummer Nordwerk" });
+  await expect(page.getByLabel("Einleitung über den Positionen (optional)")).toHaveValue("Bestellnummer 4500012345 laut Rahmenvertrag 2026.");
+  await expect(insert).toHaveValue("");
 });
 
 test("Bruttopreise: Artikel mit Endpreis, Umrechnung beim Einfügen, Vorschau mit „darin enthalten“", async () => {
@@ -679,6 +709,39 @@ test("Kassenbuch: Einlage, Entnahme über Bestand abgelehnt, Storno", async () =
   await expect(liste).toContainText("Storno Nr. 1: Wechselgeld");
 });
 
+/** Kleine Sicherung, wie sie lexware-sicherung.js herunterlädt: eine Rechnung mit PDF und eine offene Ausgabe */
+function webBackupZip(): Uint8Array {
+  const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../packages/import/test-fixtures/lexoffice-web/${name}`, import.meta.url), "utf8"));
+  const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+  const sales = fixture("sales-invoice.json");
+  const purchase = fixture("purchase-gross.json");
+  const pdfPath = `dateien/${sales.list.entityId}/1-Rechnung_RE0042.pdf`;
+  return zipSync({
+    "manifest.json": json({ format: "haben-lexware-web", version: 1, part: 1, createdAt: new Date().toISOString(), failed: [] }),
+    "kontakte.json": json(fixture("contacts.json")),
+    [`belege/${sales.list.entityId}.json`]: json({ ...sales, files: [{ path: pdfPath, role: "pdf", mimeType: "application/pdf", filename: "Rechnung_RE0042.pdf" }] }),
+    [`belege/${purchase.list.entityId}.json`]: json({ ...purchase, files: [] }),
+    [pdfPath]: new TextEncoder().encode("%PDF-1.4\n%%EOF\n"),
+  });
+}
+
+test("Umzug ohne Public API: Skript abrufen, Sicherung hochladen und übernehmen", async () => {
+  await go("/archiv");
+  const card = page.getByRole("region", { name: "Ohne Public API: Sicherung aus der Web-Oberfläche" });
+  await expect(card.getByRole("button", { name: "Skript kopieren" })).toBeVisible();
+  const script = await page.request.get((await card.getByRole("link", { name: "Skript ansehen" }).getAttribute("href"))!);
+  expect(script.status()).toBe(200);
+  expect(await script.text()).toContain('const FORMAT = "haben-lexware-web"');
+
+  await card.getByLabel("Teile der Sicherung").setInputFiles({ name: "lexware-sicherung-teil-01.zip", mimeType: "application/zip", buffer: Buffer.from(webBackupZip()) });
+  await card.getByRole("button", { name: "Hochladen und übernehmen" }).click();
+  await expect(card.getByRole("status")).toContainText("Der Teil ist übernommen", { timeout: 60_000 });
+  const step2 = page.getByRole("region", { name: "Kontakte, Rechnungen und Belege abrufen" });
+  await expect(step2).toContainText("Fertig am");
+  // Die überfällige Ausgabe steht als offener Posten bereit
+  await expect(page.getByRole("region", { name: "Offene Posten übernehmen" })).toContainText("2025-4711");
+});
+
 test("Auswertungen, Umsatzsteuer und Jahreserklärung laden", async () => {
   await go("/auswertungen");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -688,6 +751,24 @@ test("Auswertungen, Umsatzsteuer und Jahreserklärung laden", async () => {
   await expect(page.getByRole("heading", { name: /Steuerjahr/ })).toBeVisible();
   await go("/finanzamt");
   await expect(page.getByRole("heading", { name: "Finanzamt", level: 1 })).toBeVisible();
+});
+
+test("Voranmeldung als XML für den Import in Mein ELSTER herunterladen", async () => {
+  await go("/umsatzsteuer");
+  const save = page.getByRole("button", { name: "Entwurf speichern" });
+  if (await save.isEnabled()) {
+    await save.click();
+    await expect(save).toBeDisabled();
+  }
+  const link = page.getByRole("link", { name: "XML für Mein ELSTER" });
+  await expect(link).toBeVisible();
+  const response = await page.request.get((await link.getAttribute("href"))!);
+  expect(response.status()).toBe(200);
+  expect(response.headers()["content-type"]).toBe("application/xml; charset=ISO-8859-15");
+  expect(response.headers()["content-disposition"]).toMatch(/filename="UStVA_\d{4}-\d{2}\.xml"/);
+  const xml = new TextDecoder("iso-8859-15").decode(await response.body());
+  expect(xml).toMatch(/^<\?xml version="1.0" encoding="ISO-8859-15" standalone="no"\?>\n<Anmeldungssteuern xmlns="http:\/\/finkonsens.de\/elster\/elsteranmeldung\/ustva\/v\d{4}"/);
+  expect(xml).not.toContain("<TransferHeader");
 });
 
 /** Erste verlinkte Detailseite einer Liste, z. B. /rechnungen/<id> */
@@ -716,6 +797,7 @@ test("Screenshots aller Seiten (Desktop und Handy)", async ({ browser }) => {
     ["mahnwesen", "/rechnungen/mahnwesen"],
     ["wiederkehrend", "/rechnungen/wiederkehrend"],
     ["artikel", "/artikel"],
+    ["textbausteine", "/textbausteine"],
     ["belege", "/belege"],
     ["beleg", details.beleg],
     ["pauschalen", "/pauschalen"],

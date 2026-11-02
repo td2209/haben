@@ -171,6 +171,15 @@ test("Beleg hochladen und buchen", async ({ browser }) => {
   await page.getByRole("button", { name: "Bestätigen und buchen" }).click();
   await page.getByRole("button", { name: "Jetzt buchen" }).click();
   await expect(page.getByText(/Gebucht .*festgeschrieben/)).toBeVisible();
+
+  // Bis zur Zahlung steht der Beleg in der Übersicht unter den offenen Verbindlichkeiten
+  await go("/");
+  const payables = page.getByRole("link", { name: /Offene Verbindlichkeiten/ });
+  await expect(payables).toContainText("45,90");
+  await expect(payables).toContainText("1 Beleg");
+  await payables.click();
+  await page.waitForURL(/\/auswertungen#payables$/);
+  await expect(page.locator("#payables")).toBeInViewport();
 });
 
 test("Kontoauszug importieren und zuordnen", async () => {
@@ -353,6 +362,26 @@ test("Artikelkatalog: anlegen und im Rechnungseditor einfügen", async () => {
   await expect(page.getByRole("status").filter({ hasText: "„Wartungspauschale“ ist jetzt im Artikelkatalog." })).toBeVisible();
   await expect(page.getByRole("button", { name: "Position 3 als Artikel speichern" })).toBeDisabled();
   await expect(page.getByLabel("Aus dem Artikelkatalog einfügen").locator("option", { hasText: "Wartungspauschale · 250,00" })).toHaveCount(1);
+});
+
+test("Textbausteine: Kopftext für einen Kunden anlegen und im Rechnungseditor einfügen", async () => {
+  await go("/textbausteine");
+  await page.getByRole("button", { name: "Neuer Textbaustein" }).click();
+  const form = page.getByRole("form", { name: "Neuer Textbaustein" });
+  await form.getByLabel("Bezeichnung").fill("Bestellnummer Nordwerk");
+  await form.getByRole("textbox", { name: /^Text / }).fill("Bestellnummer 4500012345 laut Rahmenvertrag 2026.");
+  await form.getByLabel("Kunde (optional)").selectOption({ label: "Nordwerk Software GmbH · Hamburg" });
+  await form.getByRole("button", { name: "Anlegen" }).click();
+  await expect(page.getByRole("region", { name: "Textbausteine" })).toContainText("Bestellnummer Nordwerk");
+
+  // Für diesen Kunden steht der Baustein oben; eingefügt wird eine Kopie in die Einleitung, gespeichert wird nichts
+  await go("/rechnungen/neu");
+  await page.getByLabel("Kunde").selectOption({ label: "Nordwerk Software GmbH · Hamburg" });
+  const insert = page.getByLabel("Kopftext aus den Textbausteinen einfügen");
+  await expect(insert.locator('optgroup[label="Für diesen Kunden"] option')).toHaveText(["Bestellnummer Nordwerk"]);
+  await insert.selectOption({ label: "Bestellnummer Nordwerk" });
+  await expect(page.getByLabel("Einleitung über den Positionen (optional)")).toHaveValue("Bestellnummer 4500012345 laut Rahmenvertrag 2026.");
+  await expect(insert).toHaveValue("");
 });
 
 test("Bruttopreise: Artikel mit Endpreis, Umrechnung beim Einfügen, Vorschau mit „darin enthalten“", async () => {
@@ -716,6 +745,7 @@ test("Screenshots aller Seiten (Desktop und Handy)", async ({ browser }) => {
     ["mahnwesen", "/rechnungen/mahnwesen"],
     ["wiederkehrend", "/rechnungen/wiederkehrend"],
     ["artikel", "/artikel"],
+    ["textbausteine", "/textbausteine"],
     ["belege", "/belege"],
     ["beleg", details.beleg],
     ["pauschalen", "/pauschalen"],

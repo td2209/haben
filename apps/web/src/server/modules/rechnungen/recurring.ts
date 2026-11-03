@@ -34,6 +34,8 @@ export const recurringInputSchema = z.object({
   contactId: z.uuid(),
   format: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
   paymentTermDays: z.number().int().min(0).max(120),
+  /** Einleitung über den Positionen; Platzhalter wie bei den Positionen */
+  intro: z.string().max(2000).default(""),
   note: z.string().max(2000),
   taxTreatment: z.enum(TAX_TREATMENT_KEYS),
   exemptionReason: z.string().trim().max(300),
@@ -132,6 +134,7 @@ export function invoiceForDate(recurring: RecurringInvoice, date: string, langua
     serviceTo: period?.to ?? null,
     paymentTermDays: recurring.paymentTermDays,
     format: recurring.format,
+    intro: fillPlaceholders(recurring.intro, reference),
     note: fillPlaceholders(recurring.note, reference),
     taxTreatment: recurring.taxTreatment,
     exemptionReason: recurring.exemptionReason,
@@ -161,7 +164,6 @@ function describe(error: unknown): string {
   if (message === undefined) console.error("Wiederkehrende Rechnung:", error);
   return message ?? INTERNAL_ERROR;
 }
-
 
 async function runOne(recurring: RecurringInvoice, today: string, result: RunResult): Promise<void> {
   const interval = recurring.intervalMonths as RecurringInterval;

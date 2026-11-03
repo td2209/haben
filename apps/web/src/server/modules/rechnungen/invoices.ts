@@ -7,6 +7,7 @@ import {
   parseExchangeRate,
   rateMonth,
   totalsFromTaxes,
+  firstEmail,
   formatInvoiceNumber,
   invoiceLineInputSchema,
   invoiceDueDate,
@@ -26,15 +27,7 @@ import {
   invoiceOpen,
   type InvoiceListStatus,
 } from "@haben/core";
-import {
-  buildEInvoice,
-  texts,
-  validateForFormat,
-  type Buyer,
-  type InvoiceDocument,
-  type InvoiceFormat,
-  type Seller,
-} from "@haben/einvoice";
+import { buildEInvoice, texts, validateForFormat, type Buyer, type InvoiceDocument, type InvoiceFormat, type Seller } from "@haben/einvoice";
 import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -56,6 +49,9 @@ export class InvoiceError extends UserError {}
 
 const isoDate = z.iso.date();
 
+/** Position einer Rechnung: dazu die mehrzeilige Beschreibung unter der Bezeichnung; Angebote haben sie (noch) nicht */
+const invoiceDraftLineSchema = z.object({ ...invoiceLineInputSchema.shape, detail: z.string().trim().max(2000).default("") });
+
 export const draftSchema = z
   .object({
     contactId: z.uuid().nullable(),
@@ -64,6 +60,8 @@ export const draftSchema = z
     serviceTo: isoDate.nullable(),
     paymentTermDays: z.number().int().min(0).max(120),
     format: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
+    /** Einleitung über den Positionen, etwa aus einem Textbaustein */
+    intro: z.string().max(2000).default(""),
     note: z.string().max(2000),
     taxTreatment: z.enum(TAX_TREATMENT_KEYS).default("regulaer"),
     exemptionReason: z.string().trim().max(300).default(""),
@@ -91,7 +89,7 @@ export const draftSchema = z
         return rate;
       }),
     exchangeRateDate: isoDate.nullable().default(null),
-    lines: z.array(invoiceLineInputSchema).max(200),
+    lines: z.array(invoiceDraftLineSchema).max(200),
   })
   .refine((d) => !d.serviceFrom || !d.serviceTo || d.serviceFrom <= d.serviceTo, {
     message: "Leistungszeitraum endet vor seinem Beginn",
@@ -111,6 +109,7 @@ function lineRows(invoiceId: string, lines: LineInput[], lineNets: number[]) {
     invoiceId,
     position: index + 1,
     description: line.description,
+    detail: line.detail?.trim() ?? "",
     quantity: line.quantity,
     unit: line.unit,
     unitPrice: line.unitPrice,
@@ -131,7 +130,8 @@ async function storeLines(tx: Tx, invoiceId: string, lines: LineInput[], { lineN
 const MAX_EURO_CENTS = 2_147_483_647;
 
 /** Monat der Leistung für den Umrechnungskurs: Ende des Leistungszeitraums, sonst das Rechnungsdatum */
-const serviceDate = (input: { issueDate: string; serviceFrom?: string | null; serviceTo?: string | null }) => input.serviceTo ?? input.serviceFrom ?? input.issueDate;
+const serviceDate = (input: { issueDate: string; serviceFrom?: string | null; serviceTo?: string | null }) =>
+  input.serviceTo ?? input.serviceFrom ?? input.issueDate;
 
 /**
  * Kurs eines Entwurfs: Storno und Korrektur übernehmen Währung und Kurs der ursprünglichen Rechnung (dieselben Euro-Beträge
@@ -141,7 +141,12 @@ async function draftRate(tx: Tx, input: DraftInput, correctsId: string | null, p
   if (correctsId) {
     const [original] = await tx.select().from(schema.invoices).where(eq(schema.invoices.id, correctsId));
     if (original) {
-      return { currency: original.currency, exchangeRate: original.exchangeRate ? parseExchangeRate(original.exchangeRate) : null, exchangeRateSource: original.exchangeRateSource, exchangeRateDate: original.exchangeRateDate };
+      return {
+        currency: original.currency,
+        exchangeRate: original.exchangeRate ? parseExchangeRate(original.exchangeRate) : null,
+        exchangeRateSource: original.exchangeRateSource,
+        exchangeRateDate: original.exchangeRateDate,
+      };
     }
   }
   // Die Server Functions prüfen das Eingabeschema schon; hier nur die Felder der Währung, in der Form des Schemas
@@ -210,7 +215,10 @@ export async function openAbschlaege(exceptInvoiceId: string | null = null, q: D
     q,
   );
   const open = rows.filter((r) => !taken.has(r.id));
-  const totals = await invoiceTotalsById(open.map((r) => r.id), q);
+  const totals = await invoiceTotalsById(
+    open.map((r) => r.id),
+    q,
+  );
   return open.map((r) => ({
     id: r.id,
     contactId: r.contactId,
@@ -281,7 +289,8 @@ async function deductionProblems(invoiceId: string | null, input: Pick<DraftInpu
           : `Abschlagsrechnung ${row?.number ?? id} ist nicht festgeschrieben oder storniert`,
       );
     } else if (abschlag.contactId !== input.contactId) problems.push(`Abschlagsrechnung ${abschlag.number} gehört zu einem anderen Kunden`);
-    else if (abschlag.taxTreatment !== (input.taxTreatment ?? "regulaer")) problems.push(`Abschlagsrechnung ${abschlag.number} hat eine andere Umsatzsteuer-Behandlung`);
+    else if (abschlag.taxTreatment !== (input.taxTreatment ?? "regulaer"))
+      problems.push(`Abschlagsrechnung ${abschlag.number} hat eine andere Umsatzsteuer-Behandlung`);
     else chosen.push(abschlag);
   }
   return { problems, chosen };
@@ -388,7 +397,12 @@ async function applyRateToDraft(tx: Tx, invoice: Invoice): Promise<boolean> {
   // eines vorab von Hand eingetragenen) gilt auch für den Entwurf
   if (invoice.status !== "draft" || invoice.currency === "EUR" || invoice.correctsId) return false;
   if (invoice.exchangeRate && invoice.exchangeRateSource !== "ust") return false;
-  const rate = await resolveExchangeRate(tx, { currency: invoice.currency, date: serviceDate(invoice), exchangeRate: null, exchangeRateDate: null }, null, false);
+  const rate = await resolveExchangeRate(
+    tx,
+    { currency: invoice.currency, date: serviceDate(invoice), exchangeRate: null, exchangeRateDate: null },
+    null,
+    false,
+  );
   if (!rate.exchangeRate || (invoice.exchangeRate && parseExchangeRate(invoice.exchangeRate) === rate.exchangeRate)) return false;
   const rows = await tx.select().from(schema.invoiceTaxes).where(eq(schema.invoiceTaxes.invoiceId, invoice.id));
   const taxes = euroTaxes(
@@ -450,6 +464,7 @@ function draftValues(input: DraftInput, bundesland: Company["bundesland"], lines
     paymentTermDays: input.paymentTermDays,
     dueDate: invoiceDueDate(input.issueDate, input.paymentTermDays, bundesland),
     format: input.format,
+    intro: input.intro ?? "",
     note: input.note,
     taxTreatment: input.taxTreatment ?? "regulaer",
     exemptionReason: input.taxTreatment && input.taxTreatment !== "regulaer" ? (input.exemptionReason ?? "").trim() : "",
@@ -543,6 +558,7 @@ export async function newDraftDefaults(today: string) {
     serviceTo: null,
     paymentTermDays: company.paymentTermDays,
     format: company.defaultFormat,
+    intro: "",
     note: "",
     taxTreatment: (company.kleinunternehmer ? "kleinunternehmer" : "regulaer") as TaxTreatment,
     exemptionReason: "",
@@ -550,23 +566,15 @@ export async function newDraftDefaults(today: string) {
     language: "de" as const,
     variant: null,
     deducts: [] as string[],
-    lines: [
-      { description: "", quantity: 1000, unit: "Std." as UnitLabel, unitPrice: 0, taxRate: (company.kleinunternehmer ? 0 : 1900) as 1900 | 0 },
-    ],
+    lines: [{ description: "", quantity: 1000, unit: "Std." as UnitLabel, unitPrice: 0, taxRate: (company.kleinunternehmer ? 0 : 1900) as 1900 | 0 }],
   } satisfies DraftInput;
 }
 
 export async function getInvoice(id: string, q: Db | Tx = db) {
   const [invoice] = await q.select().from(schema.invoices).where(eq(schema.invoices.id, id));
   if (!invoice) return null;
-  const lines = await q
-    .select()
-    .from(schema.invoiceLines)
-    .where(eq(schema.invoiceLines.invoiceId, id))
-    .orderBy(asc(schema.invoiceLines.position));
-  const [contact] = invoice.contactId
-    ? await q.select().from(schema.contacts).where(eq(schema.contacts.id, invoice.contactId))
-    : [];
+  const lines = await q.select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, id)).orderBy(asc(schema.invoiceLines.position));
+  const [contact] = invoice.contactId ? await q.select().from(schema.contacts).where(eq(schema.contacts.id, invoice.contactId)) : [];
   const [corrects] = invoice.correctsId
     ? await q
         .select({ id: schema.invoices.id, number: schema.invoices.number, issueDate: schema.invoices.issueDate })
@@ -614,7 +622,10 @@ export async function listInvoices(today: string, id?: string, q: Db | Tx = db) 
     [...rows.filter((r) => r.status === "final").map((r) => r.id), ...rows.filter((r) => r.kind === "storno" && r.correctsId).map((r) => r.correctsId!)],
     q,
   );
-  const losses = await invoiceLosses(rows.filter((r) => r.status === "final").map((r) => r.id), q);
+  const losses = await invoiceLosses(
+    rows.filter((r) => r.status === "final").map((r) => r.id),
+    q,
+  );
   return rows.map(({ cancelled, ...row }) => {
     const facts = {
       ...row,
@@ -658,7 +669,8 @@ export function buyerFrom(contact: Contact): Buyer {
     plz: contact.plz,
     ort: contact.ort,
     land: contact.land,
-    ...(contact.email ? { email: contact.email } : {}),
+    // Die E-Rechnung kennt nur eine Adresse des Käufers (BT-49); weitere Empfänger nimmt der Versand aus dem Kontakt
+    ...(firstEmail(contact.email) ? { email: firstEmail(contact.email) } : {}),
     ...(contact.ustId ? { ustId: contact.ustId } : {}),
     ...(contact.leitwegId ? { leitwegId: contact.leitwegId } : {}),
     ...(contact.kundennummer ? { kundennummer: contact.kundennummer } : {}),
@@ -701,6 +713,7 @@ function documentFor(
     lines: lines.map((line) => ({
       position: line.position,
       description: line.description,
+      ...(line.detail ? { detail: line.detail } : {}),
       quantity: line.quantity,
       unit: line.unit as UnitLabel,
       unitPrice: line.unitPrice,
@@ -709,6 +722,7 @@ function documentFor(
     })),
     totals,
     ...(corrects ? { corrects } : {}),
+    ...(invoice.intro ? { intro: invoice.intro } : {}),
     ...(invoice.note ? { note: invoice.note } : {}),
     ...(invoice.taxTreatment !== "regulaer" ? { taxTreatment: invoice.taxTreatment } : {}),
     ...(invoice.exemptionReason ? { exemptionReason: invoice.exemptionReason } : {}),
@@ -768,7 +782,9 @@ export async function finalizeIssues(id: string, q: Db | Tx = db): Promise<strin
   if (lines.some((line) => lineAmount(line.quantity, line.unitPrice) === 0)) issues.push("Position ohne Betrag");
   if (invoice.correctsId) {
     const [original] = await q.select().from(schema.invoices).where(eq(schema.invoices.id, invoice.correctsId));
-    const problem = original ? ((await originalProblem(original, q, invoice)) ?? (await reductionProblem(invoice, original, q))) : "Die korrigierte Rechnung fehlt";
+    const problem = original
+      ? ((await originalProblem(original, q, invoice)) ?? (await reductionProblem(invoice, original, q)))
+      : "Die korrigierte Rechnung fehlt";
     if (problem) issues.push(problem);
   }
   if (invoice.variant === "schluss") {
@@ -783,7 +799,7 @@ export async function finalizeIssues(id: string, q: Db | Tx = db): Promise<strin
       .select({ number: schema.quotes.number, status: schema.quotes.status, contactId: schema.quotes.contactId, decision: schema.quotes.decision })
       .from(schema.quotes)
       .where(eq(schema.quotes.id, invoice.quoteId));
-    if (!quote || quote.status !== "final") issues.push("Das gewählte Angebot ist nicht festgeschrieben");
+    if (quote?.status !== "final") issues.push("Das gewählte Angebot ist nicht festgeschrieben");
     else if (quote.contactId !== invoice.contactId) issues.push(`Angebot ${quote.number} gehört zu einem anderen Kunden`);
     else if (quote.decision === "abgelehnt") issues.push(`Angebot ${quote.number} ist als abgelehnt markiert`);
     else {
@@ -874,11 +890,7 @@ async function finalizeDraft(tx: Tx, id: string): Promise<Invoice> {
   const issues = await finalizeIssues(id, tx);
   if (issues.length > 0) throw new InvoiceError(`Noch nicht bereit: ${issues.join(", ")}.`);
   const company = await openBooks(tx);
-  const lines = await tx
-    .select()
-    .from(schema.invoiceLines)
-    .where(eq(schema.invoiceLines.invoiceId, id))
-    .orderBy(asc(schema.invoiceLines.position));
+  const lines = await tx.select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, id)).orderBy(asc(schema.invoiceLines.position));
   const [contact] = await tx.select().from(schema.contacts).where(eq(schema.contacts.id, invoice.contactId!));
 
   // Original und abgezogene Abschläge sperren und erneut prüfen: Ein paralleles Storno, eine Korrektur
@@ -886,12 +898,19 @@ async function finalizeDraft(tx: Tx, id: string): Promise<Invoice> {
   const deducts = deductionIds(lines);
   const referenced = [...(invoice.correctsId ? [invoice.correctsId] : []), ...deducts];
   if (referenced.length > 0) {
-    await tx.select({ id: schema.invoices.id }).from(schema.invoices).where(inArray(schema.invoices.id, referenced)).orderBy(asc(schema.invoices.id)).for("update");
+    await tx
+      .select({ id: schema.invoices.id })
+      .from(schema.invoices)
+      .where(inArray(schema.invoices.id, referenced))
+      .orderBy(asc(schema.invoices.id))
+      .for("update");
   }
   let corrects: Invoice | undefined;
   if (invoice.correctsId) {
     [corrects] = await tx.select().from(schema.invoices).where(eq(schema.invoices.id, invoice.correctsId));
-    const problem = corrects ? ((await originalProblem(corrects, tx, invoice)) ?? (await reductionProblem(invoice, corrects, tx))) : "Die korrigierte Rechnung fehlt";
+    const problem = corrects
+      ? ((await originalProblem(corrects, tx, invoice)) ?? (await reductionProblem(invoice, corrects, tx)))
+      : "Die korrigierte Rechnung fehlt";
     if (problem) throw new InvoiceError(`${problem}.`);
   }
   if (deducts.length > 0) {
@@ -909,7 +928,17 @@ async function finalizeDraft(tx: Tx, id: string): Promise<Invoice> {
   const seller = sellerFrom(company);
   const buyer = corrects?.buyer ?? buyerFrom(contact!);
   const totals = (await invoiceTotalsById([id], tx)).get(id)!;
-  const doc = documentFor(invoice, lines, await invoiceDocumentTotals(id, tx), totals, seller, buyer, number, corrects ? { number: corrects.number!, issueDate: corrects.issueDate } : null, await deductedRefs(lines, tx));
+  const doc = documentFor(
+    invoice,
+    lines,
+    await invoiceDocumentTotals(id, tx),
+    totals,
+    seller,
+    buyer,
+    number,
+    corrects ? { number: corrects.number!, issueDate: corrects.issueDate } : null,
+    await deductedRefs(lines, tx),
+  );
   const logo = await loadLogo();
   const rendered = await buildEInvoice(logo ? { ...doc, logo } : doc);
   const now = new Date();
@@ -995,6 +1024,7 @@ async function finalOriginal(id: string, q: Db | Tx = db) {
 function negatedLines(lines: InvoiceLine[]): DraftInput["lines"] {
   return lines.map((line) => ({
     description: line.description,
+    detail: line.detail,
     quantity: line.quantity,
     unit: line.unit as UnitLabel,
     unitPrice: -line.unitPrice,
@@ -1031,7 +1061,9 @@ export async function cancelInvoice(actor: string, id: string, today: string): P
     // Ein Storno nimmt die ganze Rechnung samt Umsatzsteuer zurück; eine Ausbuchung hat einen Teil davon schon gemindert
     // (doppelt bei Soll) und wäre im Storno als Erstattung offen, obwohl kein Geld geflossen ist
     if ((await invoiceWrittenOff([id, ...corrections.map((c) => c.id)], tx)).size > 0) {
-      throw new InvoiceError("Die Rechnung ist teilweise ausgebucht (Skonto oder Forderungsausfall). Hebe die Ausbuchung zuerst auf, dann lässt sie sich stornieren.");
+      throw new InvoiceError(
+        "Die Rechnung ist teilweise ausgebucht (Skonto oder Forderungsausfall). Hebe die Ausbuchung zuerst auf, dann lässt sie sich stornieren.",
+      );
     }
     const stornoOf = async (target: Invoice, targetLines: InvoiceLine[]) => {
       const draft = await insertDraft(
@@ -1106,19 +1138,17 @@ export async function setNextNumber(actor: string, year: number, next: number) {
 export async function invoiceSummary(today: string) {
   const list = await listInvoices(today);
   const open = list.filter((i) => i.kind === "rechnung" && i.open !== 0);
-  const openIds = new Set(open.map((i) => i.id));
-  // Offene Korrekturen mindern die Forderung ihrer Rechnung
-  const corrections = list.filter((i) => i.kind === "korrektur" && i.open !== 0 && i.correctsId && openIds.has(i.correctsId));
   const month = today.slice(0, 7);
   const previousMonth = (() => {
     const [y, m] = month.split("-").map(Number) as [number, number];
     return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
   })();
   const finals = list.filter((i) => i.status === "final" && i.listStatus !== "storniert" && i.kind !== "storno");
-  const revenue = (prefix: string) =>
-    finals.filter((i) => i.issueDate.startsWith(prefix)).reduce((sum, i) => sum + i.net, 0);
+  const revenue = (prefix: string) => finals.filter((i) => i.issueDate.startsWith(prefix)).reduce((sum, i) => sum + i.net, 0);
   return {
-    openTotal: [...open, ...corrections].reduce((sum, i) => sum + i.open, 0),
+    // Wie die offenen Forderungen in den Auswertungen (openPositions): alles Festgeschriebene mit offenem Betrag,
+    // also auch Korrekturen und Erstattungen aus Stornos bezahlter Rechnungen
+    openTotal: list.filter((i) => i.status === "final" && i.open !== 0).reduce((sum, i) => sum + i.open, 0),
     openCount: open.length,
     overdueCount: open.filter((i) => i.listStatus === "ueberfaellig").length,
     revenueMonth: { key: month, net: revenue(month) },
@@ -1127,4 +1157,3 @@ export async function invoiceSummary(today: string) {
     drafts: list.filter((i) => i.status === "draft").length,
   };
 }
-

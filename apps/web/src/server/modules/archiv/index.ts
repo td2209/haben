@@ -2,7 +2,7 @@
  * Archiv und Umzug: Jahresarchiv (GoBD-Export), Import aus Lexoffice und sevDesk, übernommene offene Posten und Altbelege.
  *
  * Öffentliche Schnittstelle des Moduls: Andere Module, Server Functions und Routen importieren nur von hier
- * (Lint-Regel haben/modulgrenzen, eslint/modulgrenzen.js).
+ * (Modulgrenzen, scripts/modulgrenzen/regel.ts).
  */
 export {
   accountTotals,
@@ -32,6 +32,7 @@ export {
   removeApiKey,
   saveApiKey,
   startImport,
+  startWebImport,
   type LegacyVoucherForVat,
 } from "./lexoffice.ts";
 export {

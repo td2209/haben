@@ -34,7 +34,10 @@ export function addressLines(address: Address, t: Texts = TEXTS.de): string[] {
 export function templateLabels(t: Texts, gross = false) {
   return {
     columns: gross ? { ...t.columns, net: t.grossColumn } : t.columns,
-    page: t.page("#", "#").split("#").map((part) => part.trim()),
+    page: t
+      .page("#", "#")
+      .split("#")
+      .map((part) => part.trim()),
   };
 }
 
@@ -45,7 +48,7 @@ export function showsGrossPrices(doc: Pick<InvoiceDocument, "taxTreatment" | "pr
 
 /** Gemeinsamer Teil von Rechnung und Angebot: Adressen, Positionen, Summenzeilen, Hinweise, Fußzeile */
 export function documentPdfData(
-  doc: Pick<InvoiceDocument, "seller" | "buyer" | "lines" | "totals" | "taxTreatment" | "exemptionReason" | "note" | "priceMode">,
+  doc: Pick<InvoiceDocument, "seller" | "buyer" | "lines" | "totals" | "taxTreatment" | "exemptionReason" | "intro" | "note" | "priceMode">,
   t: Texts,
 ) {
   const { seller, buyer } = doc;
@@ -71,6 +74,7 @@ export function documentPdfData(
     lines: doc.lines.map((line) => ({
       pos: String(line.position),
       description: line.description,
+      detail: line.detail?.trim() ? line.detail.trim() : null,
       quantity: t.quantity(line.quantity, line.unit),
       unitPrice: t.money(line.unitPrice),
       rate: treatment === "regulaer" ? t.rate(line.taxRate) : "–",
@@ -80,6 +84,7 @@ export function documentPdfData(
     included: gross ? { label: t.included, rows: includedRows } : null,
     grossLabel: (label: string) => (gross ? t.inclVat(label) : label),
     taxNote: t.note(treatment, doc.exemptionReason),
+    intro: doc.intro?.trim() ? doc.intro.trim() : null,
     note: doc.note?.trim() ? doc.note.trim() : null,
     footer: footerColumns(seller, t),
   };
@@ -128,7 +133,13 @@ export function pdfData(doc: InvoiceDocument) {
     // GiroCode nur für Rechnungen mit Zahlbetrag in Euro und Konto des Verkäufers (SEPA kennt nur Euro)
     qr:
       doc.kind === "rechnung" && doc.currency === "EUR" && doc.totals.gross > 0 && seller.iban
-        ? girocodeSvg({ name: seller.name, iban: seller.iban, ...(seller.bic ? { bic: seller.bic } : {}), amount: doc.totals.gross, text: t.girocodeText(doc.number) })
+        ? girocodeSvg({
+            name: seller.name,
+            iban: seller.iban,
+            ...(seller.bic ? { bic: seller.bic } : {}),
+            amount: doc.totals.gross,
+            text: t.girocodeText(doc.number),
+          })
         : null,
   };
 }

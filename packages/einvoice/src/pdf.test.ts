@@ -13,8 +13,8 @@ describe("renderInvoicePdf", () => {
   });
 
   it("übernimmt Nutzertext unverändert, ohne Typst-Markup auszuwerten", () => {
-    const doc = sampleDocument({ note: '#panic("x") *fett* $x$ ]' });
-    doc.lines[0]!.description = "Beratung #read(\"/etc/passwd\") _kursiv_ \\";
+    const doc = sampleDocument({ intro: '#panic("y") = Überschrift', note: '#panic("x") *fett* $x$ ]' });
+    doc.lines[0]!.description = 'Beratung #read("/etc/passwd") _kursiv_ \\';
     expect(() => renderInvoicePdf(doc)).not.toThrow();
   });
 });
@@ -35,6 +35,27 @@ describe("logoFormat", () => {
 });
 
 describe("pdfData", () => {
+  it("gibt die Beschreibung einer Position getrimmt mit, leer als null", () => {
+    const doc = sampleDocument();
+    doc.lines[0]!.detail = "  Konzeption und Umsetzung\nlaut Rahmenvertrag  ";
+    doc.lines[1]!.detail = "   ";
+    const data = pdfData(doc);
+    expect(data.lines[0]).toMatchObject({ description: "Softwareentwicklung September", detail: "Konzeption und Umsetzung\nlaut Rahmenvertrag" });
+    expect(data.lines[1]!.detail).toBeNull();
+    expect(() => renderInvoicePdf(doc)).not.toThrow();
+  });
+
+  it("übernimmt Einleitung und Hinweis getrimmt, leer als null", () => {
+    const data = pdfData(sampleDocument({ intro: "  Sehr geehrte Damen und Herren,\nwir berechnen:  ", note: "Vielen Dank." }));
+    expect(data.intro).toBe("Sehr geehrte Damen und Herren,\nwir berechnen:");
+    expect(data.note).toBe("Vielen Dank.");
+    expect(pdfData(sampleDocument({ intro: "   " })).intro).toBeNull();
+  });
+
+  it("rendert ein PDF mit mehrzeiliger Einleitung", () => {
+    expect(() => renderInvoicePdf(sampleDocument({ intro: "Bestellnummer 4500123456\nProjekt Phoenix" }))).not.toThrow();
+  });
+
   it("formatiert Rechnungsangaben deutsch", () => {
     const data = pdfData(sampleDocument());
     expect(data.title).toBe("Rechnung");
@@ -55,11 +76,7 @@ describe("pdfData", () => {
     expect(data.payment).toBe("Der Betrag wird Ihnen erstattet.");
     // Kein GiroCode für Erstattungen
     expect(data.qr).toBeNull();
-    expect(data.totals.rows.map((r) => r.label)).toEqual([
-      "Summe netto",
-      "Umsatzsteuer 19 % auf -2.486,25\u00a0€",
-      "Umsatzsteuer 7 % auf -149,70\u00a0€",
-    ]);
+    expect(data.totals.rows.map((r) => r.label)).toEqual(["Summe netto", "Umsatzsteuer 19 % auf -2.486,25\u00a0€", "Umsatzsteuer 7 % auf -149,70\u00a0€"]);
   });
 
   it("druckt einen GiroCode über den Rechnungsbetrag, nur mit IBAN", () => {

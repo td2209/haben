@@ -8,8 +8,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p .",
-    "kosit": "node --experimental-strip-types scripts/kosit-check.ts"
+    "typecheck": "bun --bun tsc -p .",
+    "kosit": "bun scripts/kosit-check.ts"
   },
   "dependencies": {
     "@e-invoice-eu/core": "^3.3.3",
@@ -20,7 +20,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "@types/node": "^22.20.5",
+    "@types/node": "^26.0.0",
     "@types/qrcode": "^1.5.6"
   }
 }

@@ -1,6 +1,7 @@
 import { count, eq, sql } from "drizzle-orm";
 import { abgleichAll, abweichungen, type AbgleichZeile } from "./abgleich.ts";
 import { db, schema } from "../../db/index.ts";
+import { loadCompany } from "../stammdaten/index.ts";
 import { today } from "../../today.ts";
 
 export { formatPruefwert, parsePruefwert } from "../../../lib/pruefwert.ts";
@@ -43,8 +44,11 @@ export interface IntegrityReport {
   abgleich: { abweichungen: AbgleichZeile[]; hinweise: string[] };
 }
 
-export async function chainHead(): Promise<ChainHead | null> {
-  const [head] = await db
+/** Lesezugriff auf die Datenbank: db selbst oder eine Transaktion */
+type Reader = Pick<typeof db, "select" | "execute">;
+
+export async function chainHead(reader: Reader = db): Promise<ChainHead | null> {
+  const [head] = await reader
     .select({ seq: schema.auditChain.seq, hash: schema.auditChain.hash, at: schema.auditLog.at })
     .from(schema.auditChain)
     .leftJoin(schema.auditLog, eq(schema.auditLog.seq, schema.auditChain.seq));
@@ -54,24 +58,41 @@ export async function chainHead(): Promise<ChainHead | null> {
 
 const MAX_ROWS = 100;
 
+/**
+ * Befunde, Kopf, Anzahlen und Abgleich aus einem Stand der Datenbank. Einzeln gelesen verschob ein Eintrag, der
+ * dazwischen hinzukam, Anzahl und Kopf gegeneinander, und der Abgleich sah eine Buchung nebenher nur auf einer Seite.
+ * REPEATABLE READ hält den Stand über alle Abfragen der Transaktion fest.
+ */
+function readSnapshot(now: string) {
+  return db.transaction(
+    async (tx) => {
+      const rows = await tx.execute<{ art: IntegrityProblem["art"]; tabelle: string; zeile: string | null; seq: string | null; befund: string }>(
+        sql`select art, tabelle, zeile, seq, befund from haben_integrity_problems(${MAX_ROWS})`,
+      );
+      const head = await chainHead(tx);
+      const [entries] = await tx.select({ n: count() }).from(schema.auditLog);
+      const [seals] = await tx.select({ n: count() }).from(schema.seals);
+      const abgleich = await abgleichAll(now, tx);
+      return { rows, head, entries: entries!.n, seals: seals!.n, abgleich };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+
 /** Prüft die ganze Kette, alle Siegel und gleicht Journal und Steuerwerte ab. Dauert bei großen Datenbanken einige Sekunden. */
 export async function checkIntegrity(now = today()): Promise<IntegrityReport> {
-  const [rows, head, [entries], [seals], abgleich] = await Promise.all([
-    db.execute<{ art: IntegrityProblem["art"]; tabelle: string; zeile: string | null; seq: string | null; befund: string }>(
-      sql`select art, tabelle, zeile, seq, befund from haben_integrity_problems(${MAX_ROWS})`,
-    ),
-    chainHead(),
-    db.select({ n: count() }).from(schema.auditLog),
-    db.select({ n: count() }).from(schema.seals),
-    abgleichAll(now),
-  ]);
+  // Mit Buchungen liest der Abgleich die Firmendaten. Fehlen sie, legt loadCompany sie an; das ist ein Schreibzugriff
+  // und geht in der Transaktion mit festem Stand nicht. Ohne Buchungen bleibt die Prüfung ohne jeden Schreibzugriff.
+  const [booking] = await db.select({ id: schema.journalEntries.id }).from(schema.journalEntries).limit(1);
+  if (booking) await loadCompany();
+  const { rows, head, entries, seals, abgleich } = await readSnapshot(now);
   const problems = [...rows].map((r) => ({ ...r, seq: r.seq === null ? null : Number(r.seq) }));
   const perKind = new Map<string, number>();
   for (const p of problems) perKind.set(`${p.art}:${p.tabelle}`, (perKind.get(`${p.art}:${p.tabelle}`) ?? 0) + 1);
   return {
     head,
-    entries: entries!.n,
-    seals: seals!.n,
+    entries,
+    seals,
     problems,
     truncated: [...perKind.values()].some((n) => n >= MAX_ROWS),
     abgleich: { abweichungen: abweichungen(abgleich.zeilen), hinweise: abgleich.hinweise },
@@ -93,10 +114,7 @@ export type PruefwertResult =
  * bis dorthin nach. Erst beides zusammen zeigt, dass kein Eintrag bis zu dieser Nummer verändert wurde.
  */
 export async function checkPruefwert(seq: number, hash: string): Promise<PruefwertResult> {
-  const [row] = await db
-    .select({ hash: schema.auditLog.rowHash })
-    .from(schema.auditLog)
-    .where(eq(schema.auditLog.seq, seq));
+  const [row] = await db.select({ hash: schema.auditLog.rowHash }).from(schema.auditLog).where(eq(schema.auditLog.seq, seq));
   if (!row) return { status: "fehlt", seq, head: (await chainHead())?.seq ?? null };
   const actual = row.hash.toString("hex");
   if (actual !== hash.toLowerCase()) return { status: "abweichend", seq, expected: hash.toLowerCase(), actual };

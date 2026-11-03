@@ -158,6 +158,9 @@ button.nav-foot-link { width: 100%; background: none; border: 0; font: inherit; 
 .page-head .eyebrow { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .actions { display: flex; gap: 12px; flex-wrap: wrap; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+/* Kachel als Link (Übersicht): sieht aus wie eine Karte, der Rahmen zeigt beim Überfahren, dass sie klickbar ist */
+.card-link { color: inherit; text-decoration: none; }
+.card-link:hover { border-color: var(--line-strong); }
 .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 /* Kennzahlen auf dem Handy zu zweit nebeneinander statt einzeln untereinander */
@@ -366,6 +369,7 @@ a.table-row:hover { background: var(--ground); color: var(--ink); }
 /* Position: Beschreibung über die volle Breite, darunter die Zahlen */
 .line-row { display: grid; grid-template-columns: minmax(52px, 0.7fr) minmax(72px, 0.9fr) minmax(0, 1.3fr) minmax(64px, 0.8fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line-soft); }
 .line-row > .line-desc { grid-column: 1 / -1; }
+.line-row > .line-detail { grid-column: 1 / -1; padding: 8px; border: 1px solid var(--line-strong); border-radius: 8px; font: inherit; font-size: 13px; color: var(--ink); background-color: var(--surface); width: 100%; min-width: 0; resize: vertical; }
 .line-row input, .line-row select { min-height: var(--control-h); padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; font: inherit; font-size: 14px; color: var(--ink); background-color: var(--surface); width: 100%; min-width: 0; }
 .line-row input.num { font-family: var(--mono); }
 .line-row input[aria-invalid="true"] { border-color: var(--danger-ink); }

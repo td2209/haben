@@ -1,6 +1,6 @@
 # Architektur
 
-Haben ist eine einzelne Node-Anwendung auf Basis von TanStack Start mit PostgreSQL als einziger Datenbank und einem Verzeichnis für Belegdateien. Diese Seite beschreibt Aufbau, Datenmodell, Abläufe und die wichtigsten Entwurfsentscheidungen. Für die Entwicklungsumgebung siehe [Entwicklung](entwicklung.md), für den Betrieb [Installation](installation.md).
+Haben ist eine einzelne Anwendung auf Basis von TanStack Start, die unter Bun läuft, mit PostgreSQL als einziger Datenbank und einem Verzeichnis für Belegdateien. Diese Seite beschreibt Aufbau, Datenmodell, Abläufe und die wichtigsten Entwurfsentscheidungen. Für die Entwicklungsumgebung siehe [Entwicklung](entwicklung.md), für den Betrieb [Installation](installation.md).
 
 ## Überblick
 
@@ -9,7 +9,7 @@ flowchart LR
   Browser["Browser<br/>React, PWA"] -->|HTTPS| Caddy["Caddy<br/>Reverse Proxy"]
   Caddy --> Web
 
-  subgraph Web["apps/web · TanStack Start auf Node 22"]
+  subgraph Web["apps/web · TanStack Start auf Bun"]
     Routes["routes/<br/>Seiten und Loader"] --> Functions["server/functions/<br/>Server Functions + authMiddleware"]
     Api["routes/api/<br/>Downloads, Export, Auth"]
     Functions --> Services["server/modules/<br/>Dienste je Fachbereich"]
@@ -34,8 +34,12 @@ Der Browser spricht nur mit der eigenen Anwendung. Seiten laden ihre Daten über
 | --- | --- |
 | `packages/core` | Reine Fachlogik ohne Ein- und Ausgabe: Cent-Beträge und Formatierung, Zeiträume und Fälligkeiten mit Feiertagen je Bundesland (`holidays.ts`), Steuernummer-Umrechnung ins ELSTER-Format, Rechnungssummen, umsatzsteuerliche Behandlung von Rechnungen (`treatment.ts`), Kontenrahmen und Buchungssätze (`posting.ts`), Vorschläge für den Bankabgleich (`matching.ts`), UStVA-Berechnung, EÜR (`euer.ts`), Umsatzsteuer aus Lexoffice-Belegen (`legacy-vat.ts`), Lebenszyklen von Rechnung, Angebot und Voranmeldung und der offene Betrag von Rechnungen und Belegen (`lebenszyklus.ts`; Rechnungsliste, Bankabgleich, offene Posten, Mahnwesen und die Sperre der Firmendaten rechnen damit, ein Test prüft, dass alle dasselbe ergeben) |
 | `packages/einvoice` | Rechnungs-PDF mit Typst (Vorlage `templates/rechnung.typ`), ZUGFeRD und XRechnung über `@e-invoice-eu/core`, Prüfung der Pflichtfelder je Format, Lesen eingehender E-Rechnungen (eingebettetes XML aus PDFs, CII und UBL) |
-| `packages/import` | Parser für Kontoauszüge (DKB, N26, CAMT.053), Dekodierung, Deduplizierung, Saldenprüfung, DATEV-Buchungsstapel (`datev.ts`), Client und Abbildungen für die Lexware-Office-API (`lexoffice/`), Client und Abbildung für den Kontoabruf über Enable Banking (`enablebanking/`) |
+| `packages/import` | Parser für Kontoauszüge (DKB, N26, CAMT.053), Dekodierung, Deduplizierung, Saldenprüfung, DATEV-Buchungsstapel (`datev.ts`), Client und Abbildungen für die Lexware-Office-API (`lexoffice/`) und das Lesen einer Sicherung aus deren Web-Oberfläche (`lexoffice/web/`, erzeugt von `apps/web/public/lexware-sicherung.js`), Client und Abbildungen für die sevDesk-API (`sevdesk/`), Client und Abbildung für den Kontoabruf über Enable Banking (`enablebanking/`) |
 | `packages/elster` | `ElsterClient` mit echtem ERiC-Client (Kindprozess, `koffi`) und simuliertem Client, UStVA-XML, XML der Jahreserklärungen (Umsatzsteuererklärung E50, Anlage EÜR mit AVEÜR E77, `erklaerung.ts`; Einkommensteuererklärung E10, `est.ts`), Sonstige Nachricht (`nachricht.ts`), Änderung der Bankverbindung (`bankverbindung.ts`), Datenabholung aus dem Postfach (`postfach.ts`, Download der Anhänge über Otto), Belegabruf der vorausgefüllten Steuererklärung (`vast.ts`, Entschlüsselung mit `EricDekodiereDaten`), Berechtigungen zum Belegabruf (`berechtigung.ts`, ElsterBRM), Transfer-Ticket, ERiC-Download (`install.ts`) |
+
+### apps/elster-helfer
+
+Die Browser-Erweiterung „Haben für Mein ELSTER“ (Manifest V3, TypeScript, gebaut mit Vite und `@crxjs/vite-plugin` nach `dist/`): `src/fill.ts` findet die Felder von Mein ELSTER über ihre amtliche Kennung (reine Logik ohne Chrome-APIs, getestet in `apps/web/e2e/elster-helfer.spec.ts`), `src/content.ts` trägt auf jeder Formularseite ein und zeigt die Leiste, `src/popup.ts` nimmt die Werte aus Haben entgegen und legt sie im Sitzungsspeicher des Browsers ab. Das Format der Werte ist der Typ `MeinElsterWerte` aus `packages/elster/src/felder.ts`, denselben, mit dem Haben sie erzeugt. Das Inhaltsskript ist ein Bündel ohne Nachladen, die Erweiterung gibt Mein ELSTER also keine Dateien frei (`web_accessible_resources`), an denen die Seite sie erkennen könnte. Für jedes Release baut und packt `scripts/elster-helfer/paket.ts` sie mit der Version aus dem Tag als `haben-fuer-mein-elster-chrome-<Version>.zip` (Format des Chrome Web Store). Sie läuft nur auf `www.elster.de/eportal/interpreter/eingabe/…` und verbindet sich nicht mit Haben ([Mein ELSTER mit Erweiterung](elster-mit-erweiterung.md)).
 
 ### apps/web
 
@@ -70,11 +74,11 @@ Die Dienste liegen in `apps/web/src/server/modules/`, ein Ordner je Fachbereich.
 | `finanzamt` | `finanzamt` (Nachrichten, Bankverbindung), `postfach` (Bescheide abholen), `vast` (Belege der vorausgefüllten Steuererklärung), `berechtigung` (Abrufberechtigung für den Ehegatten), `fristen` (Steuertermine, Kalender-Abo) |
 | `jahreserklaerung` | `annual` (Umsatzsteuererklärung, Anlage EÜR, Einkommensteuer), `income-tax` (Angaben zur Einkommensteuer) |
 | `auswertungen` | `reports` (EÜR, offene Posten), `abgleich` (Journal gegen Umsatzsteuer und EÜR), `integrity` (Prüfung von Hash-Kette, Siegeln und Abgleich), `datev-export` |
-| `archiv` | `archive` (Umzugsdateien), `export` (Jahresarchiv), `lexoffice` (Import), `legacy-open` (übernommene offene Posten) |
+| `archiv` | `archive` (Umzugsdateien), `export` (Jahresarchiv), `lexoffice` (Import über die API oder eine Sicherung aus der Web-Oberfläche), `legacy-open` (übernommene offene Posten) |
 | `mail` | `mail` (SMTP, Erinnerungen, wöchentliche Integritätsmail) |
 | `mcp` | `server` (Endpunkt für KI-Assistenten), `tokens` (API-Tokens, Schalter, Protokoll der Aufrufe), `tools` (Werkzeuge, nur lesen) |
 
-Die Lint-Regel `haben/modulgrenzen` (`eslint/modulgrenzen.js`) läuft mit `pnpm lint` in der CI und prüft jeden relativen Import:
+Die Prüfung der Modulgrenzen (`scripts/modulgrenzen/`) läuft mit `bun run lint` in der CI und prüft jeden relativen Import, auch `export … from`, `import()` und Typen wie `import("…").T`. Sie löst den Pfad auf, statt nur den Text des Imports zu vergleichen; das kann Biome nicht, deshalb ist es ein eigenes Skript:
 
 - **Aus einem anderen Modul nur über dessen `index.ts`.** Braucht ein Modul, eine Server Function oder eine Route etwas, das dort fehlt, wird es in der `index.ts` ergänzt. Die Datei enthält nur `export { … } from "./…"`, keine Logik.
 - **Infrastruktur importiert keine Module.** `server/*.ts` und `server/db/` bleiben unabhängig von der Fachlogik. Ausgenommen sind die Stellen, die Module zusammensetzen: `server/functions/`, `server/plugins/` und `scheduler.ts`.
@@ -106,7 +110,7 @@ Alle Tabellen stehen in `apps/web/src/server/db/schema.ts`. Beträge sind ganze 
 | `invoices` | Ausgangsrechnungen, Stornos und Korrekturen mit PDF, XML, SHA-256 und umsatzsteuerlicher Behandlung (`tax_treatment`, `exemption_reason`); aus Vorlagen mit `recurring_id` und Termin (`recurring_date`, eindeutig je Vorlage); höchstens ein festgeschriebenes Storno je Rechnung | gesperrt ab Festschreibung, Audit ohne PDF/XML |
 | `recurring_invoices` | Vorlagen für wiederkehrende Rechnungen: Positionen, Intervall, nächster Termin, Modus (Entwurf oder festschreiben) | Audit |
 | `dunnings` | Zahlungserinnerungen und Mahnungen mit Stufe, Frist, Gebühr, Pauschale, Zinsen und PDF | nur anhängen, Audit ohne PDF |
-| `invoice_lines` | Positionen einer Rechnung: Einzelpreis wie eingegeben (netto oder brutto, `invoices.price_mode`), Zeilennetto | gesperrt mit der Rechnung |
+| `invoice_lines` | Positionen einer Rechnung: Bezeichnung (`description`), optionaler mehrzeiliger Text (`detail`, BT-154), Einzelpreis wie eingegeben (netto oder brutto, `invoices.price_mode`), Zeilennetto | gesperrt mit der Rechnung |
 | `invoice_taxes` | Netto und Umsatzsteuer je Steuersatz, einmal beim Speichern des Entwurfs berechnet; Voranmeldung, Zahlungsbuchung, Auswertungen, Schlussrechnung, PDF und XML lesen nur diese Werte | gesperrt mit der Rechnung |
 | `invoice_number_counters` | Letzte vergebene Nummer je Jahr | darf nicht sinken, Audit |
 | `quotes` | Angebote mit Gültigkeit, PDF, SHA-256, Antwort des Kunden (`decision`) und daraus entstandener Rechnung (`invoice_id`) | gesperrt ab Festschreibung bis auf Antwort und Rechnung, Audit ohne PDF |
@@ -125,7 +129,7 @@ Alle Tabellen stehen in `apps/web/src/server/db/schema.ts`. Beträge sind ganze 
 | `cash_entries` | Kassenbuch: jede Bewegung der Barkasse mit lückenloser Nummer, Beleg oder Art (Einlage, Entnahme, Geldtransit), Buchung; Storno als Gegenzeile | nur anhängen, Audit |
 | `bank_imports` | Jede importierte Auszugsdatei mit SHA-256, Zeitraum, Salden | nur anhängen, Audit |
 | `bank_transactions` | Importierte Umsätze mit Hash zur Deduplizierung | nur anhängen |
-| `bank_connections` | Zustimmungen für den Kontoabruf über Enable Banking: Bank, Status, Ablauf, freigegebene Konten mit Abrufstand; Sitzungskennung verschlüsselt | Audit ohne Chiffrat |
+| `bank_connections` | Zustimmungen für den Kontoabruf über Enable Banking: Bank, Status, Ablauf, beim Verbinden gewählter Abrufbeginn, freigegebene Konten mit Abrufstand; Sitzungskennung verschlüsselt | Audit ohne Chiffrat |
 | `allocations` | Zuordnung eines Umsatzes (ganz oder teilweise); aufgehoben per Gegenzeile | nur anhängen, Betragsprüfung, Audit |
 | `vat_returns` | Voranmeldungen je Monat mit Kennzahlen, berechnet oder überschrieben | gesperrt nach Echtübermittlung, Audit |
 | `vat_return_submissions` | Jede Prüfung und Übermittlung mit XML und Protokoll-PDF | nur anhängen, Audit ohne PDF und XML |
@@ -231,7 +235,7 @@ Rechnungs-PDFs und -XML sowie ERiC-Protokolle liegen dagegen direkt in der Daten
 
 ## ERiC-Worker
 
-ERiC, die native Bibliothek der Finanzverwaltung, läuft nie im Anwendungsprozess. `EricProcessClient` in `packages/elster` startet für jeden Aufruf einen kurzlebigen Kindprozess (`worker.ts`), der ERiC per `koffi` lädt, genau eine Anfrage über IPC ausführt und sich beendet. Stürzt ERiC ab oder hängt, bekommt die Anwendung nur eine Fehlermeldung; nach 120 Sekunden wird der Kindprozess beendet. Beim Postfachabruf sendet derselbe Kindprozess die PostfachAnfrage und lädt danach die Anhänge über Otto (`libotto.so` aus dem ERiC-Paket); die Dateien reisen base64-kodiert über IPC zurück, bestätigt wird erst, wenn die Anwendung sie gespeichert hat.
+ERiC, die native Bibliothek der Finanzverwaltung, läuft nie im Anwendungsprozess. `EricProcessClient` in `packages/elster` startet für jeden Aufruf einen kurzlebigen Kindprozess (`worker.ts`), der ERiC per `koffi` lädt (über die Node-API, die Bun nachbildet), genau eine Anfrage über IPC ausführt und sich beendet. Stürzt ERiC ab oder hängt, bekommt die Anwendung nur eine Fehlermeldung; nach 120 Sekunden wird der Kindprozess beendet. Der Kindprozess startet ohne Core-Dump (`ulimit -c 0`): Unter Bun wäre der Dump eines Absturzes mehrere GB groß, und wo ihn ein Dienst wie systemd-coredump annimmt, käme die Fehlermeldung erst nach Sekunden bis Minuten. Beim Postfachabruf sendet derselbe Kindprozess die PostfachAnfrage und lädt danach die Anhänge über Otto (`libotto.so` aus dem ERiC-Paket); die Dateien reisen base64-kodiert über IPC zurück, bestätigt wird erst, wenn die Anwendung sie gespeichert hat.
 
 Für eine Übermittlung entschlüsselt Haben das Zertifikat und schreibt es in ein temporäres Verzeichnis (Rechte 0700, Datei 0600), das nach dem Aufruf gelöscht wird. Die PIN wird je Übermittlung abgefragt; gespeichert wird sie nur, wenn du den automatischen Postfachabruf einschaltest (verschlüsselt, für Postfach, Belegabruf und Berechtigungen). Vor dem Senden prüft der Client, dass der Testmerker im XML zur gewünschten Art passt (Test- oder Echtübermittlung). Ohne ERiC verwendet Haben einen simulierten Client und zeigt das in der Oberfläche an.
 
@@ -301,6 +305,7 @@ Laufende Auslesungen merkt sich der Prozess. Steht ein Beleg auf „läuft“, o
 | Umsatzsteuer und EÜR aus den Nebenbüchern, Journal zum Abgleich | Die Formulare brauchen Kennzahlen je Satz, § 13b und Zahlungsdaten, die im Journal nur indirekt stehen; der Abgleich deckt Widersprüche trotzdem auf |
 | Dateien unter SHA-256 | Keine Dubletten, Integrität bei jedem Lesen prüfbar, Hash im Export als Nachweis |
 | ERiC im Kindprozess | Eine abstürzende native Bibliothek reißt die Anwendung nicht mit |
+| Bun als Laufzeit und Paketmanager | Ein Programm statt Node, npm, pnpm und tsx; TypeScript läuft ohne Build (ERiC-Worker, Migrationen, Skripte). Ausgeliefert wird ohnehin als Container. Die Prüfung aller Nachrichten mit dem echten ERiC (`eric-echt.test.ts`) läuft unter Bun wie zuvor unter Node |
 | Jahresexport als Stream | Ein Jahr mit vielen Belegen braucht kaum Arbeitsspeicher; die Prüfsummen entstehen beim Packen |
 | Keine Job-Queue | Ein Prozess, eine Datenbank, einfacher Betrieb. Die einzigen langen Aufgaben sind wiederholbar bzw. fortsetzbar |
 | KI-Auslesung optional | Ohne Schlüssel bleiben alle Daten auf dem eigenen Server; E-Rechnungen werden ohnehin direkt gelesen |

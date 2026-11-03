@@ -1,4 +1,5 @@
 import { UserError } from "../../errors.ts";
+import { joinEmails, MAX_EMAIL_RECIPIENTS, splitEmails } from "@haben/core";
 import { asc, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { withActor } from "../../db/actor.ts";
@@ -10,10 +11,32 @@ export const contactSchema = z.object({
   strasse: z.string().trim().max(200),
   plz: z.string().trim().max(10),
   ort: z.string().trim().max(100),
-  land: z.string().trim().regex(/^[A-Z]{2}$/, "Ländercode wie DE"),
-  email: z.union([z.literal(""), z.email("Keine gültige E-Mail-Adresse")]),
-  ustId: z.union([z.literal(""), z.string().trim().regex(/^[A-Z]{2}[0-9A-Z+*.]{2,12}$/, "USt-IdNr. hat die Form DE123456789")]),
-  iban: z.union([z.literal(""), z.string().trim().regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, "IBAN ohne Leerzeichen")]),
+  land: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{2}$/, "Ländercode wie DE"),
+  /** Eine oder mehrere Adressen, durch Komma getrennt (z. B. Rechnungseingang und Freigeber); gespeichert mit „, “ */
+  email: z
+    .string()
+    .trim()
+    .max(1000)
+    .refine((value) => splitEmails(value).length <= MAX_EMAIL_RECIPIENTS, `Höchstens ${MAX_EMAIL_RECIPIENTS} E-Mail-Adressen`)
+    .refine((value) => splitEmails(value).every((v) => z.email().safeParse(v).success), "Keine gültige E-Mail-Adresse")
+    .transform((value) => joinEmails(splitEmails(value))),
+  ustId: z.union([
+    z.literal(""),
+    z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}[0-9A-Z+*.]{2,12}$/, "USt-IdNr. hat die Form DE123456789"),
+  ]),
+  iban: z.union([
+    z.literal(""),
+    z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, "IBAN ohne Leerzeichen"),
+  ]),
   leitwegId: z.string().trim().max(46),
   defaultFormat: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]).nullable(),
   /** Sprache von Rechnungen und Angeboten */
@@ -48,6 +71,7 @@ function clean(input: ContactInput) {
   return {
     ...input,
     kundennummer: input.kundennummer || null,
+    email: joinEmails(splitEmails(input.email)),
     ustId: input.ustId.replace(/\s/g, "").toUpperCase(),
     iban: input.iban.replace(/\s/g, "").toUpperCase(),
   };
@@ -63,11 +87,7 @@ export async function createContact(actor: string, input: ContactInput): Promise
 /** Änderungen erhöhen per Trigger die Version; alte Stände bleiben in contact_versions. */
 export async function updateContact(actor: string, id: string, input: ContactInput): Promise<Contact> {
   return withActor(actor, async (tx) => {
-    const [updated] = await tx
-      .update(schema.contacts)
-      .set(clean(input))
-      .where(eq(schema.contacts.id, id))
-      .returning();
+    const [updated] = await tx.update(schema.contacts).set(clean(input)).where(eq(schema.contacts.id, id)).returning();
     if (!updated) throw new ContactError("Kontakt nicht gefunden.");
     return updated;
   });

@@ -11,7 +11,7 @@ type InvoiceLine = UblInvoice["cac:InvoiceLine"][number];
 type CountryCode = UblInvoice["cac:AccountingSupplierParty"]["cac:Party"]["cac:PostalAddress"]["cac:Country"]["cbc:IdentificationCode"];
 
 const SERVICE_FORMATS: Record<InvoiceFormat, string> = {
-  "zugferd": "Factur-X-EN16931",
+  zugferd: "Factur-X-EN16931",
   "xrechnung-cii": "XRECHNUNG-CII",
   "xrechnung-ubl": "XRECHNUNG-UBL",
 };
@@ -25,7 +25,9 @@ function amount(cents: Cents): string {
 /** 152000 → "152", 500 → "0.5" */
 function quantity(millis: Millis): string {
   const abs = Math.abs(millis);
-  const fraction = String(abs % 1000).padStart(3, "0").replace(/0+$/, "");
+  const fraction = String(abs % 1000)
+    .padStart(3, "0")
+    .replace(/0+$/, "");
   return `${millis < 0 ? "-" : ""}${Math.floor(abs / 1000)}${fraction ? `.${fraction}` : ""}`;
 }
 
@@ -115,6 +117,8 @@ export function toEInvoiceData(doc: InvoiceDocument): Invoice {
       "cbc:LineExtensionAmount": amount(net),
       "cbc:LineExtensionAmount@currencyID": currency,
       "cac:Item": {
+        // Beschreibung (BT-154) steht im UBL-Schema vor dem Namen (BT-153)
+        ...(line.detail?.trim() ? { "cbc:Description": line.detail.trim() } : {}),
         "cbc:Name": line.description,
         "cac:ClassifiedTaxCategory": categoryWithRate(doc, line.taxRate, "line") as InvoiceLine["cac:Item"]["cac:ClassifiedTaxCategory"],
       },
@@ -150,9 +154,7 @@ export function toEInvoiceData(doc: InvoiceDocument): Invoice {
           "cbc:PostalZone": seller.plz,
           "cac:Country": { "cbc:IdentificationCode": seller.land.toUpperCase() as CountryCode },
         },
-        ...(sellerTax.length > 0
-          ? { "cac:PartyTaxScheme": sellerTax as UblInvoice["cac:AccountingSupplierParty"]["cac:Party"]["cac:PartyTaxScheme"] }
-          : {}),
+        ...(sellerTax.length > 0 ? { "cac:PartyTaxScheme": sellerTax as UblInvoice["cac:AccountingSupplierParty"]["cac:Party"]["cac:PartyTaxScheme"] } : {}),
         "cac:PartyLegalEntity": { "cbc:RegistrationName": seller.name },
         "cac:Contact": sellerContact,
       },
@@ -167,9 +169,7 @@ export function toEInvoiceData(doc: InvoiceDocument): Invoice {
           "cbc:PostalZone": buyer.plz,
           "cac:Country": { "cbc:IdentificationCode": buyer.land.toUpperCase() as CountryCode },
         },
-        ...(buyer.ustId && !outOfScope
-          ? { "cac:PartyTaxScheme": { "cbc:CompanyID": buyer.ustId, "cac:TaxScheme": { "cbc:ID": "VAT" } } }
-          : {}),
+        ...(buyer.ustId && !outOfScope ? { "cac:PartyTaxScheme": { "cbc:CompanyID": buyer.ustId, "cac:TaxScheme": { "cbc:ID": "VAT" } } } : {}),
         "cac:PartyLegalEntity": { "cbc:RegistrationName": buyer.name },
         ...(buyer.email ? { "cac:Contact": { "cbc:ElectronicMail": buyer.email } } : {}),
       },
@@ -211,7 +211,9 @@ export function toEInvoiceData(doc: InvoiceDocument): Invoice {
     invoice["cac:TaxTotal"].push({ "cbc:TaxAmount": amount(sign * doc.euroTax.tax), "cbc:TaxAmount@currencyID": "EUR" });
   }
 
-  if (doc.note?.trim()) invoice["cbc:Note"] = [doc.note.trim()];
+  // Einleitung und Hinweis als Freitext zur Rechnung (BT-22), in der Reihenfolge wie auf dem PDF
+  const notes = [doc.intro, doc.note].map((n) => n?.trim() ?? "").filter(Boolean);
+  if (notes.length > 0) invoice["cbc:Note"] = notes;
 
   if (period.from === period.to) {
     invoice["cac:Delivery"] = { "cbc:ActualDeliveryDate": period.from };
@@ -259,8 +261,11 @@ export function toEInvoiceData(doc: InvoiceDocument): Invoice {
 /** Entfernt in XML 1.0 unzulässige Zeichen aus allen Texten (etwa ein aus Word kopierter vertikaler Tab), sonst lehnt der Empfänger das XML ab */
 function withoutInvalidXmlChars<T>(value: T): T {
   if (typeof value === "string") {
-    // eslint-disable-next-line no-control-regex
-    return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "") as T;
+    return value.replace(
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: Steuerzeichen sind hier gesucht
+      /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+      "",
+    ) as T;
   }
   if (Array.isArray(value)) return value.map(withoutInvalidXmlChars) as T;
   if (value && typeof value === "object") {

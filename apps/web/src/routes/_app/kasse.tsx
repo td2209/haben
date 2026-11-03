@@ -41,8 +41,8 @@ function CashPage() {
         </div>
       </div>
       <p className="muted small" style={{ margin: 0, maxWidth: 760 }}>
-        Bar bezahlte <Link to="/belege">Belege</Link> landen beim Buchen automatisch hier; Einlagen, Entnahmen und Geld von oder zur Bank
-        trägst du ein. Einträge lassen sich nur stornieren, der Bestand darf nie negativ werden.
+        Bar bezahlte <Link to="/belege">Belege</Link> landen beim Buchen automatisch hier; Einlagen, Entnahmen und Geld von oder zur Bank trägst du ein.
+        Einträge lassen sich nur stornieren, der Bestand darf nie negativ werden.
       </p>
 
       {years.length > 1 && (
@@ -89,6 +89,7 @@ function CashForm({ data, onNotice }: { data: Data; onNotice: (n: Notice) => voi
   const create = useServerFn(createCashEntryFn);
   const [kind, setKind] = useState<CashBooking>("einlage");
   const [busy, setBusy] = useState(false);
+  // biome-ignore lint/complexity/useMathMinMax: Datumstexte (JJJJ-MM-TT), Math.min ergäbe NaN
   const defaultDate = `${data.year}-12-31` < data.today ? `${data.year}-12-31` : data.today;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {

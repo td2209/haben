@@ -35,7 +35,9 @@ describe.skipIf(!testDatabaseUrl)("Belege per E-Mail (Postgres)", () => {
           // Zu groß: der echte Abruf liefert dann nur die Kopfzeilen
           return { bytes: tooLarge ? source.subarray(0, source.indexOf("\r\n\r\n") + 4) : source, tooLarge };
         },
-        markSeen: async (uid) => void (box.get(uid)!.seen = true),
+        markSeen: async (uid) => {
+          box.get(uid)!.seen = true;
+        },
         close: async () => {},
       };
     });
@@ -162,7 +164,8 @@ describe.skipIf(!testDatabaseUrl)("Belege per E-Mail (Postgres)", () => {
     expect(await inbox.fetchInbox(actor)).toEqual({ messages: 1, documents: 1, duplicates: 0, skipped: 0 });
     expect((await sql`select filename from documents`).map((d) => d.filename)).toEqual(["kaputt.pdf"]);
     // inbox_messages ist nur zu ergänzen: der Fehlschlag bleibt protokolliert, das Nachholen kommt dazu
-    const logs = await sql`select cardinality(document_ids) as documents, skipped from inbox_messages where message_id like '<nochmal@funknetz.example>%' order by created_at`;
+    const logs =
+      await sql`select cardinality(document_ids) as documents, skipped from inbox_messages where message_id like '<nochmal@funknetz.example>%' order by created_at`;
     expect(logs).toEqual([
       { documents: 0, skipped: [expect.stringMatching(/^Verarbeitung fehlgeschlagen: /)] },
       { documents: 1, skipped: [] },

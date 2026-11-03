@@ -27,16 +27,13 @@ import { formatDate } from "../lib/format.ts";
 import { NoticeBanner } from "./NoticeBanner.tsx";
 import { useAction } from "../lib/use-action.ts";
 import { FORMAT_LABEL, FORMATS, invoiceTitle, type KIND_TITLE } from "../lib/invoice.ts";
-import {
-  finalizeInvoiceDraft,
-  removeInvoiceDraft,
-  saveInvoiceDraft,
-} from "../server/functions/invoices.ts";
+import { finalizeInvoiceDraft, removeInvoiceDraft, saveInvoiceDraft } from "../server/functions/invoices.ts";
 import { finalizeQuoteDraft, removeQuoteDraft, saveQuoteDraft } from "../server/functions/quotes.ts";
 import { saveArticle } from "../server/functions/articles.ts";
 import type { DraftInput } from "../server/modules/rechnungen/index.ts";
 import { Icon } from "./Icon.tsx";
 import { InvoicePreview, type PreviewSeller } from "./InvoicePreview.tsx";
+import { TextBlockField, type TextBlockOption } from "./TextBlockField.tsx";
 
 interface ContactOption {
   id: string;
@@ -86,6 +83,8 @@ export interface QuoteOption {
 interface LineState {
   key: number;
   description: string;
+  /** Mehrzeilige Beschreibung unter der Bezeichnung; nur bei Rechnungen */
+  detail: string;
   quantity: string;
   unit: UnitLabel;
   unitPrice: string;
@@ -97,10 +96,14 @@ let nextKey = 1;
 /** Bezeichnungen vergleichen, ohne dass Zeilenumbrüche und doppelte Leerzeichen zählen */
 const sameText = (a: string, b: string) => a.replace(/\s+/g, " ").trim().toLowerCase() === b.replace(/\s+/g, " ").trim().toLowerCase();
 
+/** Artikel kennen nur einen Text: Bezeichnung und Beschreibung untereinander, beim Einfügen wieder getrennt */
+const articleText = (line: { description: string; detail: string }) => [line.description, line.detail].filter(Boolean).join("\n");
+
 function toLineState(line: DraftInput["lines"][number]): LineState {
   return {
     key: nextKey++,
     description: line.description,
+    detail: line.detail ?? "",
     quantity: formatQuantity(line.quantity),
     unit: line.unit,
     unitPrice: line.unitPrice === 0 ? "" : formatDecimal(line.unitPrice),
@@ -108,11 +111,12 @@ function toLineState(line: DraftInput["lines"][number]): LineState {
   };
 }
 
-function parseLine(line: LineState): InvoiceLineInput & { valid: boolean } {
+function parseLine(line: LineState): InvoiceLineInput & { detail: string; valid: boolean } {
   const quantity = parseQuantity(line.quantity);
   const unitPrice = parseEuro(line.unitPrice);
   return {
     description: line.description.trim(),
+    detail: line.detail.trim(),
     quantity: quantity ?? 0,
     unit: line.unit,
     unitPrice: unitPrice ?? 0,
@@ -134,6 +138,7 @@ export function InvoiceEditor({
   bundesland,
   kleinunternehmer,
   articles = [],
+  textBlocks = [],
   abschlaege = [],
   quotes = [],
   tageskurs = false,
@@ -155,6 +160,8 @@ export function InvoiceEditor({
   kleinunternehmer: boolean;
   /** Artikelkatalog zum Einfügen von Positionen */
   articles?: ArticleOption[];
+  /** Kopf- und Fußtexte zum Einfügen */
+  textBlocks?: TextBlockOption[];
   /** Offene Abschlagsrechnungen für die Schlussrechnung */
   abschlaege?: AbschlagOption[];
   /** Festgeschriebene Angebote, für den Bezug von Abschlags- und Schlussrechnungen */
@@ -184,6 +191,7 @@ export function InvoiceEditor({
   const [paymentTermDays, setPaymentTermDays] = useState(String(initial.paymentTermDays));
   const [validUntil, setValidUntil] = useState(initial.validUntil ?? "");
   const [format, setFormat] = useState(initial.format);
+  const [intro, setIntro] = useState(initial.intro ?? "");
   const [note, setNote] = useState(initial.note);
   const [taxTreatment, setTaxTreatment] = useState<TaxTreatment>(initial.taxTreatment ?? "regulaer");
   const [priceMode, setPriceMode] = useState<PriceMode>(initial.priceMode ?? "netto");
@@ -288,21 +296,27 @@ export function InvoiceEditor({
 
   /** Position als Artikel in den Katalog übernehmen; die Position selbst bleibt unverändert */
   function storeAsArticle(p: ReturnType<typeof parseLine>) {
-    void run(async () => {
-      await storeArticle({
-        data: { id: null, article: { description: p.description, unit: p.unit, unitPrice: p.unitPrice, taxRate: p.taxRate, priceIncludesTax: grossPrices } },
-      });
-      await router.invalidate();
-    }, `„${p.description.split("\n")[0]}“ ist jetzt im Artikelkatalog.`);
+    void run(
+      async () => {
+        await storeArticle({
+          data: { id: null, article: { description: articleText(p), unit: p.unit, unitPrice: p.unitPrice, taxRate: p.taxRate, priceIncludesTax: grossPrices } },
+        });
+        await router.invalidate();
+      },
+      `„${p.description.split("\n")[0]}“ ist jetzt im Artikelkatalog.`,
+    );
   }
 
   /** Position aus dem Katalog; ersetzt eine noch leere einzige Zeile, sonst wird angehängt */
   function insertArticle(articleId: string) {
     const article = articles.find((a) => a.id === articleId);
     if (!article) return;
+    // Mehrzeiliger Artikel: erste Zeile als Bezeichnung, der Rest als Beschreibung der Position
+    const [first = "", ...rest] = quote ? [article.description] : article.description.split("\n");
     const line: LineState = {
       key: nextKey++,
-      description: article.description,
+      description: first.trim(),
+      detail: rest.join("\n").trim(),
       quantity: "1",
       unit: article.unit as UnitLabel,
       unitPrice: articlePrice(article),
@@ -354,6 +368,7 @@ export function InvoiceEditor({
       serviceTo: serviceTo || null,
       paymentTermDays: term,
       format,
+      intro,
       note,
       taxTreatment,
       exemptionReason: special ? exemptionReason : "",
@@ -434,9 +449,7 @@ export function InvoiceEditor({
     <>
       <div className="page-head">
         <div>
-          <div className="eyebrow">
-            {quote ? <Link to="/angebote">Angebote</Link> : <Link to="/rechnungen">Rechnungen</Link>} › Entwurf
-          </div>
+          <div className="eyebrow">{quote ? <Link to="/angebote">Angebote</Link> : <Link to="/rechnungen">Rechnungen</Link>} › Entwurf</div>
           <h1>
             {title} {nextNumber}
           </h1>
@@ -455,8 +468,7 @@ export function InvoiceEditor({
         <div className="banner" role="status">
           <Icon name="alert" />
           <span>
-            Vor dem Festschreiben: {blocking.join(", ")}.{" "}
-            {sellerIssues.length > 0 && <Link to="/einstellungen">Firmendaten ergänzen</Link>}
+            Vor dem Festschreiben: {blocking.join(", ")}. {sellerIssues.length > 0 && <Link to="/einstellungen">Firmendaten ergänzen</Link>}
           </span>
         </div>
       )}
@@ -545,19 +557,19 @@ export function InvoiceEditor({
                   />
                 </label>
               ) : (
-              <label className="field">
-                Zahlungsziel in Tagen
-                <input
-                  inputMode="numeric"
-                  value={paymentTermDays}
-                  onChange={(e) => touch(setPaymentTermDays)(e.target.value)}
-                  aria-invalid={!termValid}
-                  aria-describedby="due-hint"
-                />
-                <span id="due-hint" className="small">
-                  fällig {formatDate(dueDate)}
-                </span>
-              </label>
+                <label className="field">
+                  Zahlungsziel in Tagen
+                  <input
+                    inputMode="numeric"
+                    value={paymentTermDays}
+                    onChange={(e) => touch(setPaymentTermDays)(e.target.value)}
+                    aria-invalid={!termValid}
+                    aria-describedby="due-hint"
+                  />
+                  <span id="due-hint" className="small">
+                    fällig {formatDate(dueDate)}
+                  </span>
+                </label>
               )}
               <label className="field">
                 Leistung von
@@ -569,7 +581,12 @@ export function InvoiceEditor({
               </label>
               <label className="field" style={{ gridColumn: "1 / -1" }}>
                 Sprache
-                <select value={language} onChange={(e) => touch(setLanguage)(e.target.value as "de" | "en")} disabled={!editable} aria-describedby="language-hint">
+                <select
+                  value={language}
+                  onChange={(e) => touch(setLanguage)(e.target.value as "de" | "en")}
+                  disabled={!editable}
+                  aria-describedby="language-hint"
+                >
                   <option value="de">Deutsch</option>
                   <option value="en">Englisch</option>
                 </select>
@@ -619,24 +636,24 @@ export function InvoiceEditor({
                   {foreign && (
                     <span id="invoice-currency-hint" className="small" style={{ gridColumn: "1 / -1" }}>
                       {rateInfo && <strong>{rateInfo}. </strong>}
-                      Preise und Summen in {currencyCode || "der Fremdwährung"}; die Umsatzsteuer steht zusätzlich in Euro auf der Rechnung (§ 14 Abs.
-                      4 Nr. 8 UStG). Gebucht wird in Euro. Ohne eigenen Kurs nimmt Haben den Umsatzsteuer-Umrechnungskurs des Leistungsmonats, sobald
-                      das BMF ihn veröffentlicht hat. Kein GiroCode, keine Abschlags- oder Schlussrechnung, keine Mahnung aus Haben.
+                      Preise und Summen in {currencyCode || "der Fremdwährung"}; die Umsatzsteuer steht zusätzlich in Euro auf der Rechnung (§ 14 Abs. 4 Nr. 8
+                      UStG). Gebucht wird in Euro. Ohne eigenen Kurs nimmt Haben den Umsatzsteuer-Umrechnungskurs des Leistungsmonats, sobald das BMF ihn
+                      veröffentlicht hat. Kein GiroCode, keine Abschlags- oder Schlussrechnung, keine Mahnung aus Haben.
                     </span>
                   )}
                 </>
               )}
               {!quote && (
-              <label className="field" style={{ gridColumn: "1 / -1" }}>
-                E-Rechnungsformat
-                <select value={format} onChange={(e) => touch(setFormat)(e.target.value as DraftInput["format"])}>
-                  {FORMATS.map((f) => (
-                    <option key={f} value={f}>
-                      {FORMAT_LABEL[f]}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <label className="field" style={{ gridColumn: "1 / -1" }}>
+                  E-Rechnungsformat
+                  <select value={format} onChange={(e) => touch(setFormat)(e.target.value as DraftInput["format"])}>
+                    {FORMATS.map((f) => (
+                      <option key={f} value={f}>
+                        {FORMAT_LABEL[f]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
               <label className="field" style={{ gridColumn: "1 / -1" }}>
                 Umsatzsteuer
@@ -728,14 +745,22 @@ export function InvoiceEditor({
                 ))
               )}
               <p className="small muted" style={{ margin: 0 }}>
-                Unter Positionen steht die gesamte Leistung. Die Abzüge erscheinen auf der Rechnung als eigene Positionen mit Netto und
-                Umsatzsteuer der Abschlagsrechnung (§ 14 Abs. 5 UStG).
+                Unter Positionen steht die gesamte Leistung. Die Abzüge erscheinen auf der Rechnung als eigene Positionen mit Netto und Umsatzsteuer der
+                Abschlagsrechnung (§ 14 Abs. 5 UStG).
               </p>
             </section>
           )}
 
           <section className="card" aria-labelledby="lines-heading">
             <h2 id="lines-heading">Positionen</h2>
+            <TextBlockField
+              label="Einleitung über den Positionen (optional)"
+              kind="kopf"
+              value={intro}
+              onChange={touch(setIntro)}
+              blocks={textBlocks}
+              contactId={contactId || null}
+            />
             <div className="line-row head" aria-hidden="true">
               <div>Menge</div>
               <div>Einheit</div>
@@ -747,14 +772,18 @@ export function InvoiceEditor({
             {articles.length > 0 && (
               <datalist id="artikel-vorschlaege">
                 {articles.map((a) => (
-                  <option key={a.id} value={a.description} label={`${a.number ? `${a.number} · ` : ""}${formatEuro(a.unitPrice)}${a.priceIncludesTax ? " brutto" : ""}/${a.unit}`} />
+                  <option
+                    key={a.id}
+                    value={a.description}
+                    label={`${a.number ? `${a.number} · ` : ""}${formatEuro(a.unitPrice)}${a.priceIncludesTax ? " brutto" : ""}/${a.unit}`}
+                  />
                 ))}
               </datalist>
             )}
             {lines.map((line, index) => {
               const p = parsed[index]!;
               const inCatalog = articles.some(
-                (a) => sameText(a.description, p.description) && a.unitPrice === p.unitPrice && a.unit === p.unit && a.priceIncludesTax === grossPrices,
+                (a) => sameText(a.description, articleText(p)) && a.unitPrice === p.unitPrice && a.unit === p.unit && a.priceIncludesTax === grossPrices,
               );
               return (
                 <div className="line-row" key={line.key}>
@@ -769,6 +798,17 @@ export function InvoiceEditor({
                     onBlur={() => markTouched(line.key)}
                     aria-invalid={showError(line.key) && line.description.trim() === ""}
                   />
+                  {!quote && (
+                    <textarea
+                      className="line-detail"
+                      rows={line.detail ? Math.min(6, line.detail.split("\n").length) : 1}
+                      placeholder="Beschreibung (optional, mehrzeilig)"
+                      aria-label={`Text zu Position ${index + 1} (optional)`}
+                      value={line.detail}
+                      maxLength={2000}
+                      onChange={(e) => updateLine(line.key, { detail: e.target.value })}
+                    />
+                  )}
                   <input
                     className="num"
                     inputMode="decimal"
@@ -813,32 +853,51 @@ export function InvoiceEditor({
                     {p.valid ? formatEuro(lineAmount(p.quantity, p.unitPrice)) : "–"}
                   </div>
                   <div className="line-actions">
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn-plain"
-                    aria-label={`Position ${index + 1} als Artikel speichern`}
-                    title={inCatalog ? "Steht schon im Artikelkatalog" : "Als Artikel speichern"}
-                    disabled={busy || !p.valid || inCatalog}
-                    onClick={() => storeAsArticle(p)}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label={`Position ${index + 1} entfernen`}
-                    disabled={lines.length === 1}
-                    onClick={() => {
-                      setLines((prev) => prev.filter((l) => l.key !== line.key));
-                      setDirty(true);
-                    }}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                      <path d="M6 6l12 12M18 6L6 18" />
-                    </svg>
-                  </button>
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn-plain"
+                      aria-label={`Position ${index + 1} als Artikel speichern`}
+                      title={inCatalog ? "Steht schon im Artikelkatalog" : "Als Artikel speichern"}
+                      disabled={busy || !p.valid || inCatalog}
+                      onClick={() => storeAsArticle(p)}
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label={`Position ${index + 1} entfernen`}
+                      disabled={lines.length === 1}
+                      onClick={() => {
+                        setLines((prev) => prev.filter((l) => l.key !== line.key));
+                        setDirty(true);
+                      }}
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
                   </div>
                 </div>
               );
@@ -851,7 +910,15 @@ export function InvoiceEditor({
                   const last = lines[lines.length - 1];
                   setLines((prev) => [
                     ...prev,
-                    { key: nextKey++, description: "", quantity: "1", unit: last?.unit ?? "Std.", unitPrice: "", taxRate: special ? 0 : (last?.taxRate ?? 1900) },
+                    {
+                      key: nextKey++,
+                      description: "",
+                      detail: "",
+                      quantity: "1",
+                      unit: last?.unit ?? "Std.",
+                      unitPrice: "",
+                      taxRate: special ? 0 : (last?.taxRate ?? 1900),
+                    },
                   ]);
                   setDirty(true);
                 }}
@@ -879,10 +946,14 @@ export function InvoiceEditor({
                 </select>
               )}
             </div>
-            <label className="field">
-              {quote ? "Hinweis auf dem Angebot (optional)" : "Hinweis auf der Rechnung (optional)"}
-              <textarea value={note} onChange={(e) => touch(setNote)(e.target.value)} maxLength={2000} />
-            </label>
+            <TextBlockField
+              label={quote ? "Hinweis auf dem Angebot (optional)" : "Hinweis auf der Rechnung (optional)"}
+              kind="fuss"
+              value={note}
+              onChange={touch(setNote)}
+              blocks={textBlocks}
+              contactId={contactId || null}
+            />
           </section>
 
           <div className="banner banner-info">
@@ -918,6 +989,7 @@ export function InvoiceEditor({
             seller={seller}
             buyer={contact}
             lines={[...parsed, ...deductionPreview]}
+            intro={intro}
             note={note}
             priceMode={grossPrices ? "brutto" : "netto"}
             taxNote={treatmentNote(taxTreatment, exemptionReason)}

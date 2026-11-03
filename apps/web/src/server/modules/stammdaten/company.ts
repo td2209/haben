@@ -2,6 +2,7 @@ import { BUNDESLAENDER, EXPENSE_CATEGORY_KEYS, toElsterSteuernummer, Steuernumme
 import { and, desc, eq, gte, lt, lte, min } from "drizzle-orm";
 import { z } from "zod";
 import { listArticles } from "./articles.ts";
+import { listTextBlocks } from "./text-blocks.ts";
 import { listContacts } from "./contacts.ts";
 import { withActor } from "../../db/actor.ts";
 import { db, schema, type Db, type Tx } from "../../db/index.ts";
@@ -11,18 +12,39 @@ import { today } from "../../today.ts";
 export const companySchema = z.object({
   name: z.string().trim().max(200),
   strasse: z.string().trim().max(200),
-  plz: z.string().trim().regex(/^(\d{5})?$/, "PLZ hat fünf Ziffern"),
+  plz: z
+    .string()
+    .trim()
+    .regex(/^(\d{5})?$/, "PLZ hat fünf Ziffern"),
   ort: z.string().trim().max(100),
   email: z.union([z.literal(""), z.string().trim().pipe(z.email("Keine gültige E-Mail-Adresse").max(320))]),
   steuernummer: z.string().trim().max(20),
-  ustId: z.union([z.literal(""), z.string().trim().regex(/^DE\d{9}$/, "USt-IdNr. hat die Form DE123456789")]),
+  ustId: z.union([
+    z.literal(""),
+    z
+      .string()
+      .trim()
+      .regex(/^DE\d{9}$/, "USt-IdNr. hat die Form DE123456789"),
+  ]),
   finanzamt: z.string().trim().max(200),
   bundesland: z.enum(Object.keys(BUNDESLAENDER) as [keyof typeof BUNDESLAENDER, ...(keyof typeof BUNDESLAENDER)[]]).nullable(),
   versteuerung: z.enum(["ist", "soll"]),
   telefon: z.string().trim().max(40),
   bank: z.string().trim().max(100),
-  iban: z.union([z.literal(""), z.string().trim().regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, "IBAN ohne Leerzeichen")]),
-  bic: z.union([z.literal(""), z.string().trim().regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/, "BIC hat 8 oder 11 Zeichen")]),
+  iban: z.union([
+    z.literal(""),
+    z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, "IBAN ohne Leerzeichen"),
+  ]),
+  bic: z.union([
+    z.literal(""),
+    z
+      .string()
+      .trim()
+      .regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/, "BIC hat 8 oder 11 Zeichen"),
+  ]),
   kontenrahmen: z.enum(["SKR03", "SKR04"]),
   paymentTermDays: z.number().int().min(0).max(120),
   defaultFormat: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
@@ -89,8 +111,8 @@ export async function versteuerungForYear(year: number, q: Db | Tx = db): Promis
  * Für alles, was frühere Zeiträume betrifft: Wer zum Jahreswechsel auf Kleinunternehmer umstellt, schuldet die
  * Voranmeldung für Dezember und die Umsatzsteuererklärung des Vorjahres trotzdem.
  */
-export async function kleinunternehmerHistory(): Promise<(date: string) => boolean> {
-  const rows = await db
+export async function kleinunternehmerHistory(q: Db | Tx = db): Promise<(date: string) => boolean> {
+  const rows = await q
     .select({ at: schema.auditLog.at, newValue: schema.auditLog.newValue })
     .from(schema.auditLog)
     .where(eq(schema.auditLog.tableName, "company"))
@@ -99,7 +121,7 @@ export async function kleinunternehmerHistory(): Promise<(date: string) => boole
     const value = (r.newValue as { kleinunternehmer?: unknown } | null)?.kleinunternehmer;
     return typeof value === "boolean" ? [{ date: today(r.at), value }] : [];
   });
-  const current = (await loadCompany()).kleinunternehmer;
+  const current = (await loadCompany(q)).kleinunternehmer;
   return (date) => {
     const last = changes.filter((c) => c.date <= date).at(-1);
     // Vor dem ersten Eintrag gilt der erste bekannte Stand (Anlegen der Firmendaten), ohne Protokoll der aktuelle
@@ -113,8 +135,8 @@ export function lastDayOfMonth(year: number, month: number): string {
 }
 
 /** Kleinunternehmer in einem Voranmeldungszeitraum: Stand am Monatsende */
-export async function kleinunternehmerForMonth(year: number, month: number): Promise<boolean> {
-  return (await kleinunternehmerHistory())(lastDayOfMonth(year, month));
+export async function kleinunternehmerForMonth(year: number, month: number, q: Db | Tx = db): Promise<boolean> {
+  return (await kleinunternehmerHistory(q))(lastDayOfMonth(year, month));
 }
 
 /** Kleinunternehmer am Ende eines Jahres: dann für das ganze Jahr (einschalten geht nur vor der ersten Buchung) */
@@ -124,11 +146,12 @@ export async function kleinunternehmerForYear(year: number): Promise<boolean> {
 
 /** Gemeinsame Daten für den Rechnungs- und den Angebotseditor, mit der letzten vergebenen Nummer je Jahr */
 export async function editorContext(kind: "rechnung" | "angebot") {
-  const [company, counters, contacts, articles, logo] = await Promise.all([
+  const [company, counters, contacts, articles, textBlocks, logo] = await Promise.all([
     loadCompany(),
     kind === "rechnung" ? db.select().from(schema.invoiceNumberCounters) : db.select().from(schema.quoteNumberCounters),
     listContacts(),
     listArticles(),
+    listTextBlocks(),
     logoInfo(),
   ]);
   const { name, strasse, plz, ort, email, steuernummer, ustId, iban, bic, bank } = company;
@@ -143,6 +166,7 @@ export async function editorContext(kind: "rechnung" | "angebot") {
       taxRate,
       priceIncludesTax,
     })),
+    textBlocks: textBlocks.map(({ id, name, kind, text, contactId }) => ({ id, name, kind, text, contactId })),
     company: { name, strasse, plz, ort, email, steuernummer, ustId, iban, bic, bank, logo: logo?.sha256 ?? null },
     sellerIssues: sellerIssues(company),
     bundesland: company.bundesland,

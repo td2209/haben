@@ -18,7 +18,7 @@ function dkbCsv(rows: string[][]) {
   const header = `"Girokonto";"DE12 1203 0000 1234 5678 90"\n""\n"Kontostand vom 01.10.2026:";"1.000,00 €"\n""\n`;
   const columns = `"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"\n`;
   const body = rows.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n");
-  return new TextEncoder().encode("﻿" + header + columns + body + "\n");
+  return new TextEncoder().encode(`﻿${header}${columns}${body}\n`);
 }
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -101,7 +101,20 @@ describe.skipIf(!testDatabaseUrl)("Jahresarchiv (Postgres)", () => {
       {
         bytes: dkbCsv([
           ["30.12.25", "30.12.25", "Gebucht", "Tristan Teufel", "Altjahr AG", "Rechnung Dezember", "Ausgang", "DE02100100100006820101", "-45,90", "", "", ""],
-          ["01.10.26", "01.10.26", "Gebucht", "Nordwerk Software GmbH", "Tristan Teufel", `RE ${invoice.number}`, "Eingang", "DE02100100100006820101", "4.760,00", "", "", ""],
+          [
+            "01.10.26",
+            "01.10.26",
+            "Gebucht",
+            "Nordwerk Software GmbH",
+            "Tristan Teufel",
+            `RE ${invoice.number}`,
+            "Eingang",
+            "DE02100100100006820101",
+            "4.760,00",
+            "",
+            "",
+            "",
+          ],
           ["02.10.26", "02.10.26", "Gebucht", "Tristan Teufel", "Müller Büro", "MF-2026-09", "Ausgang", "DE02100100100006820102", "-45,90", "", "", ""],
         ]),
         filename: "dkb.csv",
@@ -230,7 +243,9 @@ describe.skipIf(!testDatabaseUrl)("Jahresarchiv (Postgres)", () => {
 
     expect(JSON.parse(text(files["umsatzsteuer/2026-09/anmeldung.json"]))).toMatchObject({ year: 2026, month: 9, kz81: 400000, kz66: 733 });
     const uebermittlungen = text(files["umsatzsteuer/2026-09/übermittlungen.csv"]);
-    expect(uebermittlungen).toContain(`2026-10-02T08:00:00.000Z;Prüfung;ja;0;"Plausibel; ohne Fehler";;2026-10-02_validate_${vatSubmissionPrefix}_protokoll.pdf;`);
+    expect(uebermittlungen).toContain(
+      `2026-10-02T08:00:00.000Z;Prüfung;ja;0;"Plausibel; ohne Fehler";;2026-10-02_validate_${vatSubmissionPrefix}_protokoll.pdf;`,
+    );
     expect(text(files[`umsatzsteuer/2026-09/2026-10-02_validate_${vatSubmissionPrefix}_anfrage.xml`])).toBe("<Elster>anfrage</Elster>");
   });
 
@@ -245,7 +260,7 @@ describe.skipIf(!testDatabaseUrl)("Jahresarchiv (Postgres)", () => {
   });
 
   it("lässt andere Jahre weg und gibt kein Zertifikat heraus", () => {
-    const all = Object.entries(files).map(([name, bytes]) => name + "\n" + Buffer.from(bytes).toString("latin1"));
+    const all = Object.entries(files).map(([name, bytes]) => `${name}\n${Buffer.from(bytes).toString("latin1")}`);
     for (const content of all) {
       // Das Protokoll ordnet nach Zeitpunkt der Änderung; im Test liegen alle Änderungen in 2026
       if (!content.startsWith("protokoll/")) {

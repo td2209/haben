@@ -39,7 +39,10 @@ export interface Buyer extends Address {
 
 export interface InvoiceDocumentLine {
   position: number;
+  /** Bezeichnung (BT-153) */
   description: string;
+  /** Beschreibung unter der Bezeichnung, mehrzeilig (BT-154) */
+  detail?: string;
   quantity: Millis;
   unit: UnitLabel;
   /** Wie eingegeben: netto, bei Bruttopreisen brutto; bei Storno und Korrektur negativ */
@@ -83,6 +86,9 @@ export interface InvoiceDocument {
   euroTax?: { tax: Cents; taxes: { rate: number; tax: Cents }[]; rate: string };
   /** Bei Storno und Korrektur: die ursprüngliche Rechnung */
   corrects?: { number: string; issueDate: string };
+  /** Einleitung über den Positionen (Kopftext) */
+  intro?: string;
+  /** Hinweis unter den Summen (Fußtext) */
   note?: string;
   /** Fehlt = regulär besteuert */
   taxTreatment?: TaxTreatment;

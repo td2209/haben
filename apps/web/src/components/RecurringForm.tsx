@@ -21,6 +21,7 @@ import {
 import { useState, type FormEvent } from "react";
 import { formatDate } from "../lib/format.ts";
 import { FORMAT_LABEL, FORMATS, type InvoiceFormat } from "../lib/invoice.ts";
+import { TextBlockField, type TextBlockOption } from "./TextBlockField.tsx";
 
 type Rate = 1900 | 700 | 0;
 
@@ -30,6 +31,7 @@ export interface RecurringValues {
   contactId: string;
   format: InvoiceFormat;
   paymentTermDays: number;
+  intro: string;
   note: string;
   taxTreatment: TaxTreatment;
   exemptionReason: string;
@@ -58,6 +60,7 @@ let nextKey = 1;
 export function RecurringForm({
   initial,
   contacts,
+  textBlocks = [],
   kleinunternehmer,
   busy,
   submitLabel,
@@ -65,6 +68,8 @@ export function RecurringForm({
 }: {
   initial: RecurringValues;
   contacts: { id: string; name: string; ort: string }[];
+  /** Kopf- und Fußtexte zum Einfügen */
+  textBlocks?: TextBlockOption[];
   kleinunternehmer: boolean;
   busy: boolean;
   submitLabel: string;
@@ -75,6 +80,7 @@ export function RecurringForm({
   const [contactId, setContactId] = useState(initial.contactId);
   const [format, setFormat] = useState(initial.format);
   const [paymentTermDays, setPaymentTermDays] = useState(String(initial.paymentTermDays));
+  const [intro, setIntro] = useState(initial.intro);
   const [note, setNote] = useState(initial.note);
   const [taxTreatment, setTaxTreatment] = useState<TaxTreatment>(initial.taxTreatment);
   const [exemptionReason, setExemptionReason] = useState(initial.exemptionReason);
@@ -142,6 +148,7 @@ export function RecurringForm({
       contactId,
       format,
       paymentTermDays: term,
+      intro,
       note,
       taxTreatment,
       exemptionReason: special ? exemptionReason : "",
@@ -281,6 +288,14 @@ export function RecurringForm({
 
       <section className="card" aria-labelledby="recurring-lines">
         <h2 id="recurring-lines">Positionen</h2>
+        <TextBlockField
+          label="Einleitung über den Positionen (optional)"
+          kind="kopf"
+          value={intro}
+          onChange={setIntro}
+          blocks={textBlocks}
+          contactId={contactId || null}
+        />
         <div className="line-row head" aria-hidden="true">
           <div>Menge</div>
           <div>Einheit</div>
@@ -309,7 +324,11 @@ export function RecurringForm({
                 onChange={(e) => updateLine(line.key, { quantity: e.target.value })}
                 aria-invalid={parseQuantity(line.quantity) === null}
               />
-              <select aria-label={`Einheit Position ${index + 1}`} value={line.unit} onChange={(e) => updateLine(line.key, { unit: e.target.value as UnitLabel })}>
+              <select
+                aria-label={`Einheit Position ${index + 1}`}
+                value={line.unit}
+                onChange={(e) => updateLine(line.key, { unit: e.target.value as UnitLabel })}
+              >
                 {Object.keys(UNITS).map((unit) => (
                   <option key={unit}>{unit}</option>
                 ))}
@@ -360,12 +379,16 @@ export function RecurringForm({
             + Position hinzufügen
           </button>
         </div>
-        <label className="field">
-          Hinweis auf der Rechnung (optional)
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} />
-        </label>
+        <TextBlockField
+          label="Hinweis auf der Rechnung (optional)"
+          kind="fuss"
+          value={note}
+          onChange={setNote}
+          blocks={textBlocks}
+          contactId={contactId || null}
+        />
         <p className="small muted" style={{ margin: 0 }}>
-          Platzhalter in Beschreibung und Hinweis:{" "}
+          Platzhalter in Einleitung, Beschreibung und Hinweis:{" "}
           {Object.entries(RECURRING_PLACEHOLDERS)
             .map(([key, label]) => `${key} (${label})`)
             .join(", ")}
@@ -378,8 +401,7 @@ export function RecurringForm({
           <h2>Nächste Rechnung</h2>
           <p className="small" style={{ margin: 0 }}>
             Am {formatDate(nextDate)}
-            {period ? `, Leistungszeitraum ${formatDate(period.from)} – ${formatDate(period.to)}` : ""}, {amountLabel.toLowerCase()}{" "}
-            {formatEuro(sum)}
+            {period ? `, Leistungszeitraum ${formatDate(period.from)} – ${formatDate(period.to)}` : ""}, {amountLabel.toLowerCase()} {formatEuro(sum)}
           </p>
           <ul className="small" style={{ margin: 0 }}>
             {parsed

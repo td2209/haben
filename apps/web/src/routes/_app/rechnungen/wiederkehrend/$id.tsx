@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_app/rechnungen/wiederkehrend/$id")({
 });
 
 function RecurringDetailPage() {
-  const { recurring, invoices, contacts, defaults } = Route.useLoaderData();
+  const { recurring, invoices, contacts, textBlocks, defaults } = Route.useLoaderData();
   const router = useRouter();
   const navigate = useNavigate();
   const save = useServerFn(saveRecurring);
@@ -66,6 +66,7 @@ function RecurringDetailPage() {
             contactId: recurring.contactId,
             format: recurring.format,
             paymentTermDays: recurring.paymentTermDays,
+            intro: recurring.intro,
             note: recurring.note,
             taxTreatment: recurring.taxTreatment as TaxTreatment,
             exemptionReason: recurring.exemptionReason,
@@ -79,6 +80,7 @@ function RecurringDetailPage() {
             sendByMail: recurring.sendByMail,
           }}
           contacts={contacts}
+          textBlocks={textBlocks}
           kleinunternehmer={defaults.kleinunternehmer}
           busy={busy}
           submitLabel="Speichern"
@@ -91,7 +93,11 @@ function RecurringDetailPage() {
         />
         <section className="card stack" aria-labelledby="history-heading">
           <h2 id="history-heading">Erzeugte Rechnungen</h2>
-          {recurring.lastRunAt && <p className="small muted" style={{ margin: 0 }}>Zuletzt geprüft {formatDateTime(recurring.lastRunAt)}</p>}
+          {recurring.lastRunAt && (
+            <p className="small muted" style={{ margin: 0 }}>
+              Zuletzt geprüft {formatDateTime(recurring.lastRunAt)}
+            </p>
+          )}
           {invoices.length === 0 ? (
             <p className="muted" style={{ margin: 0 }}>
               Noch keine. Die erste entsteht am {formatDate(recurring.nextDate)}.

@@ -1,12 +1,5 @@
 import { UserError } from "../../errors.ts";
-import {
-  addDays,
-  DEFAULT_INTEREST_MARKUP,
-  DUNNING_LEVELS,
-  DUNNING_TEXTS,
-  dunningAmounts,
-  type DunningLevel,
-} from "@haben/core";
+import { addDays, DEFAULT_INTEREST_MARKUP, DUNNING_LEVELS, DUNNING_TEXTS, dunningAmounts, type DunningLevel } from "@haben/core";
 import { buildDunningPdf } from "@haben/einvoice";
 import { desc, eq, inArray } from "drizzle-orm";
 import { createHash } from "node:crypto";
@@ -42,10 +35,14 @@ const dunningColumns = {
 
 export async function dunningsFor(invoiceIds: string[]): Promise<Dunning[]> {
   if (invoiceIds.length === 0) return [];
-  return db.select(dunningColumns).from(schema.dunnings).where(inArray(schema.dunnings.invoiceId, invoiceIds)).orderBy(desc(schema.dunnings.date), desc(schema.dunnings.createdAt));
+  return db
+    .select(dunningColumns)
+    .from(schema.dunnings)
+    .where(inArray(schema.dunnings.invoiceId, invoiceIds))
+    .orderBy(desc(schema.dunnings.date), desc(schema.dunnings.createdAt));
 }
 
-const nextLevel = (last: Pick<Dunning, "level"> | undefined): DunningLevel => (Math.min((last?.level ?? 0) + 1, 3) as DunningLevel);
+const nextLevel = (last: Pick<Dunning, "level"> | undefined): DunningLevel => Math.min((last?.level ?? 0) + 1, 3) as DunningLevel;
 
 /**
  * Überfällige Rechnungen mit ihrer letzten Mahnung. „Frist läuft“, solange die Frist der letzten
@@ -79,7 +76,7 @@ function owed(list: Awaited<ReturnType<typeof listInvoices>>) {
 
 async function openInvoice(invoiceId: string, today: string) {
   const invoice = owed(await listInvoices(today)).find((i) => i.id === invoiceId);
-  if (!invoice || invoice.status !== "final") throw new DunningError("Rechnung nicht gefunden.");
+  if (invoice?.status !== "final") throw new DunningError("Rechnung nicht gefunden.");
   if (invoice.kind !== "rechnung" || invoice.open <= 0) throw new DunningError("Für diese Rechnung ist nichts offen.");
   return invoice;
 }
@@ -91,7 +88,14 @@ export async function dunningDraft(invoiceId: string, today: string) {
   const [last] = await dunningsFor([invoiceId]);
   const level = nextLevel(last);
   return {
-    invoice: { id: invoice.id, number: invoice.number!, issueDate: invoice.issueDate, dueDate: invoice.dueDate, customer: invoice.customer, open: invoice.open },
+    invoice: {
+      id: invoice.id,
+      number: invoice.number!,
+      issueDate: invoice.issueDate,
+      dueDate: invoice.dueDate,
+      customer: invoice.customer,
+      open: invoice.open,
+    },
     level,
     date: today,
     dueDate: addDays(today, dunning.deadlineDays),

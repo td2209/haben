@@ -1,4 +1,4 @@
-import { formatDecimal, formatEuro, parseEuro, UNITS, type UnitLabel } from "@haben/core";
+import { formatDecimal, formatEuro, LINE_DETAIL_MAX, parseEuro, UNITS, type UnitLabel } from "@haben/core";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, type FormEvent } from "react";
@@ -45,6 +45,7 @@ function ArticleForm({ article, onDone }: { article: Article | null; onDone: (no
           article: {
             number: text("number"),
             description: text("description"),
+            detail: text("detail"),
             unit: text("unit") as UnitLabel,
             unitPrice: price,
             taxRate: Number(text("taxRate")) as 1900 | 700 | 0,
@@ -68,8 +69,13 @@ function ArticleForm({ article, onDone }: { article: Article | null; onDone: (no
       <div className="form-grid">
         <label className="field" style={{ gridColumn: "1 / -1" }}>
           Bezeichnung
-          <textarea name="description" rows={2} defaultValue={article?.description ?? ""} maxLength={500} required autoFocus />
-          <span className="small muted">So steht die Position auf Rechnung und Angebot.</span>
+          <input name="description" defaultValue={article?.description ?? ""} maxLength={500} required autoFocus />
+          <span className="small muted">So steht die Position auf Rechnung und Angebot, in einer Zeile.</span>
+        </label>
+        <label className="field" style={{ gridColumn: "1 / -1" }}>
+          Text zur Position (optional)
+          <textarea name="detail" rows={3} defaultValue={article?.detail ?? ""} maxLength={LINE_DETAIL_MAX} />
+          <span className="small muted">Mehrzeilig darunter, etwa Leistungsumfang oder Konditionen.</span>
         </label>
         <label className="field">
           Artikelnummer (optional)
@@ -153,7 +159,15 @@ function ArticlesPage() {
 
   const formOpen = creating || editing !== null;
   const newButton = (
-    <button type="button" className="btn btn-primary" onClick={() => (setEditing(null), setCreating(true), setNotice(null))}>
+    <button
+      type="button"
+      className="btn btn-primary"
+      onClick={() => {
+        setEditing(null);
+        setCreating(true);
+        setNotice(null);
+      }}
+    >
       Neuer Artikel
     </button>
   );
@@ -168,8 +182,8 @@ function ArticlesPage() {
         {!formOpen && <div className="actions">{newButton}</div>}
       </div>
       <p className="muted small" style={{ margin: 0, maxWidth: 760 }}>
-        Stundensätze, Tagessätze oder Pauschalen legst du einmal an und fügst sie im Editor mit „Aus dem Katalog einfügen“ ein.
-        Änderungen wirken nur auf neue Positionen.
+        Stundensätze, Tagessätze oder Pauschalen legst du einmal an und fügst sie im Editor mit „Aus dem Katalog einfügen“ ein. Änderungen wirken nur auf neue
+        Positionen.
       </p>
       <div className="stack" style={{ gap: 16 }}>
         {formOpen && (
@@ -195,7 +209,9 @@ function ArticlesPage() {
           </div>
           {shown.length === 0 ? (
             <p className="muted" style={{ margin: 0 }}>
-              {showArchived ? "Keine archivierten Artikel." : "Noch keine Artikel. Lege den ersten mit „Neuer Artikel“ an oder speichere eine Position im Rechnungseditor."}
+              {showArchived
+                ? "Keine archivierten Artikel."
+                : "Noch keine Artikel. Lege den ersten mit „Neuer Artikel“ an oder speichere eine Position im Rechnungseditor."}
             </p>
           ) : (
             <div className="table">
@@ -208,7 +224,12 @@ function ArticlesPage() {
               {shown.map((a) => (
                 <div key={a.id} className="table-row article-cols">
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 500, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{a.description}</div>
+                    <div style={{ fontWeight: 500, overflowWrap: "anywhere" }}>{a.description}</div>
+                    {a.detail && (
+                      <div className="small" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                        {a.detail}
+                      </div>
+                    )}
                     {(a.number || a.note) && (
                       <div className="small muted">
                         {a.number && <span className="mono">{a.number}</span>}
@@ -224,7 +245,15 @@ function ArticlesPage() {
                   <div className="small muted">{a.taxRate / 100} %</div>
                   <div className="actions" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
                     {!a.archivedAt && (
-                      <button type="button" className="btn btn-sm" onClick={() => (setCreating(false), setEditing(a))} aria-label={`${a.description} bearbeiten`}>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => {
+                          setCreating(false);
+                          setEditing(a);
+                        }}
+                        aria-label={`${a.description} bearbeiten`}
+                      >
                         Bearbeiten
                       </button>
                     )}

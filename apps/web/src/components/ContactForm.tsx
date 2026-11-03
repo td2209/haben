@@ -27,9 +27,7 @@ export function ContactForm({ contact }: { contact: Contact | null }) {
   const navigate = useNavigate();
   const save = useServerFn(saveContact);
   const { busy, notice, setNotice, run } = useAction();
-  const initial: ContactInput = contact
-    ? { ...EMPTY, ...contact, kundennummer: contact.kundennummer ?? "", defaultFormat: contact.defaultFormat }
-    : EMPTY;
+  const initial: ContactInput = contact ? { ...EMPTY, ...contact, kundennummer: contact.kundennummer ?? "", defaultFormat: contact.defaultFormat } : EMPTY;
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -76,7 +74,8 @@ export function ContactForm({ contact }: { contact: Contact | null }) {
         <div className="form-row cols-2">
           <label className="field">
             E-Mail
-            <input name="email" type="email" defaultValue={initial.email} autoComplete="email" placeholder="rechnung@kunde.de" />
+            <input name="email" type="email" multiple defaultValue={initial.email} autoComplete="email" placeholder="rechnung@kunde.de, freigabe@kunde.de" />
+            <span className="small muted">Mehrere Adressen mit Komma trennen, bis zu fünf. Der Versand schreibt an alle.</span>
           </label>
           <label className="field">
             Kundennummer

@@ -17,11 +17,7 @@ export function confirmationPdfData(doc: QuoteDocument, date: string) {
     docTitle: `${t.confirmation} ${doc.number}`,
     title: t.confirmation,
     // Angebotsnummer, -datum und Gültigkeit ersetzt der Bezug aufs Angebot
-    meta: [
-      { label: t.date_, value: t.date(date) },
-      { label: t.quoteRef, value: `${doc.number} (${t.date(doc.issueDate)})` },
-      ...quoteDetails(doc, t),
-    ],
+    meta: [{ label: t.date_, value: t.date(date) }, { label: t.quoteRef, value: `${doc.number} (${t.date(doc.issueDate)})` }, ...quoteDetails(doc, t)],
     totals: { ...base.totals, gross: { ...base.totals.gross, label: showsGrossPrices(doc) ? t.inclVat(t.orderTotal) : t.orderTotal } },
     payment: t.confirmationText,
   };
@@ -40,7 +36,7 @@ export interface DeliveryNoteDocument {
   date: string;
   seller: Seller;
   buyer: Buyer;
-  lines: Pick<InvoiceDocumentLine, "position" | "description" | "quantity" | "unit">[];
+  lines: Pick<InvoiceDocumentLine, "position" | "description" | "detail" | "quantity" | "unit">[];
   note?: string;
   logo?: Logo;
   language?: Language;
@@ -69,6 +65,8 @@ export function deliveryNotePdfData(doc: DeliveryNoteDocument) {
     lines: doc.lines.map((line) => ({
       pos: String(line.position),
       description: line.description,
+      // Wie auf Rechnung und Angebot: der Text unter der Bezeichnung beschreibt, was geliefert wird
+      detail: line.detail?.trim() ? line.detail.trim() : null,
       quantity: t.quantity(line.quantity, line.unit),
       unitPrice: "",
       rate: "",

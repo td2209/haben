@@ -38,6 +38,7 @@ function QuotePage() {
           serviceTo: quote.serviceTo,
           paymentTermDays: 0,
           format: "zugferd",
+          intro: quote.intro,
           note: quote.note,
           taxTreatment: quote.taxTreatment,
           exemptionReason: quote.exemptionReason,
@@ -45,6 +46,7 @@ function QuotePage() {
           language: quote.language,
           lines: data.lines.map((line) => ({
             description: line.description,
+            detail: line.detail,
             quantity: line.quantity,
             unit: line.unit as UnitLabel,
             unitPrice: line.unitPrice,
@@ -60,6 +62,7 @@ function QuotePage() {
         bundesland={data.bundesland}
         kleinunternehmer={data.kleinunternehmer}
         articles={data.articles}
+        textBlocks={data.textBlocks}
       />
     );
   }

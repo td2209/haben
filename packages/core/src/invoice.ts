@@ -11,11 +11,11 @@ export type TaxRate = (typeof TAX_RATES)[number];
 
 export const UNITS = {
   "Std.": "HUR",
-  "Tag": "DAY",
-  "Monat": "MON",
+  Tag: "DAY",
+  Monat: "MON",
   "Stk.": "H87",
   "Psch.": "LS",
-  "km": "KMT",
+  km: "KMT",
 } as const;
 
 export type UnitLabel = keyof typeof UNITS;
@@ -29,6 +29,12 @@ export const invoiceLineInputSchema = z.object({
 });
 
 export type InvoiceLineInput = z.infer<typeof invoiceLineInputSchema>;
+
+/**
+ * Höchstlänge der mehrzeiligen Beschreibung unter der Bezeichnung einer Position (BT-154), für Rechnung, Angebot,
+ * wiederkehrende Rechnung und Artikel gleich, damit der Text auf jedem Weg zwischen ihnen hindurchpasst
+ */
+export const LINE_DETAIL_MAX = 2000;
 
 export interface TaxBreakdown {
   rate: BasisPoints;
@@ -78,7 +84,9 @@ type CalculationLine = Pick<InvoiceLineInput, "quantity" | "unitPrice" | "taxRat
 export function computeInvoice(lines: CalculationLine[], priceMode: PriceMode = "netto"): InvoiceCalculation {
   const amounts = lines.map((line) => lineAmount(line.quantity, line.unitPrice));
   const sums = new Map<BasisPoints, Cents>();
-  lines.forEach((line, i) => sums.set(line.taxRate, (sums.get(line.taxRate) ?? 0) + amounts[i]!));
+  lines.forEach((line, i) => {
+    sums.set(line.taxRate, (sums.get(line.taxRate) ?? 0) + amounts[i]!);
+  });
   const taxes = [...sums.entries()]
     .sort(([a], [b]) => b - a)
     .map(([rate, sum]) => {

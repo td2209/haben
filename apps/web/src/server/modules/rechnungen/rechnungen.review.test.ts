@@ -5,7 +5,7 @@ import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 function dkbCsv(rows: string[][]) {
   const header = `"Girokonto";"DE12 1203 0000 1234 5678 90"\n""\n`;
   const columns = `"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"\n`;
-  return new TextEncoder().encode(header + columns + rows.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n") + "\n");
+  return new TextEncoder().encode(`${header + columns + rows.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n")}\n`);
 }
 
 describe.skipIf(!testDatabaseUrl)("Review: Storno und Korrektur (Postgres)", () => {
@@ -52,8 +52,17 @@ describe.skipIf(!testDatabaseUrl)("Review: Storno und Korrektur (Postgres)", () 
               '198/113/10010', 'DE123456789', 'BY', 'DE89370400440532013000', 'COBADEFFXXX', 'Commerzbank', 'soll')`;
     contactId = (
       await contacts.createContact(actor, {
-        kundennummer: "10001", name: "Nordwerk Software GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-        email: "buchhaltung@nordwerk.example", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+        kundennummer: "10001",
+        name: "Nordwerk Software GmbH",
+        strasse: "Hafenstraße 5",
+        plz: "20457",
+        ort: "Hamburg",
+        land: "DE",
+        email: "buchhaltung@nordwerk.example",
+        ustId: "",
+        iban: "",
+        leitwegId: "",
+        defaultFormat: null,
       })
     ).id;
   });
@@ -70,7 +79,29 @@ describe.skipIf(!testDatabaseUrl)("Review: Storno und Korrektur (Postgres)", () 
     const bank = await import("../bank/bank.ts");
     const label = `Zahlung ${invoiceId.slice(0, 8)} ${amount}`;
     const euros = (Math.abs(amount) / 100).toFixed(2).replace(".", ",");
-    await bank.importStatement(actor, { bytes: dkbCsv([[date, date, "Gebucht", "Nordwerk", "Testfirma", label, amount < 0 ? "Ausgang" : "Eingang", "DE02100100100006820101", `${amount < 0 ? "-" : ""}${euros}`, "", "", ""]]), filename: `${label}.csv` }, null);
+    await bank.importStatement(
+      actor,
+      {
+        bytes: dkbCsv([
+          [
+            date,
+            date,
+            "Gebucht",
+            "Nordwerk",
+            "Testfirma",
+            label,
+            amount < 0 ? "Ausgang" : "Eingang",
+            "DE02100100100006820101",
+            `${amount < 0 ? "-" : ""}${euros}`,
+            "",
+            "",
+            "",
+          ],
+        ]),
+        filename: `${label}.csv`,
+      },
+      null,
+    );
     const [tx] = await sql`select id from bank_transactions where purpose = ${label}`;
     await bank.allocate(actor, { kind: "invoice", transactionId: tx!.id, invoiceId, amount });
   }
@@ -110,7 +141,14 @@ describe.skipIf(!testDatabaseUrl)("Review: Storno und Korrektur (Postgres)", () 
     expect(new Map(items.map((i) => [i.id, i.open]))).toEqual(open);
     // Die Korrektur nimmt keine Zahlung mehr an; die Erstattung gehört zur Stornorechnung
     const label = "Erstattung Korrektur";
-    await bank.importStatement(actor, { bytes: dkbCsv([["09.10.26", "09.10.26", "Gebucht", "Nordwerk", "Testfirma", label, "Ausgang", "DE02100100100006820101", "-238,00", "", "", ""]]), filename: "e.csv" }, null);
+    await bank.importStatement(
+      actor,
+      {
+        bytes: dkbCsv([["09.10.26", "09.10.26", "Gebucht", "Nordwerk", "Testfirma", label, "Ausgang", "DE02100100100006820101", "-238,00", "", "", ""]]),
+        filename: "e.csv",
+      },
+      null,
+    );
     const [tx] = await sql`select id from bank_transactions where purpose = ${label}`;
     await expect(bank.allocate(actor, { kind: "invoice", transactionId: tx!.id, invoiceId: correction.id, amount: -23_800 })).rejects.toThrow(/storniert/);
   }, 60_000);

@@ -43,6 +43,7 @@ import { Route as AppKontenKontoRouteImport } from './routes/_app/konten/$konto'
 import { Route as AppRechnungenIndexRouteImport } from './routes/_app/rechnungen/index'
 import { Route as AppRechnungenIdRouteImport } from './routes/_app/rechnungen/$id'
 import { Route as AppRechnungenNeuRouteImport } from './routes/_app/rechnungen/neu'
+import { Route as AppTextbausteineIndexRouteImport } from './routes/_app/textbausteine/index'
 import { Route as AppUmsatzsteuerIndexRouteImport } from './routes/_app/umsatzsteuer/index'
 import { Route as AppUmsatzsteuerZeitraumRouteImport } from './routes/_app/umsatzsteuer/$zeitraum'
 import { Route as ApiAltbelegIdRouteImport } from './routes/api/altbeleg/$id'
@@ -61,6 +62,7 @@ import { Route as ApiKontenJahrRouteImport } from './routes/api/konten/$jahr'
 import { Route as ApiMahnungIdRouteImport } from './routes/api/mahnung/$id'
 import { Route as ApiPostfachIdRouteImport } from './routes/api/postfach/$id'
 import { Route as ApiProtokollIdRouteImport } from './routes/api/protokoll/$id'
+import { Route as ApiUstvaIdRouteImport } from './routes/api/ustva/$id'
 import { Route as ApiVastIdRouteImport } from './routes/api/vast/$id'
 import { Route as AppArchivBelegIdRouteImport } from './routes/_app/archiv/beleg.$id'
 import { Route as AppRechnungenMahnwesenIndexRouteImport } from './routes/_app/rechnungen/mahnwesen/index'
@@ -241,6 +243,11 @@ const AppRechnungenNeuRoute = AppRechnungenNeuRouteImport.update({
   path: '/rechnungen/neu',
   getParentRoute: () => AppRoute,
 } as any)
+const AppTextbausteineIndexRoute = AppTextbausteineIndexRouteImport.update({
+  id: '/textbausteine/',
+  path: '/textbausteine/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppUmsatzsteuerIndexRoute = AppUmsatzsteuerIndexRouteImport.update({
   id: '/umsatzsteuer/',
   path: '/umsatzsteuer/',
@@ -329,6 +336,11 @@ const ApiPostfachIdRoute = ApiPostfachIdRouteImport.update({
 const ApiProtokollIdRoute = ApiProtokollIdRouteImport.update({
   id: '/api/protokoll/$id',
   path: '/api/protokoll/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUstvaIdRoute = ApiUstvaIdRouteImport.update({
+  id: '/api/ustva/$id',
+  path: '/api/ustva/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiVastIdRoute = ApiVastIdRouteImport.update({
@@ -424,6 +436,7 @@ export interface FileRoutesByFullPath {
   '/api/mahnung/$id': typeof ApiMahnungIdRoute
   '/api/postfach/$id': typeof ApiPostfachIdRoute
   '/api/protokoll/$id': typeof ApiProtokollIdRoute
+  '/api/ustva/$id': typeof ApiUstvaIdRoute
   '/api/vast/$id': typeof ApiVastIdRoute
   '/angebote/': typeof AppAngeboteIndexRoute
   '/anlagen/': typeof AppAnlagenIndexRoute
@@ -434,6 +447,7 @@ export interface FileRoutesByFullPath {
   '/kontakte/': typeof AppKontakteIndexRoute
   '/konten/': typeof AppKontenIndexRoute
   '/rechnungen/': typeof AppRechnungenIndexRoute
+  '/textbausteine/': typeof AppTextbausteineIndexRoute
   '/umsatzsteuer/': typeof AppUmsatzsteuerIndexRoute
   '/archiv/beleg/$id': typeof AppArchivBelegIdRoute
   '/rechnungen/mahnwesen/$id': typeof AppRechnungenMahnwesenIdRoute
@@ -486,6 +500,7 @@ export interface FileRoutesByTo {
   '/api/mahnung/$id': typeof ApiMahnungIdRoute
   '/api/postfach/$id': typeof ApiPostfachIdRoute
   '/api/protokoll/$id': typeof ApiProtokollIdRoute
+  '/api/ustva/$id': typeof ApiUstvaIdRoute
   '/api/vast/$id': typeof ApiVastIdRoute
   '/angebote': typeof AppAngeboteIndexRoute
   '/anlagen': typeof AppAnlagenIndexRoute
@@ -496,6 +511,7 @@ export interface FileRoutesByTo {
   '/kontakte': typeof AppKontakteIndexRoute
   '/konten': typeof AppKontenIndexRoute
   '/rechnungen': typeof AppRechnungenIndexRoute
+  '/textbausteine': typeof AppTextbausteineIndexRoute
   '/umsatzsteuer': typeof AppUmsatzsteuerIndexRoute
   '/archiv/beleg/$id': typeof AppArchivBelegIdRoute
   '/rechnungen/mahnwesen/$id': typeof AppRechnungenMahnwesenIdRoute
@@ -550,6 +566,7 @@ export interface FileRoutesById {
   '/api/mahnung/$id': typeof ApiMahnungIdRoute
   '/api/postfach/$id': typeof ApiPostfachIdRoute
   '/api/protokoll/$id': typeof ApiProtokollIdRoute
+  '/api/ustva/$id': typeof ApiUstvaIdRoute
   '/api/vast/$id': typeof ApiVastIdRoute
   '/_app/angebote/': typeof AppAngeboteIndexRoute
   '/_app/anlagen/': typeof AppAnlagenIndexRoute
@@ -560,6 +577,7 @@ export interface FileRoutesById {
   '/_app/kontakte/': typeof AppKontakteIndexRoute
   '/_app/konten/': typeof AppKontenIndexRoute
   '/_app/rechnungen/': typeof AppRechnungenIndexRoute
+  '/_app/textbausteine/': typeof AppTextbausteineIndexRoute
   '/_app/umsatzsteuer/': typeof AppUmsatzsteuerIndexRoute
   '/_app/archiv/beleg/$id': typeof AppArchivBelegIdRoute
   '/_app/rechnungen/mahnwesen/$id': typeof AppRechnungenMahnwesenIdRoute
@@ -614,6 +632,7 @@ export interface FileRouteTypes {
     | '/api/mahnung/$id'
     | '/api/postfach/$id'
     | '/api/protokoll/$id'
+    | '/api/ustva/$id'
     | '/api/vast/$id'
     | '/angebote/'
     | '/anlagen/'
@@ -624,6 +643,7 @@ export interface FileRouteTypes {
     | '/kontakte/'
     | '/konten/'
     | '/rechnungen/'
+    | '/textbausteine/'
     | '/umsatzsteuer/'
     | '/archiv/beleg/$id'
     | '/rechnungen/mahnwesen/$id'
@@ -676,6 +696,7 @@ export interface FileRouteTypes {
     | '/api/mahnung/$id'
     | '/api/postfach/$id'
     | '/api/protokoll/$id'
+    | '/api/ustva/$id'
     | '/api/vast/$id'
     | '/angebote'
     | '/anlagen'
@@ -686,6 +707,7 @@ export interface FileRouteTypes {
     | '/kontakte'
     | '/konten'
     | '/rechnungen'
+    | '/textbausteine'
     | '/umsatzsteuer'
     | '/archiv/beleg/$id'
     | '/rechnungen/mahnwesen/$id'
@@ -739,6 +761,7 @@ export interface FileRouteTypes {
     | '/api/mahnung/$id'
     | '/api/postfach/$id'
     | '/api/protokoll/$id'
+    | '/api/ustva/$id'
     | '/api/vast/$id'
     | '/_app/angebote/'
     | '/_app/anlagen/'
@@ -749,6 +772,7 @@ export interface FileRouteTypes {
     | '/_app/kontakte/'
     | '/_app/konten/'
     | '/_app/rechnungen/'
+    | '/_app/textbausteine/'
     | '/_app/umsatzsteuer/'
     | '/_app/archiv/beleg/$id'
     | '/_app/rechnungen/mahnwesen/$id'
@@ -782,6 +806,7 @@ export interface RootRouteChildren {
   ApiMahnungIdRoute: typeof ApiMahnungIdRoute
   ApiPostfachIdRoute: typeof ApiPostfachIdRoute
   ApiProtokollIdRoute: typeof ApiProtokollIdRoute
+  ApiUstvaIdRoute: typeof ApiUstvaIdRoute
   ApiVastIdRoute: typeof ApiVastIdRoute
   ApiDokumentArtIdRoute: typeof ApiDokumentArtIdRoute
   ApiRechnungIdDateiRoute: typeof ApiRechnungIdDateiRoute
@@ -1027,6 +1052,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRechnungenNeuRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/textbausteine/': {
+      id: '/_app/textbausteine/'
+      path: '/textbausteine'
+      fullPath: '/textbausteine/'
+      preLoaderRoute: typeof AppTextbausteineIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/umsatzsteuer/': {
       id: '/_app/umsatzsteuer/'
       path: '/umsatzsteuer'
@@ -1153,6 +1185,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProtokollIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/ustva/$id': {
+      id: '/api/ustva/$id'
+      path: '/api/ustva/$id'
+      fullPath: '/api/ustva/$id'
+      preLoaderRoute: typeof ApiUstvaIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/vast/$id': {
       id: '/api/vast/$id'
       path: '/api/vast/$id'
@@ -1250,6 +1289,7 @@ interface AppRouteChildren {
   AppKontakteIndexRoute: typeof AppKontakteIndexRoute
   AppKontenIndexRoute: typeof AppKontenIndexRoute
   AppRechnungenIndexRoute: typeof AppRechnungenIndexRoute
+  AppTextbausteineIndexRoute: typeof AppTextbausteineIndexRoute
   AppUmsatzsteuerIndexRoute: typeof AppUmsatzsteuerIndexRoute
   AppArchivBelegIdRoute: typeof AppArchivBelegIdRoute
   AppRechnungenMahnwesenIdRoute: typeof AppRechnungenMahnwesenIdRoute
@@ -1290,6 +1330,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppKontakteIndexRoute: AppKontakteIndexRoute,
   AppKontenIndexRoute: AppKontenIndexRoute,
   AppRechnungenIndexRoute: AppRechnungenIndexRoute,
+  AppTextbausteineIndexRoute: AppTextbausteineIndexRoute,
   AppUmsatzsteuerIndexRoute: AppUmsatzsteuerIndexRoute,
   AppArchivBelegIdRoute: AppArchivBelegIdRoute,
   AppRechnungenMahnwesenIdRoute: AppRechnungenMahnwesenIdRoute,
@@ -1323,6 +1364,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMahnungIdRoute: ApiMahnungIdRoute,
   ApiPostfachIdRoute: ApiPostfachIdRoute,
   ApiProtokollIdRoute: ApiProtokollIdRoute,
+  ApiUstvaIdRoute: ApiUstvaIdRoute,
   ApiVastIdRoute: ApiVastIdRoute,
   ApiDokumentArtIdRoute: ApiDokumentArtIdRoute,
   ApiRechnungIdDateiRoute: ApiRechnungIdDateiRoute,

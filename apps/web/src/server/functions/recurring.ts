@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { loadCompany } from "../modules/stammdaten/index.ts";
+import { listTextBlocks, loadCompany } from "../modules/stammdaten/index.ts";
 import { listContacts } from "../modules/stammdaten/index.ts";
 import { authMiddleware } from "../middleware.ts";
 import {
@@ -17,8 +17,9 @@ import { today } from "../today.ts";
 import { UserError } from "../errors.ts";
 
 async function formContext() {
-  const company = await loadCompany();
+  const [company, textBlocks] = await Promise.all([loadCompany(), listTextBlocks()]);
   return {
+    textBlocks: textBlocks.map(({ id, name, kind, text, contactId }) => ({ id, name, kind, text, contactId })),
     contacts: (await listContacts()).map((c) => ({ id: c.id, name: c.name, ort: c.ort, defaultFormat: c.defaultFormat, leitwegId: c.leitwegId })),
     defaults: { paymentTermDays: company.paymentTermDays, format: company.defaultFormat, kleinunternehmer: company.kleinunternehmer },
     today: today(),
@@ -47,9 +48,7 @@ export const saveRecurring = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.object({ id: z.uuid().nullable(), recurring: recurringInputSchema }))
   .handler(async ({ data, context }) => {
-    const saved = data.id
-      ? await updateRecurring(context.user.id, data.id, data.recurring)
-      : await createRecurring(context.user.id, data.recurring);
+    const saved = data.id ? await updateRecurring(context.user.id, data.id, data.recurring) : await createRecurring(context.user.id, data.recurring);
     return { id: saved.id };
   });
 

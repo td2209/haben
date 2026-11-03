@@ -89,7 +89,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   const actor = "test-user";
   const key = "schluessel-1234567890-abcdefghij";
 
-  function useApi(options: { failVoucher?: boolean } = {}) {
+  function installFakeApi(options: { failVoucher?: boolean } = {}) {
     const api = fakeApi(options);
     lexoffice.setLexofficeClientFactory(
       (o) => new importPkg.LexofficeClient({ ...o, fetch: api.fetchFn, minIntervalMs: 0, maxRetries: 0, sleep: async () => {} }),
@@ -109,7 +109,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   });
 
   it("lehnt einen falschen Schlüssel ab und speichert den richtigen verschlüsselt", async () => {
-    useApi();
+    installFakeApi();
     await expect(lexoffice.saveApiKey(actor, "falsch-falsch-falsch-falsch")).rejects.toThrow(/lehnt den Schlüssel ab: API-Schlüssel ungültig/);
     expect(await lexoffice.saveApiKey(actor, key)).toEqual({ organizationName: "Testfirma Teufel" });
     const [row] = await sql`select ciphertext from lexoffice_connection`;
@@ -119,7 +119,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
 
   it("übernimmt Kontakte, Rechnungen, Gutschriften und Belege mit Dateien; ein Fehler hält den Lauf nicht auf", async () => {
     await sql`insert into contacts (name) values ('Berliner Kindl GmbH')`;
-    useApi({ failVoucher: true });
+    installFakeApi({ failVoucher: true });
     const id = await lexoffice.startImport(actor, { wait: true });
     const run = await lexoffice.latestImport();
     expect(run).toMatchObject({ id, status: "fertig" });
@@ -136,12 +136,13 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
     ]);
     expect(vouchers.every((v) => v.contact_id)).toBe(true);
     expect(vouchers[1]!.payment).toMatchObject({ status: "balanced", items: [{ amount: 100000 }, { amount: 17250 }] });
-    const [file] = await sql`select filename, mime_type, role from lexoffice_voucher_files f join lexoffice_vouchers v on v.id = f.voucher_id where v.number = 'RE1019'`;
+    const [file] =
+      await sql`select filename, mime_type, role from lexoffice_voucher_files f join lexoffice_vouchers v on v.id = f.voucher_id where v.number = 'RE1019'`;
     expect(file).toMatchObject({ filename: "RE1019.pdf", mime_type: "application/pdf", role: "pdf" });
   });
 
   it("setzt beim nächsten Abruf fort und überspringt Übernommenes", async () => {
-    const api = useApi();
+    const api = installFakeApi();
     await lexoffice.startImport(actor, { wait: true });
     const run = await lexoffice.latestImport();
     expect(run!.progress).toMatchObject({ imported: 1, skipped: 2, contacts: 0, failed: [] });
@@ -153,7 +154,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   });
 
   it("startet nie zwei Abrufe gleichzeitig", async () => {
-    useApi();
+    installFakeApi();
     const results = await Promise.allSettled([lexoffice.startImport(actor, { wait: true }), lexoffice.startImport(actor, { wait: true })]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(results.find((r) => r.status === "rejected")).toMatchObject({ reason: expect.objectContaining({ message: "Ein Abruf läuft bereits." }) });
@@ -254,7 +255,14 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   it("liefert die Belege eines Monats mit Steuerart und Zahlungen, bei Ist auch nach Zahlungsdatum", async () => {
     const march = await lexoffice.legacyVouchersForPeriod({ period: "2023-03", direction: "alle", search: "", withPayments: true, limit: 50 });
     expect(march.vouchers.map((v) => v.number)).toEqual(["RE1019"]);
-    expect(march.vouchers[0]).toMatchObject({ taxType: "net", taxSubType: null, payments: [{ date: "2023-02-28", amount: 100_000 }, { date: "2023-03-01", amount: 17_250 }] });
+    expect(march.vouchers[0]).toMatchObject({
+      taxType: "net",
+      taxSubType: null,
+      payments: [
+        { date: "2023-02-28", amount: 100_000 },
+        { date: "2023-03-01", amount: 17_250 },
+      ],
+    });
     expect((await lexoffice.legacyVouchersForPeriod({ period: "2023-03", direction: "alle", search: "", withPayments: false, limit: 50 })).total).toBe(0);
 
     const year = await lexoffice.legacyVouchersForPeriod({ period: "2023", direction: "ausgabe", search: "", withPayments: false, limit: 50 });
@@ -278,7 +286,9 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
     const chunks: Uint8Array[] = [];
     for await (const chunk of exportYear(2023, new Date("2026-10-02T10:00:00Z"))) chunks.push(chunk);
     const files = unzipSync(Buffer.concat(chunks));
-    const names = Object.keys(files).filter((n) => n.startsWith("lexoffice/")).sort();
+    const names = Object.keys(files)
+      .filter((n) => n.startsWith("lexoffice/"))
+      .sort();
     expect(names).toEqual([
       "lexoffice/belege.csv",
       expect.stringMatching(/^lexoffice\/belege\/2023-02-21_RE1019_[0-9a-f]{8}\.pdf$/),

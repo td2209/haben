@@ -43,6 +43,7 @@ interface SampleOptions {
   number?: string;
   buyer?: Buyer;
   lines?: InvoiceLineInput[];
+  intro?: string;
   note?: string;
   taxTreatment?: TaxTreatment;
   exemptionReason?: string;
@@ -83,6 +84,7 @@ export function sampleDocument(options: SampleOptions = {}): InvoiceDocument {
     })),
     totals,
     corrects: kind === "rechnung" ? undefined : { number: "2026-034", issueDate: "2026-09-30" },
+    ...(options.intro ? { intro: options.intro } : {}),
     note: options.note,
     ...(options.taxTreatment ? { taxTreatment: options.taxTreatment } : {}),
     ...(options.exemptionReason ? { exemptionReason: options.exemptionReason } : {}),
@@ -104,9 +106,7 @@ export const grossPriceLines: InvoiceLineInput[] = [
   { description: "Anfahrt", quantity: 23500, unit: "km", unitPrice: 42, taxRate: 1900 },
 ];
 
-export const zeroRateLines: InvoiceLineInput[] = [
-  { description: "Beratung Oktober", quantity: 10000, unit: "Std.", unitPrice: 12000, taxRate: 0 },
-];
+export const zeroRateLines: InvoiceLineInput[] = [{ description: "Beratung Oktober", quantity: 10000, unit: "Std.", unitPrice: 12000, taxRate: 0 }];
 
 /** Unternehmen in Österreich (Reverse Charge) */
 export const euBuyer: Buyer = {

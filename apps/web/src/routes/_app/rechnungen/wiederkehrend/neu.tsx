@@ -19,7 +19,7 @@ function nextMonthStart(today: string): string {
 }
 
 function NewRecurringPage() {
-  const { contacts, defaults, today } = Route.useLoaderData();
+  const { contacts, textBlocks, defaults, today } = Route.useLoaderData();
   const navigate = useNavigate();
   const save = useServerFn(saveRecurring);
   const { busy, notice, run } = useAction();
@@ -41,11 +41,12 @@ function NewRecurringPage() {
           contactId: "",
           format: defaults.format,
           paymentTermDays: defaults.paymentTermDays,
+          intro: "",
           note: "",
           taxTreatment: defaults.kleinunternehmer ? "kleinunternehmer" : "regulaer",
           exemptionReason: "",
           priceMode: "netto",
-          lines: [{ description: "", quantity: 1000, unit: "Psch.", unitPrice: 0, taxRate: defaults.kleinunternehmer ? 0 : 1900 }],
+          lines: [{ description: "", detail: "", quantity: 1000, unit: "Psch.", unitPrice: 0, taxRate: defaults.kleinunternehmer ? 0 : 1900 }],
           intervalMonths: 1,
           nextDate: nextMonthStart(today),
           endDate: null,
@@ -54,6 +55,7 @@ function NewRecurringPage() {
           sendByMail: false,
         }}
         contacts={contacts}
+        textBlocks={textBlocks}
         kleinunternehmer={defaults.kleinunternehmer}
         busy={busy}
         submitLabel="Vorlage anlegen"

@@ -9,7 +9,10 @@ import {
   mapVoucher,
   type LegacyVoucher,
   type LexFile,
+  readWebExport,
   type LexofficeClientOptions,
+  type LexofficeSource,
+  webExportSource,
 } from "@haben/import";
 import { legacyVatByMonth, type Versteuerung } from "@haben/core";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
@@ -106,12 +109,26 @@ export async function latestImport() {
 const running = new Map<string, AbortController>();
 
 /**
- * Startet den Abruf im Hintergrund. Schon übernommene Belege werden übersprungen, ein neuer Lauf setzt
- * also nach einem Abbruch fort. Gibt die ID des Laufs zurück; den Fortschritt liefert latestImport().
+ * Startet den Abruf über die Public API im Hintergrund. Schon übernommene Belege werden übersprungen, ein neuer Lauf
+ * setzt also nach einem Abbruch fort. Gibt die ID des Laufs zurück; den Fortschritt liefert latestImport().
  */
 export async function startImport(actor: string, options: { wait?: boolean } = {}): Promise<string> {
   const key = await apiKey();
   if (!key) throw new LexofficeError("Zuerst den API-Schlüssel hinterlegen.");
+  return launchImport(actor, (signal) => clientFactory({ apiKey: key, signal }), options);
+}
+
+/**
+ * Übernimmt eine Sicherung aus der Web-Oberfläche (Skript lexware-sicherung.js, für Tarife ohne Public API).
+ * Derselbe Ablauf wie beim Abruf über die API: Kontakte, Belege mit Zahlungen und Dateien; Vorhandenes wird
+ * übersprungen, Teile dürfen nacheinander kommen.
+ */
+export async function startWebImport(actor: string, parts: { name: string; bytes: Uint8Array }[], options: { wait?: boolean } = {}): Promise<string> {
+  const source = webExportSource(readWebExport(parts));
+  return launchImport(actor, () => source, options);
+}
+
+async function launchImport(actor: string, sourceFor: (signal: AbortSignal) => LexofficeSource, options: { wait?: boolean }): Promise<string> {
   const current = await latestImport();
   if (current?.status === "laeuft") throw new LexofficeError("Ein Abruf läuft bereits.");
   // Der eindeutige Index gilt für beide Quellen: auch einen verwaisten sevDesk-Lauf als abgebrochen markieren
@@ -126,18 +143,18 @@ export async function startImport(actor: string, options: { wait?: boolean } = {
     files: 0,
     failed: [],
   };
-  const [row] = await withActor(actor, (tx) =>
-    tx.insert(schema.lexofficeImports).values({ progress }).returning({ id: schema.lexofficeImports.id }),
-  ).catch((error: unknown) => {
-    // Gleichzeitig gestartet: der eindeutige Index lässt nur einen laufenden Abruf zu
-    if (isUniqueViolation(error, "lexoffice_imports_one_running")) throw new LexofficeError("Ein Abruf läuft bereits.");
-    throw error;
-  });
+  const [row] = await withActor(actor, (tx) => tx.insert(schema.lexofficeImports).values({ progress }).returning({ id: schema.lexofficeImports.id })).catch(
+    (error: unknown) => {
+      // Gleichzeitig gestartet: der eindeutige Index lässt nur einen laufenden Abruf zu
+      if (isUniqueViolation(error, "lexoffice_imports_one_running")) throw new LexofficeError("Ein Abruf läuft bereits.");
+      throw error;
+    },
+  );
   const id = row!.id;
   const controller = new AbortController();
   running.set(id, controller);
-  const client = clientFactory({ apiKey: key, signal: controller.signal });
-  const job = runImport(actor, id, client, progress, controller.signal)
+  const source = sourceFor(controller.signal);
+  const job = runImport(actor, id, source, progress, controller.signal)
     .then(() => finish(id, progress, "fertig", null))
     .catch((error: unknown) =>
       finish(id, progress, controller.signal.aborted ? "abgebrochen" : "fehler", controller.signal.aborted ? "Abgebrochen." : progressMessage(error)),
@@ -164,7 +181,7 @@ export async function finish(id: string, progress: LexofficeImportProgress, stat
     .where(eq(schema.lexofficeImports.id, id));
 }
 
-async function runImport(actor: string, importId: string, client: LexofficeClient, progress: LexofficeImportProgress, signal: AbortSignal) {
+async function runImport(actor: string, importId: string, client: LexofficeSource, progress: LexofficeImportProgress, signal: AbortSignal) {
   let lastSave = 0;
   const save = async (force = false) => {
     if (!force && Date.now() - lastSave < 1000) return;
@@ -174,12 +191,11 @@ async function runImport(actor: string, importId: string, client: LexofficeClien
 
   // 1. Kontakte: vorhandene über die Lexoffice-ID überspringen, gleichnamige ohne ID verknüpfen
   for await (const raw of client.contacts()) {
+    // Die Sicherung aus der Web-Oberfläche liest ohne Netz und kennt das Signal nicht: selbst prüfen
+    signal.throwIfAborted();
     const contact = mapContact(raw);
     await withActor(actor, async (tx) => {
-      const [known] = await tx
-        .select({ id: schema.contacts.id })
-        .from(schema.contacts)
-        .where(eq(schema.contacts.lexofficeId, contact.lexofficeId));
+      const [known] = await tx.select({ id: schema.contacts.id }).from(schema.contacts).where(eq(schema.contacts.lexofficeId, contact.lexofficeId));
       if (known) return;
       const [sameName] = await tx
         .select({ id: schema.contacts.id })
@@ -219,14 +235,13 @@ async function runImport(actor: string, importId: string, client: LexofficeClien
     progress.listed = listed.length;
     await save();
   }
-  const done = new Set(
-    (await db.select({ id: schema.lexofficeVouchers.lexofficeId }).from(schema.lexofficeVouchers)).map((r) => r.id),
-  );
+  const done = new Set((await db.select({ id: schema.lexofficeVouchers.lexofficeId }).from(schema.lexofficeVouchers)).map((r) => r.id));
 
   // 3. Je Beleg Details, Zahlungen und Dateien; Fehler einzelner Belege halten den Lauf nicht auf
   progress.phase = "belege";
   await save(true);
   for (const item of listed) {
+    signal.throwIfAborted();
     if (done.has(item.id)) {
       progress.skipped += 1;
       continue;
@@ -250,7 +265,7 @@ async function runImport(actor: string, importId: string, client: LexofficeClien
 async function importVoucher(
   actor: string,
   importId: string,
-  client: LexofficeClient,
+  client: LexofficeSource,
   item: { id: string; type: string },
   categories: Map<string, string>,
   progress: LexofficeImportProgress,
@@ -489,9 +504,7 @@ export async function reconciliation() {
           and lower(regexp_replace(v.number, '\\s+', '', 'g')) = lower(regexp_replace(b.voucher_field1, '\\s+', '', 'g'))))::int as unmatched,
       count(*) filter (where b.voucher_field1 = '')::int as without_number
     from datev_bookings b group by 1`);
-  const files = await db
-    .select({ kind: schema.archiveFiles.kind, year: schema.archiveFiles.year })
-    .from(schema.archiveFiles);
+  const files = await db.select({ kind: schema.archiveFiles.kind, year: schema.archiveFiles.year }).from(schema.archiveFiles);
   const lastImport = await latestImport();
   // Für Jahre ohne Belege per API (Umzug nur über DATEV): Summen aus dem Buchungsstapel
   const datevRows = await db
@@ -688,7 +701,10 @@ export async function legacyVouchersForPeriod(filter: {
         filter.withPayments
           ? sql`or (v.direction = 'einnahme' and exists (
               select 1 from jsonb_array_elements(coalesce(v.payment->'items', '[]'::jsonb)) i
-              where i->>'date' like ${like} and i->>'type' in (${sql.join([...PAYMENT_ITEM_TYPES].map((t) => sql`${t}`), sql`, `)})))`
+              where i->>'date' like ${like} and i->>'type' in (${sql.join(
+                [...PAYMENT_ITEM_TYPES].map((t) => sql`${t}`),
+                sql`, `,
+              )})))`
           : sql``
       })
       ${filter.direction === "alle" ? sql`` : sql`and v.direction = ${filter.direction}`}

@@ -3,7 +3,6 @@ import {
   addMonthsAnchored,
   dueDates,
   fillPlaceholders,
-  invoiceLineInputSchema,
   PRICE_MODES,
   servicePeriodFor,
   TAX_TREATMENT_KEYS,
@@ -15,6 +14,7 @@ import { and, asc, desc, eq, lte } from "drizzle-orm";
 import { z } from "zod";
 import { withActor } from "../../db/actor.ts";
 import { db, schema } from "../../db/index.ts";
+import { draftLineSchema } from "./draft-line.ts";
 import { createDraft, effectivePriceMode, finalizeInvoice } from "./invoices.ts";
 import { sendInvoiceMailWithTemplate } from "./invoice-mail.ts";
 import { MailError } from "../mail/index.ts";
@@ -34,12 +34,14 @@ export const recurringInputSchema = z.object({
   contactId: z.uuid(),
   format: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
   paymentTermDays: z.number().int().min(0).max(120),
+  /** Einleitung über den Positionen; Platzhalter wie bei den Positionen */
+  intro: z.string().max(2000).default(""),
   note: z.string().max(2000),
   taxTreatment: z.enum(TAX_TREATMENT_KEYS),
   exemptionReason: z.string().trim().max(300),
   /** Einzelpreise netto oder brutto inkl. USt */
   priceMode: z.enum(PRICE_MODES).default("netto"),
-  lines: z.array(invoiceLineInputSchema).min(1, "Mindestens eine Position").max(200),
+  lines: z.array(draftLineSchema).min(1, "Mindestens eine Position").max(200),
   intervalMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]),
   nextDate: isoDate,
   endDate: isoDate.nullable(),
@@ -132,6 +134,7 @@ export function invoiceForDate(recurring: RecurringInvoice, date: string, langua
     serviceTo: period?.to ?? null,
     paymentTermDays: recurring.paymentTermDays,
     format: recurring.format,
+    intro: fillPlaceholders(recurring.intro, reference),
     note: fillPlaceholders(recurring.note, reference),
     taxTreatment: recurring.taxTreatment,
     exemptionReason: recurring.exemptionReason,
@@ -139,6 +142,8 @@ export function invoiceForDate(recurring: RecurringInvoice, date: string, langua
     language,
     lines: recurring.lines.map((line) => ({
       description: fillPlaceholders(line.description, reference),
+      // Vorlagen von vor dem Feld haben keinen Text
+      detail: fillPlaceholders(line.detail ?? "", reference),
       quantity: line.quantity,
       unit: line.unit as UnitLabel,
       unitPrice: line.unitPrice,
@@ -161,7 +166,6 @@ function describe(error: unknown): string {
   if (message === undefined) console.error("Wiederkehrende Rechnung:", error);
   return message ?? INTERNAL_ERROR;
 }
-
 
 async function runOne(recurring: RecurringInvoice, today: string, result: RunResult): Promise<void> {
   const interval = recurring.intervalMonths as RecurringInterval;

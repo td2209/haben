@@ -4,7 +4,6 @@ import {
   computeInvoice,
   computeInvoiceTotals,
   formatQuoteNumber,
-  invoiceLineInputSchema,
   lineAmount,
   PRICE_MODES,
   QUOTE_VALID_DAYS,
@@ -27,6 +26,7 @@ import { withActor } from "../../db/actor.ts";
 import { db, schema, type Db, type Tx } from "../../db/index.ts";
 import { loadLogo } from "../stammdaten/index.ts";
 import { peekNumber, takeNumber } from "./number-counter.ts";
+import { draftLineSchema } from "./draft-line.ts";
 import { buyerFrom, effectivePriceMode, insertDraft, openAbschlaege, sellerFrom, type Invoice } from "./invoices.ts";
 
 /**
@@ -49,6 +49,8 @@ export const quoteDraftSchema = z
     validUntil: isoDate,
     serviceFrom: isoDate.nullable(),
     serviceTo: isoDate.nullable(),
+    /** Einleitung über den Positionen, etwa aus einem Textbaustein */
+    intro: z.string().max(2000).default(""),
     note: z.string().max(2000),
     taxTreatment: z.enum(TAX_TREATMENT_KEYS).default("regulaer"),
     exemptionReason: z.string().trim().max(300).default(""),
@@ -56,7 +58,7 @@ export const quoteDraftSchema = z
     priceMode: z.enum(PRICE_MODES).default("netto"),
     /** Sprache des PDFs für den Kunden */
     language: z.enum(["de", "en"]).default("de"),
-    lines: z.array(invoiceLineInputSchema).max(200),
+    lines: z.array(draftLineSchema).max(200),
   })
   .refine((d) => d.validUntil >= d.issueDate, { message: "Das Angebot muss mindestens bis zum Angebotsdatum gelten", path: ["validUntil"] })
   .refine((d) => !d.serviceFrom || !d.serviceTo || d.serviceFrom <= d.serviceTo, {
@@ -74,6 +76,7 @@ function lineRows(quoteId: string, input: QuoteDraftInput) {
     quoteId,
     position: index + 1,
     description: line.description,
+    detail: line.detail?.trim() ?? "",
     quantity: line.quantity,
     unit: line.unit,
     unitPrice: line.unitPrice,
@@ -92,6 +95,7 @@ function draftValues(input: QuoteDraftInput) {
     validUntil: input.validUntil,
     serviceFrom: input.serviceFrom,
     serviceTo: input.serviceTo,
+    intro: input.intro ?? "",
     note: input.note,
     taxTreatment: treatment,
     exemptionReason: treatment !== "regulaer" ? (input.exemptionReason ?? "").trim() : "",
@@ -148,14 +152,13 @@ export async function newQuoteDefaults(today: string) {
     validUntil: addDays(today, QUOTE_VALID_DAYS),
     serviceFrom: null,
     serviceTo: null,
+    intro: "",
     note: "",
     taxTreatment: (company.kleinunternehmer ? "kleinunternehmer" : "regulaer") as TaxTreatment,
     exemptionReason: "",
     priceMode: "netto" as PriceMode,
     language: "de" as const,
-    lines: [
-      { description: "", quantity: 1000, unit: "Std." as UnitLabel, unitPrice: 0, taxRate: (company.kleinunternehmer ? 0 : 1900) as 1900 | 0 },
-    ],
+    lines: [{ description: "", quantity: 1000, unit: "Std." as UnitLabel, unitPrice: 0, taxRate: (company.kleinunternehmer ? 0 : 1900) as 1900 | 0 }],
   } satisfies QuoteDraftInput;
 }
 
@@ -225,7 +228,13 @@ export async function listQuotes(today: string) {
   return rows.map((row) => ({ ...row, customer: row.buyerName ?? row.contactName ?? "–", listStatus: quoteStatus(row, today) }));
 }
 
-export function quoteDocumentFor(quote: Quote, lines: QuoteLine[], seller: QuoteDocument["seller"], buyer: QuoteDocument["buyer"], number: string): QuoteDocument {
+export function quoteDocumentFor(
+  quote: Quote,
+  lines: QuoteLine[],
+  seller: QuoteDocument["seller"],
+  buyer: QuoteDocument["buyer"],
+  number: string,
+): QuoteDocument {
   return {
     number,
     issueDate: quote.issueDate,
@@ -237,6 +246,7 @@ export function quoteDocumentFor(quote: Quote, lines: QuoteLine[], seller: Quote
     lines: lines.map((line) => ({
       position: line.position,
       description: line.description,
+      ...(line.detail ? { detail: line.detail } : {}),
       quantity: line.quantity,
       unit: line.unit as UnitLabel,
       unitPrice: line.unitPrice,
@@ -247,6 +257,7 @@ export function quoteDocumentFor(quote: Quote, lines: QuoteLine[], seller: Quote
       lines.map((line) => ({ ...line, taxRate: line.taxRate as 1900 | 700 | 0 })),
       quote.priceMode,
     ),
+    ...(quote.intro ? { intro: quote.intro } : {}),
     ...(quote.note ? { note: quote.note } : {}),
     ...(quote.taxTreatment !== "regulaer" ? { taxTreatment: quote.taxTreatment } : {}),
     ...(quote.exemptionReason ? { exemptionReason: quote.exemptionReason } : {}),
@@ -368,7 +379,9 @@ export async function quoteToInvoice(actor: string, id: string, today: string, v
     };
     const deducts =
       variant === "schluss"
-        ? (await openAbschlaege(null, tx)).filter((a) => a.quoteId === id && a.contactId === locked.contactId && a.taxTreatment === locked.taxTreatment).map((a) => a.id)
+        ? (await openAbschlaege(null, tx))
+            .filter((a) => a.quoteId === id && a.contactId === locked.contactId && a.taxTreatment === locked.taxTreatment)
+            .map((a) => a.id)
         : [];
     const invoice = await insertDraft(tx, {
       contactId: locked.contactId,
@@ -377,6 +390,7 @@ export async function quoteToInvoice(actor: string, id: string, today: string, v
       serviceTo: locked.serviceTo,
       paymentTermDays: company.paymentTermDays,
       format: contact?.defaultFormat ?? (contact?.leitwegId ? "xrechnung-cii" : company.defaultFormat),
+      intro: locked.intro,
       note: texts(locked.language).fromQuote(locked.number ?? "", texts(locked.language).date(locked.issueDate)),
       taxTreatment: locked.taxTreatment,
       exemptionReason: locked.exemptionReason,
@@ -390,6 +404,7 @@ export async function quoteToInvoice(actor: string, id: string, today: string, v
           ? [abschlagLine]
           : lines.map((line) => ({
               description: line.description,
+              detail: line.detail,
               quantity: line.quantity,
               unit: line.unit as UnitLabel,
               unitPrice: line.unitPrice,
@@ -418,6 +433,7 @@ export async function copyQuote(actor: string, id: string, today: string): Promi
     validUntil: addDays(today, validDays || QUOTE_VALID_DAYS),
     serviceFrom: null,
     serviceTo: null,
+    intro: quote.intro,
     note: quote.note,
     taxTreatment: quote.taxTreatment,
     exemptionReason: quote.exemptionReason,
@@ -425,6 +441,7 @@ export async function copyQuote(actor: string, id: string, today: string): Promi
     language: quote.language,
     lines: lines.map((line) => ({
       description: line.description,
+      detail: line.detail,
       quantity: line.quantity,
       unit: line.unit as UnitLabel,
       unitPrice: line.unitPrice,

@@ -596,6 +596,41 @@
       "when": 1793555869147,
       "tag": "0084_enable_banking_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1793728669147,
+      "tag": "0085_textbausteine",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1793728670647,
+      "tag": "0086_textbausteine_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1793815070647,
+      "tag": "0087_abruf_ab",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1793901470647,
+      "tag": "0088_positionsbeschreibung",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1793987870647,
+      "tag": "0089_artikeltext",
+      "breakpoints": true
     }
   ]
 }

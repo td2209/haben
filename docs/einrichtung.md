@@ -1,6 +1,6 @@
 # Erste Schritte
 
-Diese Seite führt dich durch die Einrichtung nach der Installation: Konto und Passkey, Firmendaten, Versteuerung und Kontenrahmen, Rechnungsnummern, ELSTER, KI-Auslesung und Bankkonten. Wie du Haben auf dem Server installierst, steht in [Betrieb und Installation](installation.md).
+Diese Seite führt dich durch die Einrichtung nach der Installation: Konto und Passkey, App auf Handy und Rechner, Firmendaten, Versteuerung und Kontenrahmen, Rechnungsnummern, ELSTER, KI-Auslesung und Bankkonten. Wie du Haben auf dem Server installierst, steht in [Betrieb und Installation](installation.md).
 
 ## Checkliste
 
@@ -38,6 +38,20 @@ Die **Einstellungen** (unten links in der Navigation) sind in Bereiche geteilt: 
 Ebenfalls unten links wählst du das **Theme**: Wald (Grün, Standard), Ozean, Pflaume, Graphit, die dunklen Themes Nacht und Tiefsee oder **Automatisch**, das je nach Systemeinstellung zwischen Wald und Nacht wechselt. Die Wahl gilt für diesen Browser und wird dort gespeichert, nicht auf dem Server; auf einem anderen Gerät wählst du sie neu. Rechnungen und PDFs bleiben in jedem Theme gleich.
 
 Darunter steht die **Version** von Haben, die auf dem Server läuft, verlinkt mit den Versionshinweisen auf GitHub. Nach einem Update siehst du dort, ob der neue Stand angekommen ist.
+
+## Als App installieren
+
+Haben lässt sich auf Handy und Rechner wie eine App installieren (Progressive Web App). Es öffnet sich dann in einem eigenen Fenster ohne Adressleiste und hat ein Symbol auf dem Startbildschirm bzw. im Startmenü.
+
+| Gerät | So geht es |
+| --- | --- |
+| Rechner mit Chrome, Edge oder Brave | Haben öffnen, in der Adressleiste auf das Symbol **Installieren** klicken oder im Menü „App installieren“ wählen |
+| Android | Haben in Chrome öffnen, im Menü **App installieren** bzw. „Zum Startbildschirm hinzufügen“ |
+| iPhone und iPad | Haben in Safari öffnen, **Teilen › Zum Home-Bildschirm** |
+
+Die installierte App bringt zwei Kurzbefehle mit, **Beleg hochladen** und **Neue Rechnung**: am Handy lange auf das Symbol drücken, am Rechner mit der rechten Maustaste. Unter Android steht Haben außerdem im **Teilen-Menü**: Ein PDF oder Foto aus einer anderen App teilst du direkt als Beleg ([Belege](belege.md)). Safari auf iPhone und iPad bietet das Teilen an Web-Apps nicht an; dort lädst du Belege in Haben hoch oder nimmst sie mit der Kamera auf.
+
+Die App ist dieselbe Seite wie im Browser und speichert nichts auf dem Gerät zwischen. Sie braucht also eine Verbindung zu deinem Server, und die Anmeldung mit Passkey gilt auch dort. Installieren lässt sich Haben nur über HTTPS, wie es die [Installation](installation.md) einrichtet.
 
 ## Firmendaten
 
@@ -187,7 +201,7 @@ Unter **Einstellungen › Rechnungen › Rechnungsnummern** siehst du die nächs
 
 ## ELSTER einrichten
 
-Haben übermittelt die Umsatzsteuer-Voranmeldung über ERiC, die offizielle Bibliothek der Steuerverwaltung. Ohne ERiC laufen Prüfen und Senden simuliert, und die Oberfläche weist darauf hin.
+Haben übermittelt Voranmeldung, Jahreserklärungen und Nachrichten über ERiC, die offizielle Bibliothek der Steuerverwaltung, und holt darüber Bescheide aus dem ELSTER-Postfach. Ohne ERiC laufen Prüfen und Senden simuliert, und die Oberfläche weist darauf hin. Welcher Weg zum Finanzamt ohne Hersteller-ID bleibt, steht in [Abgabe an ELSTER](elster-abgabe.md).
 
 ### Was du brauchst
 
@@ -197,7 +211,7 @@ Haben übermittelt die Umsatzsteuer-Voranmeldung über ERiC, die offizielle Bibl
 | **Hersteller-ID** (fünf Ziffern) | Kennung der Software in jeder Übermittlung; ERiC 43 verlangt sie schon fürs Prüfen | ELSTER-Entwicklerbereich: auf elster.de als Entwickler registrieren, das Bayerische Landesamt für Steuern prüft den Antrag | Tage bis Wochen |
 | **Zertifikatsdatei** (.pfx) und PIN | unterschreibt jede Übermittlung | ELSTER-Benutzerkonto mit der Anmeldeart „Zertifikatsdatei“, siehe [unten](#zertifikatsdatei-statt-elster-secure) | ein bis zwei Wochen (Brief) |
 
-Bis Hersteller-ID und Zertifikat da sind, arbeitest du ganz normal: Belege, Rechnungen, Bank, Auswertungen, Voranmeldung und Jahreserklärungen rechnet Haben vollständig, Prüfen und Senden laufen simuliert. Abgeben kannst du in der Zwischenzeit in Mein ELSTER; Haben zeigt jede Kennzahl und Zeile zum Übertragen. Das Eintragen der Voranmeldung kann ein KI-Assistent übernehmen, siehe [Mein ELSTER mit KI-Assistent](elster-mit-assistent.md).
+Bis Hersteller-ID und Zertifikat da sind, arbeitest du ganz normal: Belege, Rechnungen, Bank, Auswertungen, Voranmeldung und Jahreserklärungen rechnet Haben vollständig, Prüfen und Senden laufen simuliert. Abgeben kannst du in der Zwischenzeit in Mein ELSTER: die Voranmeldung per XML-Import, alle Formulare mit der Erweiterung „Haben für Mein ELSTER“, mit einem KI-Assistenten oder von Hand. Die Wege im Vergleich: [Abgabe an ELSTER](elster-abgabe.md).
 
 ### Zertifikatsdatei statt ELSTER Secure
 

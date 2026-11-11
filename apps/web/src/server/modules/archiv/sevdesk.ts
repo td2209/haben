@@ -17,6 +17,7 @@ import {
   type SevdeskClientOptions,
   type SevFile,
   type SevInvoice,
+  type SevOrder,
   type SevMappedVoucher,
   type SevVoucher,
 } from "@haben/import";
@@ -26,8 +27,11 @@ import { withActor } from "../../db/actor.ts";
 import { env } from "../../env.ts";
 import { db, schema } from "../../db/index.ts";
 import type { LexofficeImportProgress } from "../../db/schema.ts";
-import { sha256Of, storeFile } from "../../storage.ts";
+import { storeLegacyVoucher } from "./legacy-store.ts";
 import { fallbackName, finish, latestImport, progressMessage, STALE_MS } from "./lexoffice.ts";
+import { importOrder, isImportableOrder } from "./orders.ts";
+import { createOrderPdfImporter } from "./order-pdfs.ts";
+import { importSevdeskPayments } from "./sevdesk-payments.ts";
 
 /*
  * Umzug aus sevDesk. Gleicher Ablauf und dieselben Archivtabellen wie beim Lexoffice-Import (Spalte source = "sevdesk"),
@@ -151,7 +155,8 @@ export function cancelSevdeskImport(id: string): boolean {
 type Listed =
   | { kind: "invoice"; id: string; number: string; raw: SevInvoice }
   | { kind: "creditnote"; id: string; number: string; raw: SevCreditNote }
-  | { kind: "voucher"; id: string; number: string; raw: SevVoucher };
+  | { kind: "voucher"; id: string; number: string; raw: SevVoucher }
+  | { kind: "order"; id: string; number: string; raw: SevOrder };
 
 async function runImport(actor: string, importId: string, client: SevdeskClient, progress: LexofficeImportProgress, signal: AbortSignal) {
   let lastSave = 0;
@@ -161,7 +166,7 @@ async function runImport(actor: string, importId: string, client: SevdeskClient,
     await db.update(schema.lexofficeImports).set({ progress, updatedAt: new Date() }).where(eq(schema.lexofficeImports.id, importId));
   };
 
-  // 1. Kontakte mit erster Adresse und Haupt-E-Mail; vorhandene über die sevDesk-ID überspringen, gleichnamige verknüpfen
+  // 1. Kontakte mit erster Adresse und Haupt-E-Mail; eindeutige Rollen auch im Bestand ergänzen
   const addresses: SevContactAddress[] = [];
   for await (const a of client.contactAddresses()) addresses.push(a);
   const mails: SevCommunicationWay[] = [];
@@ -171,21 +176,38 @@ async function runImport(actor: string, importId: string, client: SevdeskClient,
   for await (const raw of client.contacts()) {
     if (!isSevMainContact(raw)) continue;
     const contact = mapSevContact(raw, addressBy.get(String(raw.id)), mailBy.get(String(raw.id)));
+    const confirmedRole = contact.role === "supplier" ? { isSupplier: true } : contact.role === "customer" ? { isCustomer: true } : {};
     await withActor(actor, async (tx) => {
       const [known] = await tx.select({ id: schema.contacts.id }).from(schema.contacts).where(eq(schema.contacts.sevdeskId, contact.sevdeskId));
-      if (known) return;
+      if (known) {
+        // Ohne Herkunft je Rollenfeld lässt sich eine zweite Rolle nicht sicher als Importfehler erkennen.
+        if (contact.role) {
+          const roleColumn = contact.role === "supplier" ? schema.contacts.isSupplier : schema.contacts.isCustomer;
+          await tx
+            .update(schema.contacts)
+            .set(confirmedRole)
+            .where(and(eq(schema.contacts.id, known.id), eq(roleColumn, false)));
+        }
+        return;
+      }
       const [sameName] = await tx
         .select({ id: schema.contacts.id })
         .from(schema.contacts)
         .where(and(isNull(schema.contacts.sevdeskId), sql`lower(${schema.contacts.name}) = lower(${contact.name})`))
         .limit(1);
       if (sameName) {
-        await tx.update(schema.contacts).set({ sevdeskId: contact.sevdeskId }).where(eq(schema.contacts.id, sameName.id));
+        await tx
+          .update(schema.contacts)
+          .set({ sevdeskId: contact.sevdeskId, ...confirmedRole })
+          .where(eq(schema.contacts.id, sameName.id));
         progress.contactsLinked += 1;
         return;
       }
       await tx.insert(schema.contacts).values({
         sevdeskId: contact.sevdeskId,
+        // Haben braucht eine Rolle; unklare Kategorien erhalten nur bei Neuanlage die bisherige Kunden-Ausgangsrolle.
+        isCustomer: contact.role !== "supplier",
+        isSupplier: contact.role === "supplier",
         kundennummer: contact.kundennummer,
         name: contact.name,
         strasse: contact.strasse,
@@ -218,6 +240,15 @@ async function runImport(actor: string, importId: string, client: SevdeskClient,
   for await (const raw of client.vouchers()) {
     if (isSevVoucherImportable(raw)) await add({ kind: "voucher", id: String(raw.id), number: raw.description ?? "", raw });
   }
+  try {
+    for await (const raw of client.orders()) {
+      if (isImportableOrder(raw)) await add({ kind: "order", id: String(raw.id), number: raw.orderNumber ?? "", raw });
+    }
+  } catch (error) {
+    if (signal.aborted || (error instanceof SevdeskApiError && (error.status === 401 || error.status === 403))) throw error;
+    // Zusätzliche Auftragsdaten dürfen den bisherigen Rechnungs-/Belegimport nicht verhindern.
+    progress.failed.push({ lexofficeId: "order", number: "Auftragsdokumente", message: progressMessage(error) });
+  }
   const done = new Set(
     (await db.select({ id: schema.lexofficeVouchers.lexofficeId }).from(schema.lexofficeVouchers).where(eq(schema.lexofficeVouchers.source, "sevdesk"))).map(
       (r) => r.id,
@@ -225,6 +256,7 @@ async function runImport(actor: string, importId: string, client: SevdeskClient,
   );
 
   // 3. Je Beleg Positionen und Dateien; Fehler einzelner Belege halten den Lauf nicht auf
+  const importOrderPdf = createOrderPdfImporter(actor, client, signal);
   progress.phase = "belege";
   await save(true);
   for (const item of listed) {
@@ -237,6 +269,16 @@ async function runImport(actor: string, importId: string, client: SevdeskClient,
       // false: ein gleichzeitiger Lauf hat den Beleg schon übernommen
       if (await importVoucher(actor, importId, client, item, progress)) progress.imported += 1;
       else progress.skipped += 1;
+      if (item.kind === "order") {
+        try {
+          if (await importOrderPdf(item.id)) progress.files += 1;
+        } catch (error) {
+          // Archivkopie steht schon; nur das PDF fehlt. Abbruchgründe gehen an die äußere Behandlung.
+          if (error instanceof SevdeskApiError && (error.status === 401 || error.status === 403)) throw error;
+          if (signal.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
+          progress.failed.push({ lexofficeId: externalId, number: item.number, message: `Dokument importiert, PDF fehlt: ${progressMessage(error)}` });
+        }
+      }
     } catch (error) {
       // Token ungültig oder abgebrochen: weitermachen ist sinnlos
       if (error instanceof SevdeskApiError && (error.status === 401 || error.status === 403)) throw error;
@@ -246,10 +288,13 @@ async function runImport(actor: string, importId: string, client: SevdeskClient,
     }
     await save();
   }
+  // 4. Einzelzahlungen, auch für schon früher übernommene Belege (#343)
+  await importSevdeskPayments(actor, importId, client, progress, signal);
   await save(true);
 }
 
 async function importVoucher(actor: string, importId: string, client: SevdeskClient, item: Listed, progress: LexofficeImportProgress): Promise<boolean> {
+  if (item.kind === "order") return importOrder(actor, importId, client, item.raw);
   let mapped: SevMappedVoucher;
   let positions: unknown[];
   const files: { role: "pdf" | "xml" | "anhang"; fileId: string | null; file: SevFile }[] = [];
@@ -278,15 +323,13 @@ async function importVoucher(actor: string, importId: string, client: SevdeskCli
   }
   const { voucher, payment } = mapped;
 
-  for (const entry of files) await storeFile(entry.file.bytes);
-
   return withActor(actor, async (tx) => {
     const [contact] = voucher.contactLexofficeId
       ? await tx.select({ id: schema.contacts.id }).from(schema.contacts).where(eq(schema.contacts.sevdeskId, voucher.contactLexofficeId))
       : [];
-    const [row] = await tx
-      .insert(schema.lexofficeVouchers)
-      .values({
+    const row = await storeLegacyVoucher(
+      tx,
+      {
         lexofficeId: voucher.lexofficeId,
         source: "sevdesk",
         importId,
@@ -310,26 +353,17 @@ async function importVoucher(actor: string, importId: string, client: SevdeskCli
         payment,
         remark: voucher.remark,
         raw: { ...(item.raw as Record<string, unknown>), positions },
-      })
-      .onConflictDoNothing({ target: schema.lexofficeVouchers.lexofficeId })
-      .returning({ id: schema.lexofficeVouchers.id });
-    if (!row) return false;
-    const seen = new Set<string>();
-    for (const entry of files) {
-      const sha256 = sha256Of(entry.file.bytes);
-      if (seen.has(sha256)) continue;
-      seen.add(sha256);
-      await tx.insert(schema.lexofficeVoucherFiles).values({
-        voucherId: row.id,
+      },
+      files.map((entry) => ({
         role: entry.role,
-        lexofficeFileId: entry.fileId,
-        filename: (entry.file.filename ?? fallbackName(voucher, entry.role, entry.file.bytes)).slice(0, 200),
-        mimeType: entry.file.mimeType.split(";")[0]!.trim() || "application/octet-stream",
-        sha256,
-        size: entry.file.bytes.byteLength,
-      });
-      progress.files += 1;
-    }
+        sourceFileId: entry.fileId,
+        filename: entry.file.filename ?? fallbackName(voucher, entry.role, entry.file.bytes),
+        mimeType: entry.file.mimeType,
+        bytes: entry.file.bytes,
+      })),
+    );
+    if (!row) return false;
+    progress.files += row.files;
     return true;
   });
 }

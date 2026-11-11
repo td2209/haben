@@ -1,6 +1,6 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 /** Wird während des Renderns von PDF und XML aufgerufen; der Test misst dort, ob die Hash-Kette gesperrt ist */
 const rendering = vi.hoisted(() => ({ hook: null as null | (() => Promise<void>) }));
@@ -58,15 +58,24 @@ describe.skipIf(!testDatabaseUrl)("Festschreiben: PDF und XML vor der Sperre der
 
   beforeEach(async () => {
     rendering.hook = null;
-    await sql`truncate quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
+    await leeren(sql)`truncate quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
       invoice_number_counters, contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, steuernummer, ust_id, bundesland, iban, bic, bank)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '198/113/10010', 'DE123456789', 'BY',
               'DE89370400440532013000', 'COBADEFFXXX', 'Commerzbank')`;
     contactId = (
       await contacts.createContact(actor, {
-        kundennummer: "10001", name: "Nordwerk Software GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-        email: "buchhaltung@nordwerk.example", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+        kundennummer: "10001",
+        name: "Nordwerk Software GmbH",
+        strasse: "Hafenstraße 5",
+        plz: "20457",
+        ort: "Hamburg",
+        land: "DE",
+        email: "buchhaltung@nordwerk.example",
+        ustId: "",
+        iban: "",
+        leitwegId: "",
+        defaultFormat: null,
       })
     ).id;
   });
@@ -94,8 +103,17 @@ describe.skipIf(!testDatabaseUrl)("Festschreiben: PDF und XML vor der Sperre der
     rendering.hook = async () => {
       // Ein Kontakt anlegen schreibt einen Audit-Eintrag; mit gesperrter Kette würde das bis zum Commit warten
       await contacts.createContact(actor, {
-        kundennummer: "10002", name: "Südwerk AG", strasse: "Weg 1", plz: "80331", ort: "München", land: "DE",
-        email: "", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+        kundennummer: "10002",
+        name: "Südwerk AG",
+        strasse: "Weg 1",
+        plz: "80331",
+        ort: "München",
+        land: "DE",
+        email: "",
+        ustId: "",
+        iban: "",
+        leitwegId: "",
+        defaultFormat: null,
       });
       writtenMeanwhile = true;
     };
@@ -128,8 +146,11 @@ describe.skipIf(!testDatabaseUrl)("Festschreiben: PDF und XML vor der Sperre der
     const created = await invoices.createDraft(actor, draft());
     let change: Promise<string> | undefined;
     rendering.hook = async () => {
+      // Nur beim ersten Festschreiben: Sonst startete das zweite unten ein weiteres setNextNumber, auf das niemand
+      // wartet und das noch läuft, wenn der nächste Test die Tabellen leert (Deadlock mit TRUNCATE)
+      rendering.hook = null;
       // Während gerendert wird, hält das Festschreiben den Nummernkreis; setNextNumber wartet bis zum Commit
-      change = invoices.setNextNumber(actor, year, 1).then(
+      change = invoices.setNextNumber(actor, `${year}-01-15`, 1).then(
         () => "gesetzt",
         (error: Error) => error.message,
       );
@@ -137,7 +158,7 @@ describe.skipIf(!testDatabaseUrl)("Festschreiben: PDF und XML vor der Sperre der
     };
     await invoices.finalizeInvoice(actor, created.id);
     expect(await change).toMatch(new RegExp(`größer als ${year}-001`));
-    await invoices.setNextNumber(actor, year, 40);
+    await invoices.setNextNumber(actor, `${year}-01-15`, 40);
     const next = await invoices.finalizeInvoice(actor, (await invoices.createDraft(actor, draft())).id);
     expect(next.number).toBe(`${year}-040`);
   }, 30_000);
@@ -163,7 +184,11 @@ describe.skipIf(!testDatabaseUrl)("Festschreiben: PDF und XML vor der Sperre der
       await released;
     });
     await wait(100);
-    const outcome = (p: Promise<unknown>, ok: string) => p.then(() => ok, (e: Error) => `${e.message} ${(e as { cause?: Error }).cause?.message ?? ""}`);
+    const outcome = (p: Promise<unknown>, ok: string) =>
+      p.then(
+        () => ok,
+        (e: Error) => `${e.message} ${(e as { cause?: Error }).cause?.message ?? ""}`,
+      );
     const finalizing = outcome(invoices.finalizeInvoice(actor, correction.id), "korrigiert");
     await wait(300);
     const cancelling = outcome(invoices.cancelInvoice(actor, original.id, `${year}-06-02`), "storniert");

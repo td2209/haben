@@ -1,6 +1,13 @@
+---
+title: "Finanzamt: Bescheide aus dem ELSTER-Postfach abrufen"
+description: >-
+  Steuerbescheide und Mitteilungen aus dem ELSTER-Postfach abholen und dem Finanzamt über ELSTER
+  schreiben, ohne Mein ELSTER zu öffnen.
+---
+
 # Finanzamt
 
-Unter **Finanzamt** holst du Bescheide aus deinem ELSTER-Postfach und schreibst dem Finanzamt über ELSTER, ohne Mein ELSTER zu öffnen. Die Nachricht geht an das Finanzamt der Steuernummer aus den Einstellungen; für Einzelunternehmer ist das meist dieselbe Steuernummer wie für die Einkommensteuer. Gesendet wird wie bei der Voranmeldung mit Zertifikat und PIN, erst als Testübermittlung, dann echt.
+Unter **Finanzamt** holst du Bescheide aus deinem ELSTER-Postfach und schreibst dem Finanzamt über ELSTER, ohne Mein ELSTER zu öffnen. Die Lohnsteuer-Anmeldung steht unter [Lohn](lohn.md#lohnsteuer-anmeldung), die Lohnsteuerbescheinigung unter [Lohn](lohn.md#lohnsteuerbescheinigung); ab 2026 übermittelst du sie in Mein ELSTER. Die Nachricht geht an das Finanzamt der Steuernummer aus den Einstellungen; für Einzelunternehmer ist das meist dieselbe Steuernummer wie für die Einkommensteuer. Gesendet wird wie bei der Voranmeldung mit Zertifikat und PIN, erst als Testübermittlung, dann echt.
 
 ## Bescheide aus dem ELSTER-Postfach
 
@@ -10,7 +17,7 @@ Damit Bescheide dort ankommen, musst du in Mein ELSTER einmal der elektronischen
 
 Der Abruf läuft in drei Schritten, wie bei viking:
 
-1. **PostfachAnfrage** (Datenabholung Version 31) listet die bereitgestellten Bescheide und ihre Anhänge.
+1. **PostfachAnfrage** (Datenabholung Version 32) listet die bereitgestellten Bescheide und ihre Anhänge.
 2. Die Anhänge kommen über Otto (`libotto.so`, liegt bei ERiC) vom ELSTER-Server.
 3. **PostfachBestaetigung** meldet ELSTER die Abholung. Bestätigt wird nur, was vollständig gespeichert ist.
 
@@ -34,6 +41,8 @@ Der Testabruf läuft wie die Testübermittlung mit Testmerker und deiner Herstel
 
 Das Finanzamt setzt Einkommensteuer-Vorauszahlungen (fällig 10.3., 10.6., 10.9. und 10.12.) nach dem letzten Bescheid fest. Verdienst du in diesem Jahr weniger, kannst du die Herabsetzung formlos beantragen (§ 37 Abs. 3 EStG). Ein eigenes ELSTER-Formular dafür braucht es nicht; Haben schickt den Antrag als Sonstige Nachricht.
 
+Nur im Einzelunternehmen: Eine GmbH oder UG zahlt Körperschaftsteuer statt Einkommensteuer; bei ihr fehlt der Reiter, und Haben lehnt einen solchen Antrag ab. Eine Herabsetzung der Körperschaftsteuer-Vorauszahlungen schreibst du als [freie Nachricht](#freie-nachricht).
+
 Haben füllt den Antrag mit den Zahlen aus deiner Buchhaltung und schätzt die Steuer des Jahres:
 
 | Angabe | Woher |
@@ -47,11 +56,11 @@ Haben füllt den Antrag mit den Zahlen aus deiner Buchhaltung und schätzt die S
 
 ### Steuerprognose
 
-Haben rechnet mit dem Tarif nach § 32a EStG (2023 bis 2026, für spätere Jahre mit dem jüngsten Tarif). Die Tarifwerte sind gegen den Programmablaufplan des BMF abgeglichen. Vom hochgerechneten Gewinn zieht Haben ab:
+Haben rechnet mit dem Tarif nach § 32a EStG (2023 bis 2026, für spätere Jahre mit dem jüngsten Tarif). Die Tarifwerte für 2024 bis 2026 sind gegen den Programmablaufplan des BMF abgeglichen, die für 2023 folgen dem Gesetzestext. Vom hochgerechneten Gewinn zieht Haben ab:
 
 - Arbeitslohn: Einkünfte nach Werbungskosten bzw. Arbeitnehmer-Pauschbetrag kommen zum Gewinn hinzu,
 - Vorsorgeaufwand: Rentenversicherung voll (bei Arbeitnehmern abzüglich des Arbeitgeberanteils), Basis-Kranken- und Pflegeversicherung voll, weitere Vorsorge bis zum Höchstbetrag von 2.800 € je Person, 1.900 € bei Arbeitnehmern,
-- Sonderausgaben: Kirchensteuer und Spenden (bis 20 % des Gewinns), mindestens den Pauschbetrag von 36 € bzw. 72 €,
+- Sonderausgaben: Kirchensteuer und Spenden (bis 20 % des Gesamtbetrags der Einkünfte, also Gewinn und Arbeitslohn), mindestens den Pauschbetrag von 36 € bzw. 72 €,
 - Kinderbetreuungskosten (bis 2024 zwei Drittel, höchstens 4.000 €; ab 2025 80 %, höchstens 4.800 € je Kind),
 - Krankheitskosten über der zumutbaren Belastung.
 

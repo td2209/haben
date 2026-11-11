@@ -1,5 +1,6 @@
 import { formatDecimal, parseEuro } from "@haben/core";
 import type { EstArbeitnehmer, EstLohnsteuerbescheinigung } from "@haben/elster";
+import { Field } from "./Field.tsx";
 
 /**
  * Eingabe der Anlage N einer Person: Lohnsteuerbescheinigungen (Nummern wie auf der Bescheinigung)
@@ -97,7 +98,9 @@ export function parseArbeitnehmer(d: ArbeitnehmerDraft, wer: string, bad: string
     return n || undefined;
   };
   const bescheinigungen = d.bescheinigungen.map((b, i): EstLohnsteuerbescheinigung => {
-    const values = Object.fromEntries(BETRAEGE.map(([k, label]) => [k, amount(b[k], `Bescheinigung ${i + 1}: ${label}`)])) as Partial<Record<BetragKey, number>>;
+    const values = Object.fromEntries(BETRAEGE.map(([k, label]) => [k, amount(b[k], `Bescheinigung ${i + 1}: ${label}`)])) as Partial<
+      Record<BetragKey, number>
+    >;
     if (!values.brutto) bad.push(`Bescheinigung ${i + 1}: Bruttoarbeitslohn (${wer})`);
     return { ...values, steuerklasse: Number(b.steuerklasse) as EstLohnsteuerbescheinigung["steuerklasse"], brutto: values.brutto ?? 0 };
   });
@@ -142,26 +145,35 @@ export function AnlageNFields({ wer, draft, onChange }: { wer: string; draft: Ar
       {draft.aktiv && (
         <>
           <p className="small muted" style={{ margin: 0 }}>
-            Die Beträge stehen auf der Lohnsteuerbescheinigung, die der Arbeitgeber schickt; Haben übernimmt die Sozialversicherung in die
-            Anlage Vorsorgeaufwand. Bei mehreren Arbeitgebern je Bescheinigung eine Zeile.
+            Die Beträge stehen auf der Lohnsteuerbescheinigung, die der Arbeitgeber schickt; Haben übernimmt die Sozialversicherung in die Anlage
+            Vorsorgeaufwand. Bei mehreren Arbeitgebern je Bescheinigung eine Zeile.
           </p>
           {draft.bescheinigungen.map((b, index) => (
-            <div key={b.key} className="form-grid" role="group" aria-label={`Lohnsteuerbescheinigung ${index + 1} · ${wer}`}>
-              <label className="field">
-                Steuerklasse
-                <select value={b.steuerklasse} onChange={(e) => setB(b.key, { steuerklasse: e.target.value })}>
-                  {[1, 2, 3, 4, 5, 6].map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <div key={b.key} className="form-row cols-2" role="group" aria-label={`Lohnsteuerbescheinigung ${index + 1} · ${wer}`}>
+              <Field label="Steuerklasse">
+                {(control) => (
+                  <select {...control} value={b.steuerklasse} onChange={(e) => setB(b.key, { steuerklasse: e.target.value })}>
+                    {[1, 2, 3, 4, 5, 6].map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
               {BETRAEGE.map(([k, label]) => (
-                <label key={k} className="field">
-                  {label}
-                  <input inputMode="decimal" value={b[k]} onChange={(e) => setB(b.key, { [k]: e.target.value })} placeholder="0,00" required={k === "brutto"} />
-                </label>
+                <Field label={label} key={k}>
+                  {(control) => (
+                    <input
+                      {...control}
+                      inputMode="decimal"
+                      value={b[k]}
+                      onChange={(e) => setB(b.key, { [k]: e.target.value })}
+                      placeholder="0,00"
+                      required={k === "brutto"}
+                    />
+                  )}
+                </Field>
               ))}
               {draft.bescheinigungen.length > 1 && (
                 <div className="actions" style={{ gridColumn: "1 / -1" }}>
@@ -185,42 +197,35 @@ export function AnlageNFields({ wer, draft, onChange }: { wer: string; draft: Ar
           <div className="subhead" aria-hidden="true">
             Werbungskosten
           </div>
-          <div className="form-grid" role="group" aria-label={`Werbungskosten · ${wer}`}>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              Erste Tätigkeitsstätte (PLZ, Ort, Straße)
-              <input value={draft.adresse} onChange={(e) => set({ adresse: e.target.value })} maxLength={200} />
-            </label>
-            <label className="field">
-              Tage dort
-              <input inputMode="numeric" value={draft.tage} onChange={(e) => set({ tage: e.target.value })} />
-            </label>
-            <label className="field">
-              Einfache Entfernung in km
-              <input inputMode="decimal" value={draft.km} onChange={(e) => set({ km: e.target.value })} />
-            </label>
-            <label className="field">
-              Arbeitstage je Woche
-              <input inputMode="numeric" value={draft.arbeitstageJeWoche} onChange={(e) => set({ arbeitstageJeWoche: e.target.value })} />
-            </label>
-            <label className="field">
-              Urlaubs- und Krankheitstage
-              <input inputMode="numeric" value={draft.urlaubstage} onChange={(e) => set({ urlaubstage: e.target.value })} />
-            </label>
-            <label className="field">
-              Homeoffice-Tage
-              <input inputMode="numeric" value={draft.homeofficeTage} onChange={(e) => set({ homeofficeTage: e.target.value })} />
-              <span className="small muted">ohne Fahrt zur Tätigkeitsstätte; 6 € je Tag, höchstens 210 Tage</span>
-            </label>
-            <label className="checkbox" style={{ alignSelf: "end" }}>
+          <div className="form-row cols-2" role="group" aria-label={`Werbungskosten · ${wer}`}>
+            <Field label="Erste Tätigkeitsstätte (PLZ, Ort, Straße)" style={{ gridColumn: "1 / -1" }}>
+              {(control) => <input {...control} value={draft.adresse} onChange={(e) => set({ adresse: e.target.value })} maxLength={200} />}
+            </Field>
+            <Field label="Tage dort">
+              {(control) => <input {...control} inputMode="numeric" value={draft.tage} onChange={(e) => set({ tage: e.target.value })} />}
+            </Field>
+            <Field label="Einfache Entfernung in km">
+              {(control) => <input {...control} inputMode="decimal" value={draft.km} onChange={(e) => set({ km: e.target.value })} />}
+            </Field>
+            <Field label="Arbeitstage je Woche">
+              {(control) => (
+                <input {...control} inputMode="numeric" value={draft.arbeitstageJeWoche} onChange={(e) => set({ arbeitstageJeWoche: e.target.value })} />
+              )}
+            </Field>
+            <Field label="Urlaubs- und Krankheitstage">
+              {(control) => <input {...control} inputMode="numeric" value={draft.urlaubstage} onChange={(e) => set({ urlaubstage: e.target.value })} />}
+            </Field>
+            <Field label="Homeoffice-Tage" hint="ohne Fahrt zur Tätigkeitsstätte; 6 € je Tag, höchstens 210 Tage">
+              {(control) => <input {...control} inputMode="numeric" value={draft.homeofficeTage} onChange={(e) => set({ homeofficeTage: e.target.value })} />}
+            </Field>
+            <label className="checkbox" style={{ gridColumn: "1 / -1" }}>
               <input type="checkbox" checked={draft.keinAndererArbeitsplatz} onChange={(e) => set({ keinAndererArbeitsplatz: e.target.checked })} />
               Dauerhaft kein anderer Arbeitsplatz
             </label>
             {WK_BETRAEGE.map(([k, label, hint]) => (
-              <label key={k} className="field">
-                {label}
-                <input inputMode="decimal" value={draft[k]} onChange={(e) => set({ [k]: e.target.value })} placeholder="0,00" />
-                {hint && <span className="small muted">{hint}</span>}
-              </label>
+              <Field label={label} hint={hint && hint} key={k}>
+                {(control) => <input {...control} inputMode="decimal" value={draft[k]} onChange={(e) => set({ [k]: e.target.value })} placeholder="0,00" />}
+              </Field>
             ))}
           </div>
           <p className="small muted" style={{ margin: 0 }}>

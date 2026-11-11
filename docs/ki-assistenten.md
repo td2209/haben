@@ -1,3 +1,10 @@
+---
+title: "KI-Assistenten per MCP: Buchhaltung im Gespräch abfragen"
+description: >-
+  Haben per MCP mit Claude oder einem lokalen Modell verbinden: offene Rechnungen, Umsatzsteuer
+  und Auswertungen im Gespräch abfragen, nur mit Lesezugriff.
+---
+
 # KI-Assistenten (MCP)
 
 Haben lässt sich im Gespräch mit einem KI-Assistenten abfragen, etwa mit Claude Code, Claude Desktop oder einem lokalen Modell: „Welche Rechnungen sind überfällig?“, „Wie viel Umsatzsteuer zahle ich im Oktober?“, „Was fehlt noch für die Jahreserklärung 2025?“. Der Assistent arbeitet dabei über Werkzeuge, die Haben nach dem [Model Context Protocol (MCP)](https://modelcontextprotocol.io) anbietet.
@@ -14,11 +21,13 @@ Was der Assistent über die Werkzeuge liest, geht an den Anbieter des Modells. B
 
 ## Einrichten
 
-1. **Einstellungen → KI-Assistenten** öffnen und **Zugang für KI-Assistenten einschalten**.
-2. Unter **API-Tokens** einen Namen vergeben (z. B. „Claude Code am Laptop“), die Gültigkeit wählen (30 Tage, 90 Tage oder ein Jahr) und **Token anlegen**.
+1. **Einstellungen → KI-Assistenten und API** öffnen und **Zugang für KI-Assistenten und API einschalten**.
+2. Unter **API-Tokens** einen Namen vergeben (z. B. „Claude Code am Laptop“), die Gültigkeit wählen (30 Tage, 90 Tage oder ein Jahr) und **Token anlegen**. Unter **Rechte** ist „KI-Assistent (MCP): Buchhaltung lesen“ (`haben:lesen`) schon angekreuzt; die übrigen Rechte gehören zur [REST-API](api.md) und braucht ein Assistent nicht.
 3. Das Token sofort kopieren: Haben speichert nur seinen SHA-256-Hash und zeigt es nie wieder an.
 
-Jeder Assistent sollte sein eigenes Token bekommen. **Widerrufen** sperrt ein Token sofort; abgelaufene und widerrufene bleiben zur Nachvollziehbarkeit in der Liste. Wer den Zugang wieder ausschaltet, sperrt alle Tokens auf einmal.
+Tokens legt nur der Inhaber an; ein [Zugang für die Steuerberatung](steuerberatung.md) sieht sie nicht und kann keine anlegen.
+
+Jeder Assistent sollte sein eigenes Token bekommen. **Widerrufen** sperrt ein Token nach einer Rückfrage sofort; abgelaufene und widerrufene bleiben zur Nachvollziehbarkeit in der Liste. Wer ein Token angelegt, übernommen oder widerrufen hat und wann, steht im Änderungsprotokoll. Wer den Zugang wieder ausschaltet, sperrt alle Tokens auf einmal, auch die für die REST-API. Ein Token ohne `haben:lesen` lehnt `/api/mcp` mit 403 ab.
 
 ### Claude Code
 
@@ -45,7 +54,7 @@ Claude Desktop bindet lokal konfigurierte Server über die Datei `claude_desktop
 }
 ```
 
-Ein Connector aus den Einstellungen von claude.ai (auch für die Handy-App und claude.ai im Browser) geht noch nicht: Dort ruft Anthropic Haben aus dem Internet auf und erwartet OAuth. Das ist der nächste Schritt ([#96](https://github.com/firsttris/haben/issues/96)).
+Ein Connector aus den Einstellungen von claude.ai (auch für die Handy-App und claude.ai im Browser) geht noch nicht: Dort ruft Anthropic Haben aus dem Internet auf und erwartet OAuth. Das ist geplant, aber noch nicht dran ([Roadmap](roadmap.md), „Später oder vielleicht“).
 
 ### Andere Clients
 
@@ -63,10 +72,10 @@ Caddy signiert Zertifikate für lokale Namen wie `haben.lan` mit seiner eigenen 
 | `fristen` | offene Steuerfristen, auf Wunsch auch Erledigtes der letzten 60 Tage |
 | `offene_posten` | offene Forderungen und Verbindlichkeiten mit Summen und Tagen über Fälligkeit |
 | `ueberfaellige_rechnungen` | überfällige Rechnungen mit letzter Mahnstufe |
-| `rechnungen` | Ausgangsrechnungen, filterbar nach Status, Jahr und Kunde |
+| `rechnungen` | Ausgangsrechnungen, filterbar nach Status, Jahr und Kunde oder Rechnungsnummer |
 | `belege` | Belege zu prüfen, gebucht oder alle |
 | `bankumsaetze_ohne_zuordnung` | Bankumsätze ohne Zuordnung je Konto |
-| `umsatzsteuer_voranmeldung` | Kennzahlen eines Monats aus den Buchungen, gespeicherter Stand, Vorprüfung und Abgleich mit dem Journal |
+| `umsatzsteuer_voranmeldung` | Kennzahlen eines Monats oder Quartals aus den Buchungen, gespeicherter Stand, Vorprüfung und Abgleich mit dem Journal |
 | `ustva_ausfuellliste` | Werte der Voranmeldung zum Eintragen in Mein ELSTER, in der Reihenfolge des Formulars, siehe [Mein ELSTER mit KI-Assistent](elster-mit-assistent.md) |
 | `euer` | Einnahmen-Überschuss-Rechnung eines Jahres mit Monatswerten |
 | `jahreserklaerung` | Stand von Umsatzsteuererklärung, Anlage EÜR und Einkommensteuer mit Hinweisen und Steuerprognose |
@@ -82,7 +91,7 @@ Caddy signiert Zertifikate für lokale Namen wie `haben.lan` mit seiner eigenen 
 Die `lexoffice_`-Werkzeuge helfen beim [Umzug aus Lexoffice](lexoffice.md). Was der Assistent damit prüfen kann:
 
 - **Vollständigkeit:** `lexoffice_abgleich` zeigt je Jahr, welche Prüfungen offen sind (fehlender DATEV-Stapel, ELSTER-Protokolle, Kontoauszüge, Belege ohne Datei), welche Dateien abgelegt sind und welche Belege der Abruf nicht lesen konnte.
-- **Voranmeldungen:** Gib dem Assistenten die Zahlen einer in Lexware Office abgegebenen Voranmeldung (aus dem ELSTER-Protokoll) und frag etwa „Vergleich die Voranmeldung März 2025 aus Lexoffice mit dem Altbestand in Haben: Kz 81 12.345, Kz 66 1.234“. Er nimmt die nachgerechneten Monatswerte aus `lexoffice_abgleich` und geht bei einer Abweichung mit `lexoffice_belege` und `lexoffice_beleg` bis auf den einzelnen Beleg zurück.
+- **Voranmeldungen:** Gib dem Assistenten die Zahlen einer in Lexware Office abgegebenen Voranmeldung (aus dem ELSTER-Protokoll) und frag etwa „Vergleich die Voranmeldung März 2025 aus Lexoffice mit dem Altbestand in Haben: Kz 81 12.345, Kz 66 1.234“. Er nimmt die nachgerechneten Monatswerte aus `lexoffice_abgleich` und geht bei einer Abweichung mit `lexoffice_belege` und `lexoffice_beleg` bis auf den einzelnen Beleg zurück. Buchungen ohne Beleg stehen dort mit der Notiz „Buchung ohne Beleg“; Was weder Einnahme noch Ausgabe ist (im Einzelunternehmen Privatentnahmen, -einlagen und Geldtransit ohne Beleg, bei GmbH und UG Gesellschafter, Stammkapital, Darlehen sowie Körperschaft- und Gewerbesteuer, siehe [Einordnung](lexoffice.md#einordnung-bei-gmbh-und-ug)), lässt `lexoffice_belege` weg, wie die Monatswerte, und nennt es summiert unter `nichtEinnahmeOderAusgabe`; `lexoffice_abgleich` ebenso je Jahr.
 - **Konten und EÜR:** Die Lexware-API liefert keine Buchungen. Die stehen im DATEV-Buchungsstapel, den du im Archiv ablegst. `lexoffice_konten` rechnet daraus Salden je Konto und Monat oder Jahr, `lexoffice_buchungen` zeigt die einzelnen Buchungen eines Kontos. Leg Saldenliste oder EÜR aus Lexware Office daneben (Zahlen ins Gespräch kopieren), dann vergleicht der Assistent Konto für Konto.
 
 Den Abruf selbst und das Hochladen der Exporte machst du in Haben. PDFs im Archiv kann der Assistent nicht lesen.
@@ -91,6 +100,10 @@ Beträge kommen in Euro, Datumsangaben als JJJJ-MM-TT. Die Listen sind auf 50 Ei
 
 ## Protokoll und Grenzen
 
-Unter **Letzte Aufrufe** steht, welcher Assistent wann welches Werkzeug benutzt hat und ob es geklappt hat, ohne Eingaben und Ergebnisse. Haben hebt das 90 Tage auf. Je Token sind 120 Anfragen pro Minute erlaubt; schickt ein Client mehrere Nachrichten in einer Anfrage (Batch), zählt jede einzeln.
+Unter **Letzte Aufrufe** steht, welcher Assistent wann welches Werkzeug benutzt hat und ob es geklappt hat, ohne Eingaben und Ergebnisse. Haben hebt das 90 Tage auf. Je Token sind 120 Anfragen pro Minute erlaubt, zusammen mit Aufrufen der REST-API; schickt ein Client mehrere Nachrichten in einer Anfrage (Batch), zählt jede einzeln.
 
 Das Ein- und Ausschalten des Zugangs steht im Änderungsprotokoll. Die Tokens selbst sind Zugangsdaten wie die Passkeys und stehen nicht darin.
+
+## Verantwortung für API-Tokens
+
+Tokens besitzen einen verantwortlichen Inhaber. Bei erkanntem SSO-Gruppenentzug oder Herabstufung werden sie deaktiviert, nicht gelöscht. Ein anderer aktuell berechtigter Inhaber kann sie in den Einstellungen ausdrücklich übernehmen und reaktivieren, der einzige Inhaber auch seine eigenen; das Geheimnis bleibt erhalten. Ohne erneuten OIDC-Durchlauf gilt ein Token höchstens 30 Tage nach der letzten Bestätigung des Verantwortlichen. Alte Tokens ohne belegbare Verantwortung werden bei der Einführung bis zur Übernahme deaktiviert. Endgültig widerrufene und abgelaufene Tokens bleiben ungültig.

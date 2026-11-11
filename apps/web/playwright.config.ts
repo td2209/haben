@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { fileURLToPath } from "node:url";
+import { DURCHLAEUFE, databaseUrlFuer, type Durchlauf, ENABLE_BANKING_PORT, LAYOUT_PAKETE_PORT, portFuer } from "./e2e/durchlaeufe.ts";
 
 /**
  * Ende-zu-Ende-Tests gegen einen echten Server mit eigener, leerer Datenbank.
@@ -7,15 +8,59 @@ import { fileURLToPath } from "node:url";
  * Lokal startet Playwright den Entwicklungsserver, in der CI den gebauten Server (E2E_SERVER_COMMAND).
  * Lokal ohne heruntergeladene Browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE auf ein vorhandenes Chromium setzen.
  */
-const port = Number(process.env.E2E_PORT ?? 3100);
-const baseURL = `http://localhost:${port}`;
-const databaseUrl = process.env.E2E_DATABASE_URL ?? "";
+const baseURL = `http://localhost:${portFuer()}`;
+const durchlaeufe = Object.keys(DURCHLAEUFE) as Durchlauf[];
+
+const chromium = { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } };
+
+/** Datenbank leeren, migrieren, Server starten; je Durchlauf (e2e/durchlaeufe.ts) ein eigener */
+function webServer(durchlauf?: Durchlauf) {
+  const serverPort = portFuer(durchlauf);
+  const suffix = durchlauf ? `-${durchlauf}` : "";
+  const serverURL = `http://localhost:${serverPort}`;
+  return {
+    command: `bun e2e/reset-db.ts && bun run db:migrate && ${process.env.E2E_SERVER_COMMAND ?? `bun --bun vite dev --port ${serverPort}`}`,
+    url: `${serverURL}/login`,
+    timeout: 180_000,
+    reuseExistingServer: false,
+    stdout: "pipe" as const,
+    env: {
+      ...(process.env as Record<string, string>),
+      DATABASE_URL: databaseUrlFuer(durchlauf),
+      PORT: String(serverPort),
+      BETTER_AUTH_URL: serverURL,
+      BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET ?? "e2e-geheimnis-mindestens-zweiunddreissig-zeichen",
+      HABEN_ENCRYPTION_KEY: process.env.HABEN_ENCRYPTION_KEY ?? Buffer.alloc(32, 7).toString("base64"),
+      DOCUMENTS_DIR: `${process.env.E2E_DOCUMENTS_DIR ?? "test-results/e2e-belege"}${suffix}`,
+      ERIC_DIR: `test-results/e2e-eric${suffix}`,
+      HABEN_SCHEDULER: "off",
+      // muss zu SETUP_CODE in e2e/app.spec.ts passen
+      HABEN_SETUP_CODE: "e2e-einrichtungscode",
+      // Vorlage und Schriften für das Rechnungs-PDF; der gebaute Server findet sie sonst nicht
+      HABEN_EINVOICE_DIR: fileURLToPath(new URL("../../packages/einvoice", import.meta.url)),
+      ERIC_HOME: "",
+      ELSTER_HERSTELLER_ID: "",
+      ANTHROPIC_API_KEY: "",
+      EXTRACTION_PROVIDER: "",
+      EXTRACTION_BASE_URL: "",
+      // Nachgebaute API in belege-steuern.spec.ts; ohne gespeicherten Zugang fragt kein Server dort an
+      ENABLE_BANKING_API_URL: `http://127.0.0.1:${ENABLE_BANKING_PORT}`,
+      ENABLE_BANKING_APP_ID: "",
+      ENABLE_BANKING_KEY: "",
+      ENABLE_BANKING_KEY_FILE: "",
+      // Nachgebaute Paketquelle in layouts.spec.ts, nie Typst Universe aus dem Test
+      LAYOUTS_PACKAGES_URL: `http://127.0.0.1:${LAYOUT_PAKETE_PORT}`,
+    },
+  };
+}
 
 export default defineConfig({
   testDir: "e2e",
   testMatch: "**/*.spec.ts",
-  fullyParallel: false,
-  workers: 1,
+  // „ablauf“ läuft für sich nacheinander, „mit-daten“ danach verteilt auf die Worker; die übrigen Durchläufe
+  // mit eigenem Server und „ohne-daten“ von Anfang an daneben
+  fullyParallel: true,
+  workers: 4,
   retries: 0,
   timeout: 120_000,
   expect: { timeout: 15_000 },
@@ -28,31 +73,47 @@ export default defineConfig({
     screenshot: "only-on-failure",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {},
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } }],
-  webServer: {
-    // Datenbank leeren, migrieren, Server starten
-    command: `tsx e2e/reset-db.ts && pnpm db:migrate && ${process.env.E2E_SERVER_COMMAND ?? `pnpm exec vite dev --port ${port}`}`,
-    url: `${baseURL}/login`,
-    timeout: 180_000,
-    reuseExistingServer: false,
-    stdout: "pipe",
-    env: {
-      ...(process.env as Record<string, string>),
-      DATABASE_URL: databaseUrl,
-      PORT: String(port),
-      BETTER_AUTH_URL: baseURL,
-      BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET ?? "e2e-geheimnis-mindestens-zweiunddreissig-zeichen",
-      HABEN_ENCRYPTION_KEY: process.env.HABEN_ENCRYPTION_KEY ?? Buffer.alloc(32, 7).toString("base64"),
-      DOCUMENTS_DIR: process.env.E2E_DOCUMENTS_DIR ?? "test-results/e2e-belege",
-      ERIC_DIR: "test-results/e2e-eric",
-      HABEN_SCHEDULER: "off",
-      // muss zu SETUP_CODE in e2e/app.spec.ts passen
-      HABEN_SETUP_CODE: "e2e-einrichtungscode",
-      // Vorlage und Schriften für das Rechnungs-PDF; der gebaute Server findet sie sonst nicht
-      HABEN_EINVOICE_DIR: fileURLToPath(new URL("../../packages/einvoice", import.meta.url)),
-      ERIC_HOME: "",
-      ELSTER_HERSTELLER_ID: "",
-      ANTHROPIC_API_KEY: "",
+  projects: [
+    // Der Betrieb in der leeren Datenbank, Schritt für Schritt (test.describe.configure serial in der Datei); legt
+    // an, was „mit-daten“ liest
+    { name: "ablauf", testMatch: "app.spec.ts", use: chromium },
+    // Liest nur, was „ablauf“ angelegt hat, mit dessen Sitzung (e2e/daten.ts). Playwright startet „ablauf“ auch
+    // mit, wenn nur eine dieser Dateien laufen soll
+    {
+      name: "mit-daten",
+      testMatch: [
+        "anmelden.spec.ts",
+        "barrierefreiheit.spec.ts",
+        "dateiauswahl.spec.ts",
+        "gestaltung.spec.ts",
+        "layouts.spec.ts",
+        "handy-felder.spec.ts",
+        "basiszinssatz.spec.ts",
+        "bestaetigung.spec.ts",
+        "datumsfelder.spec.ts",
+        "kopfzeile.spec.ts",
+        "rechtsform.spec.ts",
+        "seiten.spec.ts",
+        "steuerberatung.spec.ts",
+        "vorschau.spec.ts",
+        "zz-doku-screenshots.spec.ts",
+      ],
+      dependencies: ["ablauf"],
+      use: chromium,
     },
-  },
+    // Durchläufe mit eigenem Server und eigener Datenbank, von Anfang an daneben: die GmbH, weil die Rechtsform ab der
+    // ersten Buchung fest ist, die übrigen, damit app.spec.ts kurz bleibt
+    ...durchlaeufe.map((durchlauf) => ({
+      name: durchlauf,
+      testMatch: `${durchlauf}.spec.ts`,
+      use: { ...chromium, baseURL: `http://localhost:${portFuer(durchlauf)}` },
+    })),
+    // Braucht keine Daten aus der App
+    {
+      name: "ohne-daten",
+      testMatch: ["elster-helfer.spec.ts", "elster-helfer-erweiterung.spec.ts", "langsame-anfrage.spec.ts", "beenden.spec.ts"],
+      use: chromium,
+    },
+  ],
+  webServer: [webServer(), ...durchlaeufe.map(webServer)],
 });

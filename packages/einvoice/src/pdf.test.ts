@@ -1,8 +1,25 @@
+import { inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { logoFormat, pdfData, renderInvoicePdf } from "./pdf.ts";
+import { logoFormat, pdfData, renderInvoicePdf, templateInputs } from "./pdf.ts";
 import { grossPriceLines, mixedRateLines, sampleDocument, zeroRateLines } from "./samples.ts";
+import { accentPalette, DEFAULT_ACCENT } from "@haben/core";
 
 const ascii = (bytes: Uint8Array) => Buffer.from(bytes).toString("latin1");
+
+/** Entpackte Inhaltsströme eines PDFs, um Zeichenbefehle wie Farben zu finden */
+function contentStreams(pdf: Uint8Array): string {
+  const text = ascii(pdf);
+  return [...text.matchAll(/stream\r?\n/g)]
+    .map((match) => {
+      const start = match.index + match[0].length;
+      try {
+        return inflateSync(pdf.subarray(start, text.indexOf("endstream", start))).toString("latin1");
+      } catch {
+        return "";
+      }
+    })
+    .join("\n");
+}
 
 describe("renderInvoicePdf", () => {
   it("erzeugt ein PDF/A-3b", () => {
@@ -13,8 +30,8 @@ describe("renderInvoicePdf", () => {
   });
 
   it("übernimmt Nutzertext unverändert, ohne Typst-Markup auszuwerten", () => {
-    const doc = sampleDocument({ note: '#panic("x") *fett* $x$ ]' });
-    doc.lines[0]!.description = "Beratung #read(\"/etc/passwd\") _kursiv_ \\";
+    const doc = sampleDocument({ intro: '#panic("y") = Überschrift', note: '#panic("x") *fett* $x$ ]' });
+    doc.lines[0]!.description = 'Beratung #read("/etc/passwd") _kursiv_ \\';
     expect(() => renderInvoicePdf(doc)).not.toThrow();
   });
 });
@@ -34,7 +51,59 @@ describe("logoFormat", () => {
   });
 });
 
+describe("Akzentfarbe", () => {
+  it("setzt ohne Einstellung die Standardfarbe und das Logo als Dateinamen", () => {
+    expect(templateInputs({ title: "Rechnung" }, {})).toMatchObject({ title: "Rechnung", accent: DEFAULT_ACCENT, palette: accentPalette(DEFAULT_ACCENT) });
+    expect(templateInputs({ title: "Rechnung" }, {})).not.toHaveProperty("logo");
+    expect(templateInputs({}, { accent: "#0055AA", logo: { data: new Uint8Array(), format: "png" } })).toMatchObject({
+      accent: "#0055AA",
+      palette: accentPalette("#0055AA"),
+      logo: "logo.png",
+    });
+  });
+
+  it("zeichnet Überschriften und Linien in der eingestellten Farbe", () => {
+    // #0055AA = RGB 0, 85, 170 → 0 0,333 0,667
+    const blau = /0 0\.3333\d* 0\.6666\d* (scn|SCN)/;
+    expect(contentStreams(renderInvoicePdf({ ...sampleDocument(), accent: "#0055AA" }))).toMatch(blau);
+    expect(contentStreams(renderInvoicePdf(sampleDocument()))).not.toMatch(blau);
+  });
+
+  it("färbt auch Text, Adressen, Positionen und Fußzeile passend statt grün (#222)", () => {
+    // Fließtext #16211C ab Werk = 0,086 0,129 0,110; bei Blau der abgeleitete Grauton statt dieses Grüns
+    const gruenerText = /0\.08627\d* 0\.12941\d* 0\.10980\d* (scn|SCN)/;
+    const { ink } = accentPalette("#0055AA");
+    const [r, g, b] = [1, 3, 5].map((i) => (parseInt(ink.slice(i, i + 2), 16) / 255).toFixed(3).slice(0, 4));
+    const blauerText = new RegExp(`${r}\\d* ${g}\\d* ${b}\\d* (scn|SCN)`);
+    const blau = contentStreams(renderInvoicePdf({ ...sampleDocument(), accent: "#0055AA" }));
+    expect(contentStreams(renderInvoicePdf(sampleDocument()))).toMatch(gruenerText);
+    expect(blau).not.toMatch(gruenerText);
+    expect(blau).toMatch(blauerText);
+  });
+});
+
 describe("pdfData", () => {
+  it("gibt die Beschreibung einer Position getrimmt mit, leer als null", () => {
+    const doc = sampleDocument();
+    doc.lines[0]!.detail = "  Konzeption und Umsetzung\nlaut Rahmenvertrag  ";
+    doc.lines[1]!.detail = "   ";
+    const data = pdfData(doc);
+    expect(data.lines[0]).toMatchObject({ description: "Softwareentwicklung September", detail: "Konzeption und Umsetzung\nlaut Rahmenvertrag" });
+    expect(data.lines[1]!.detail).toBeNull();
+    expect(() => renderInvoicePdf(doc)).not.toThrow();
+  });
+
+  it("übernimmt Einleitung und Hinweis getrimmt, leer als null", () => {
+    const data = pdfData(sampleDocument({ intro: "  Sehr geehrte Damen und Herren,\nwir berechnen:  ", note: "Vielen Dank." }));
+    expect(data.intro).toBe("Sehr geehrte Damen und Herren,\nwir berechnen:");
+    expect(data.note).toBe("Vielen Dank.");
+    expect(pdfData(sampleDocument({ intro: "   " })).intro).toBeNull();
+  });
+
+  it("rendert ein PDF mit mehrzeiliger Einleitung", () => {
+    expect(() => renderInvoicePdf(sampleDocument({ intro: "Bestellnummer 4500123456\nProjekt Phoenix" }))).not.toThrow();
+  });
+
   it("formatiert Rechnungsangaben deutsch", () => {
     const data = pdfData(sampleDocument());
     expect(data.title).toBe("Rechnung");
@@ -55,11 +124,7 @@ describe("pdfData", () => {
     expect(data.payment).toBe("Der Betrag wird Ihnen erstattet.");
     // Kein GiroCode für Erstattungen
     expect(data.qr).toBeNull();
-    expect(data.totals.rows.map((r) => r.label)).toEqual([
-      "Summe netto",
-      "Umsatzsteuer 19 % auf -2.486,25\u00a0€",
-      "Umsatzsteuer 7 % auf -149,70\u00a0€",
-    ]);
+    expect(data.totals.rows.map((r) => r.label)).toEqual(["Summe netto", "Umsatzsteuer 19 % auf -2.486,25\u00a0€", "Umsatzsteuer 7 % auf -149,70\u00a0€"]);
   });
 
   it("druckt einen GiroCode über den Rechnungsbetrag, nur mit IBAN", () => {

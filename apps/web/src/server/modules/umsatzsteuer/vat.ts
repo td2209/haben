@@ -1,17 +1,12 @@
 import { UserError } from "../../errors.ts";
-import {
-  computeUstva,
-  toElsterSteuernummer,
-  type Cents,
-  type VatPeriod,
-  vatReturnCorrectionProblem,
-  vatReturnSendProblem,
-} from "@haben/core";
+import { computeUstva, toElsterSteuernummer, type Cents, type VatPeriod, vatReturnCorrectionProblem, vatReturnSendProblem } from "@haben/core";
 import { buildUstvaXml, type ElsterClient, type ElsterResult } from "@haben/elster";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { companyIssues, loadCompany } from "../stammdaten/index.ts";
 import { PRODUKT_VERSION, uebermitteln, type ElsterVorgang } from "../elster/index.ts";
 import { computeVatFigures } from "./vat-figures.ts";
+import { loadFrequencies, periodProblem } from "./zeitraum.ts";
+import { kz39For } from "./dauerfrist.ts";
 import { withActor } from "../../db/actor.ts";
 import { db, schema } from "../../db/index.ts";
 
@@ -19,7 +14,7 @@ export type VatReturn = typeof schema.vatReturns.$inferSelect;
 
 export class VatError extends UserError {}
 
-/** Alle Anmeldungen eines Zeitraums, neueste zuerst. */
+/** Alle Anmeldungen eines Zeitraums (Monat oder Quartal), neueste zuerst. */
 export async function returnsForPeriod({ year, month }: VatPeriod): Promise<VatReturn[]> {
   return db
     .select()
@@ -60,6 +55,14 @@ export interface FiguresInput {
   kz84?: Cents;
   kz85?: Cents;
   kz67?: Cents;
+  kz41?: Cents;
+  kz43?: Cents;
+  kz89?: Cents;
+  kz93?: Cents;
+  kz61?: Cents;
+  kz62?: Cents;
+  /** Abzug der Sondervorauszahlung in der letzten Voranmeldung des Jahres */
+  kz39?: Cents;
 }
 
 /** Die gespeicherten Kennzahlen einer Anmeldung */
@@ -76,6 +79,13 @@ function stored(ustva: ReturnType<typeof computeUstva>) {
     kz84: ustva.kz84,
     kz85: ustva.kz85,
     kz67: ustva.kz67,
+    kz41: ustva.kz41,
+    kz43: ustva.kz43,
+    kz89: ustva.kz89,
+    kz93: ustva.kz93,
+    kz61: ustva.kz61,
+    kz62: ustva.kz62,
+    kz39: ustva.kz39,
     kz83: ustva.kz83,
   };
 }
@@ -85,8 +95,8 @@ export type DraftInput = { mode: "berechnet" } | ({ mode: "manuell"; reason?: st
 
 /** Berechnete Kennzahlen in der Form der Voranmeldung (Bemessungsgrundlagen auf volle Euro) */
 export async function computedValues(period: VatPeriod) {
-  const figures = await computeVatFigures(period);
-  return stored(computeUstva(figures));
+  const [figures, kz39] = await Promise.all([computeVatFigures(period), kz39For(period)]);
+  return stored(computeUstva({ ...figures, kz39 }));
 }
 
 /** Legt den Entwurf des Zeitraums an oder aktualisiert ihn. */
@@ -97,20 +107,14 @@ export async function saveDraft(actor: string, period: VatPeriod, input: DraftIn
   const values = {
     ...(manual ? stored(manual) : computed),
     source: draftInput.mode,
-    overrideReason: draftInput.mode === "manuell" ? (draftInput.reason?.trim() || null) : null,
+    overrideReason: draftInput.mode === "manuell" ? draftInput.reason?.trim() || null : null,
     computed,
   };
   return withActor(actor, async (tx) => {
     const [draft] = await tx
       .select()
       .from(schema.vatReturns)
-      .where(
-        and(
-          eq(schema.vatReturns.year, period.year),
-          eq(schema.vatReturns.month, period.month),
-          eq(schema.vatReturns.status, "draft"),
-        ),
-      )
+      .where(and(eq(schema.vatReturns.year, period.year), eq(schema.vatReturns.month, period.month), eq(schema.vatReturns.status, "draft")))
       .for("update");
     if (draft) {
       const [updated] = await tx
@@ -123,17 +127,14 @@ export async function saveDraft(actor: string, period: VatPeriod, input: DraftIn
     const [sent] = await tx
       .select({ id: schema.vatReturns.id })
       .from(schema.vatReturns)
-      .where(
-        and(
-          eq(schema.vatReturns.year, period.year),
-          eq(schema.vatReturns.month, period.month),
-          eq(schema.vatReturns.status, "sent"),
-        ),
-      )
+      .where(and(eq(schema.vatReturns.year, period.year), eq(schema.vatReturns.month, period.month), eq(schema.vatReturns.status, "sent")))
       .limit(1);
     if (sent) {
       throw new VatError("Für diesen Zeitraum ist schon eine Anmeldung gesendet. Lege eine berichtigte Anmeldung an.");
     }
+    // Neue Anmeldungen nur für Zeiträume, die zum eingestellten Voranmeldungszeitraum passen
+    const problem = periodProblem(await loadFrequencies(tx), period);
+    if (problem) throw new VatError(problem);
     const [created] = await tx
       .insert(schema.vatReturns)
       .values({ year: period.year, month: period.month, ...values })
@@ -148,13 +149,7 @@ export async function createCorrection(actor: string, period: VatPeriod): Promis
     const [latest] = await tx
       .select()
       .from(schema.vatReturns)
-      .where(
-        and(
-          eq(schema.vatReturns.year, period.year),
-          eq(schema.vatReturns.month, period.month),
-          eq(schema.vatReturns.status, "sent"),
-        ),
-      )
+      .where(and(eq(schema.vatReturns.year, period.year), eq(schema.vatReturns.month, period.month), eq(schema.vatReturns.status, "sent")))
       .orderBy(desc(schema.vatReturns.sentAt))
       .limit(1);
     // Ohne gesendete Anmeldung meldet vatReturnCorrectionProblem immer etwas
@@ -183,6 +178,13 @@ export async function createCorrection(actor: string, period: VatPeriod): Promis
         kz84: latest.kz84,
         kz85: latest.kz85,
         kz67: latest.kz67,
+        kz41: latest.kz41,
+        kz43: latest.kz43,
+        kz89: latest.kz89,
+        kz93: latest.kz93,
+        kz61: latest.kz61,
+        kz62: latest.kz62,
+        kz39: latest.kz39,
         kz83: latest.kz83,
         source: latest.source,
         overrideReason: latest.overrideReason,
@@ -220,6 +222,9 @@ export function submitReturn(actor: string, returnId: string, client: ElsterClie
       if (!vatReturn) throw new VatError("Anmeldung nicht gefunden.");
       const sendProblem = vatReturnSendProblem(vatReturn);
       if (sendProblem) throw new VatError(sendProblem);
+      // Eine berichtigte Anmeldung gehört zu einer gesendeten und bleibt in deren Zeitraum
+      const problem = vatReturn.berichtigt ? null : periodProblem(await loadFrequencies(), vatReturn);
+      if (problem) throw new VatError(problem);
       // Berechnete Entwürfe vor dem Senden auf den aktuellen Stand der Buchungen bringen
       if (vatReturn.source === "berechnet") {
         vatReturn = await saveDraft(actor, { year: vatReturn.year, month: vatReturn.month }, { mode: "berechnet" });

@@ -115,11 +115,11 @@ export interface EstArbeitnehmer {
 }
 
 export interface EstAngaben {
-  vorsorge: { a: EstVorsorgePerson; b?: EstVorsorgePerson; /** Weitere sonstige Vorsorgeaufwendungen (Haftpflicht, Unfall, Risikoleben) */ sonstige?: Cents };
+  vorsorge: { a: EstVorsorgePerson; b?: EstVorsorgePerson /** Weitere sonstige Vorsorgeaufwendungen (Haftpflicht, Unfall, Risikoleben) */; sonstige?: Cents };
   sonderausgaben: { kirchensteuerGezahlt?: Cents; kirchensteuerErstattet?: Cents; spenden?: Cents };
   /** Krankheitskosten (außergewöhnliche Belastung) */
   krankheitskosten?: Cents;
-  haushaltsnah: { minijobs?: Cents; dienstleistungen?: Cents; /** nur Lohn-, Maschinen- und Fahrtkosten */ handwerker?: Cents };
+  haushaltsnah: { minijobs?: Cents; dienstleistungen?: Cents /** nur Lohn-, Maschinen- und Fahrtkosten */; handwerker?: Cents };
   kinder: EstKind[];
   kap?: EstKap;
   /** Anlage N je Person */
@@ -201,7 +201,9 @@ export function buildEstXml(input: EstXmlInput): string {
   if (!input.iban?.trim()) throw new ElsterEingabeError("Für die Einkommensteuererklärung fehlt die Bankverbindung (IBAN in den Firmendaten).");
   // Ohne Zusammenveranlagung verlangt die Anlage Kind Angaben zum anderen Elternteil, die Haben nicht erfasst
   if (!zusammen && input.angaben.kinder.length > 0) {
-    throw new ElsterEingabeError("Kinder bei Einzelveranlagung: ELSTER verlangt Angaben zum anderen Elternteil, die Haben noch nicht erfasst. Bitte über Mein ELSTER abgeben.");
+    throw new ElsterEingabeError(
+      "Kinder bei Einzelveranlagung: ELSTER verlangt Angaben zum anderen Elternteil, die Haben noch nicht erfasst. Bitte über Mein ELSTER abgeben.",
+    );
   }
 
   const est1a: XmlNode = [
@@ -423,7 +425,7 @@ export function buildEstXml(input: EstXmlInput): string {
     ["PersonA", x.arbeitnehmer?.a],
     ["PersonB", zusammen ? x.arbeitnehmer?.b : undefined],
   ];
-  const anlagenN = personen.flatMap(([person, an]) => (an && an.bescheinigungen.length > 0 ? [anlageN(person, an)] : []));
+  const anlagenN = personen.flatMap(([person, an]) => (an && an.bescheinigungen.length > 0 ? [anlageN(person, an, input.year)] : []));
   const lstb = (an: EstArbeitnehmer | undefined, key: keyof Omit<EstLohnsteuerbescheinigung, "steuerklasse">) =>
     an ? an.bescheinigungen.reduce((s, b) => s + (b[key] ?? 0), 0) : 0;
 
@@ -474,7 +476,16 @@ export function buildEstXml(input: EstXmlInput): string {
         ]
       : null;
   // Die Günstigerprüfung gilt bei Zusammenveranlagung nur, wenn beide sie beantragen
-  const kapB: XmlNode | null = zusammen && k?.guenstigerpruefung ? ["KAP", [["Person", "PersonB"], ["Ant", [["E1900401", "1"]]]]] : null;
+  const kapB: XmlNode | null =
+    zusammen && k?.guenstigerpruefung
+      ? [
+          "KAP",
+          [
+            ["Person", "PersonB"],
+            ["Ant", [["E1900401", "1"]]],
+          ],
+        ]
+      : null;
 
   const vorsorgePersonen: [string, EstVorsorgePerson | undefined][] = [
     ["PersonA", x.vorsorge.a],
@@ -571,7 +582,8 @@ export function buildEstXml(input: EstXmlInput): string {
 const ganz = (n: number | undefined) => (n && n > 0 ? String(Math.floor(n)) : undefined);
 
 /** Ein Einzelposten mit Bezeichnung und Betrag und seine Summe */
-const posten = (name: string, felder: [string, string, string], text: string, cents: Cents | undefined): XmlNode | null => {
+/** Einzelposten mit Summe; zwischen: weitere Angaben, die das Schema zwischen Einz und Sum erwartet */
+const posten = (name: string, felder: [string, string, string], text: string, cents: Cents | undefined, zwischen: XmlNode[] = []): XmlNode | null => {
   const value = euro(cents);
   if (!value) return null;
   return [
@@ -584,13 +596,38 @@ const posten = (name: string, felder: [string, string, string], text: string, ce
           [felder[1], value],
         ],
       ],
+      ...zwischen,
       ["Sum", [[felder[2], value]]],
     ],
   ];
 };
 
 /** Anlage N einer Person: Lohnsteuerbescheinigungen (Steuerklasse 1–5 bzw. 6) und Werbungskosten */
-export function anlageN(person: string, an: EstArbeitnehmer): XmlNode {
+/**
+ * Ab 2026 hat die Anlage N eine eigene Zeile für Gewerkschaftsbeiträge (Gewerksch_Beit, Schema E10-2026 im ERiC-Paket
+ * 45.1.5.0), weil sie neben dem Arbeitnehmer-Pauschbetrag abziehbar sind (§ 9a Satz 3 EStG); bis 2025 stehen sie mit den
+ * Berufsverbänden in einer Zeile.
+ */
+function berufsverbaende(w: EstArbeitnehmer["werbungskosten"], year: number): (XmlNode | null)[] {
+  if (year < 2026) {
+    return [posten("Berufsverb", ["E0204001", "E0204003", "E0204002"], "Berufsverbände und Gewerkschaft", (w.berufsverbaende ?? 0) + (w.gewerkschaft ?? 0))];
+  }
+  return [
+    posten("Berufsverb", ["E0204001", "E0204003", "E0204002"], "Berufsverbände", w.berufsverbaende),
+    posten("Gewerksch_Beit", ["E0205509", "E0205510", "E0205519"], "Gewerkschaft", w.gewerkschaft),
+  ];
+}
+
+/**
+ * Fortbildungskosten. Ab 2026 verlangt die Anlage N daneben die steuerfreien Erstattungen (E0206305, „ggf. 0“) und
+ * zieht sie in der Summe ab (Schema E10-2026 und Plausibilitätsprüfung im ERiC-Paket 45.1.5.0). Erstattungen erfasst
+ * Haben nicht; die Kosten sind schon um sie gemindert.
+ */
+function fortbildung(cents: Cents | undefined, year: number): XmlNode | null {
+  return posten("Fortb", ["E0204804", "E0204808", "E0204812"], "Fortbildung", cents, year >= 2026 ? [["Stfrei_Erst", [["E0206305", "0"]]]] : []);
+}
+
+export function anlageN(person: string, an: EstArbeitnehmer, year: number): XmlNode {
   for (const b of an.bescheinigungen) {
     if (!(b.brutto > 0)) throw new ElsterEingabeError("Anlage N: Der Bruttoarbeitslohn fehlt.");
     if (![1, 2, 3, 4, 5, 6].includes(b.steuerklasse)) throw new ElsterEingabeError("Anlage N: Die Steuerklasse fehlt.");
@@ -607,7 +644,9 @@ export function anlageN(person: string, an: EstArbeitnehmer): XmlNode {
         summe,
         [
           mitKlasse ? ["E0200002", String(list[0]!.steuerklasse)] : null,
-          ...keys.map((key, i): XmlNode => [ids.sum[i]!, i === 0 ? euro(sum(list, key)) : ausdruecklich(key) ? elsterDecimal(sum(list, key)) : mitCent(sum(list, key))]),
+          ...keys.map(
+            (key, i): XmlNode => [ids.sum[i]!, i === 0 ? euro(sum(list, key)) : ausdruecklich(key) ? elsterDecimal(sum(list, key)) : mitCent(sum(list, key))],
+          ),
         ],
       ],
     ];
@@ -641,12 +680,10 @@ export function anlageN(person: string, an: EstArbeitnehmer): XmlNode {
             ],
           ]
         : null,
-      posten("Berufsverb", ["E0204001", "E0204003", "E0204002"], "Berufsverbände und Gewerkschaft", (w.berufsverbaende ?? 0) + (w.gewerkschaft ?? 0)),
+      ...berufsverbaende(w, year),
       posten("Arbeitsmittel", ["E0204401", "E0204402", "E0204403"], "Arbeitsmittel", w.arbeitsmittel),
-      ganz(w.homeofficeTage)
-        ? ["Homeoffice", [[w.keinAndererArbeitsplatz ? "E0206206" : "E0204507", ganz(w.homeofficeTage)]]]
-        : null,
-      posten("Fortb", ["E0204804", "E0204808", "E0204812"], "Fortbildung", w.fortbildung),
+      ganz(w.homeofficeTage) ? ["Homeoffice", [[w.keinAndererArbeitsplatz ? "E0206206" : "E0204507", ganz(w.homeofficeTage)]]] : null,
+      fortbildung(w.fortbildung, year),
       euro(w.sonstige)
         ? [
             "Weitere_Wk",
@@ -672,8 +709,20 @@ export function anlageN(person: string, an: EstArbeitnehmer): XmlNode {
       [
         "ArbL",
         [
-          ...gruppe(klasse1bis5, "LStB_1_5_Einz", "LStB_1_5_Sum", { einz: ["E0200204", "E0200304", "E0200404", "E0200504", "E0200604"], sum: ["E0200201", "E0200301", "E0200401", "E0200501", "E0200601"] }, true),
-          ...gruppe(klasse6, "LStB_6_Einz", "LStB_6_Sum", { einz: ["E0200202", "E0200302", "E0200402", "E0200502", "E0200602"], sum: ["E0200203", "E0200303", "E0200403", "E0200503", "E0200603"] }, false),
+          ...gruppe(
+            klasse1bis5,
+            "LStB_1_5_Einz",
+            "LStB_1_5_Sum",
+            { einz: ["E0200204", "E0200304", "E0200404", "E0200504", "E0200604"], sum: ["E0200201", "E0200301", "E0200401", "E0200501", "E0200601"] },
+            true,
+          ),
+          ...gruppe(
+            klasse6,
+            "LStB_6_Einz",
+            "LStB_6_Sum",
+            { einz: ["E0200202", "E0200302", "E0200402", "E0200502", "E0200602"], sum: ["E0200203", "E0200303", "E0200403", "E0200503", "E0200603"] },
+            false,
+          ),
         ],
       ],
       wk,

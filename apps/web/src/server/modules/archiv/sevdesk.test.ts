@@ -64,12 +64,12 @@ const VOUCHERS = [
     sumTax: "19.00",
     sumGross: "119.00",
     paidAmount: 0,
-    creditDebit: "D",
+    creditDebit: "C",
     voucherType: "VOU",
     currency: "EUR",
     paymentDeadline: "2024-02-24T00:00:00+01:00",
   },
-  { id: "302", voucherDate: "2024-02-11", status: "50", creditDebit: "D", voucherType: "VOU", sumGross: "5", sumTax: "0" },
+  { id: "302", voucherDate: "2024-02-11", status: "50", creditDebit: "C", voucherType: "VOU", sumGross: "5", sumTax: "0" },
 ];
 
 /** Nachgebaute sevDesk-API */
@@ -98,6 +98,7 @@ function fakeApi(options: { failVoucher?: boolean } = {}) {
       case "/Invoice":
         return list(INVOICES);
       case "/CreditNote":
+      case "/Order":
         return list([]);
       case "/Voucher":
         return list(VOUCHERS);
@@ -106,12 +107,16 @@ function fakeApi(options: { failVoucher?: boolean } = {}) {
       case "/Invoice/102/getPositions":
         return list([{ id: 2, taxRate: "7", sumNet: "200", sumTax: "14" }]);
       case "/VoucherPos":
-        return options.failVoucher ? json({ error: { message: "kaputt" } }, 500) : list([{ id: 3, accountDatev: { id: 4930 }, taxRate: "19", sumNet: "100", sumTax: "19" }]);
+        return options.failVoucher
+          ? json({ error: { message: "kaputt" } }, 500)
+          : list([{ id: 3, accountDatev: { id: 4930 }, taxRate: "19", sumNet: "100", sumTax: "19" }]);
       case "/Document/880/download":
         return new Response(JPEG, { headers: { "content-type": "image/jpeg" } });
     }
     if (/^\/Invoice\/\d+\/getPdf$/.test(path)) {
-      return json({ objects: { filename: `${path.split("/")[2]}.pdf`, mimeType: "application/pdf", base64encoded: true, content: Buffer.from(PDF).toString("base64") } });
+      return json({
+        objects: { filename: `${path.split("/")[2]}.pdf`, mimeType: "application/pdf", base64encoded: true, content: Buffer.from(PDF).toString("base64") },
+      });
     }
     if (/^\/Invoice\/\d+\/getXml$/.test(path)) return json({ error: { message: "keine E-Rechnung" } }, 400);
     return json({ error: { message: `unbekannt ${path}` } }, 404);
@@ -127,11 +132,9 @@ describe.skipIf(!testDatabaseUrl)("sevDesk-Übernahme (Postgres)", () => {
   let sql: postgres.Sql;
   const actor = "test-user";
 
-  function useApi(options: { failVoucher?: boolean } = {}) {
+  function installFakeApi(options: { failVoucher?: boolean } = {}) {
     const api = fakeApi(options);
-    sevdesk.setSevdeskClientFactory(
-      (o) => new importPkg.SevdeskClient({ ...o, fetch: api.fetchFn, minIntervalMs: 0, maxRetries: 0, sleep: async () => {} }),
-    );
+    sevdesk.setSevdeskClientFactory((o) => new importPkg.SevdeskClient({ ...o, fetch: api.fetchFn, minIntervalMs: 0, maxRetries: 0, sleep: async () => {} }));
     return api;
   }
 
@@ -148,7 +151,7 @@ describe.skipIf(!testDatabaseUrl)("sevDesk-Übernahme (Postgres)", () => {
   });
 
   it("lehnt einen falschen Token ab und speichert den richtigen verschlüsselt", async () => {
-    useApi();
+    installFakeApi();
     await expect(sevdesk.saveSevdeskKey(actor, "falsch-falsch-falsch-falsch")).rejects.toThrow(/lehnt den Token ab: API-Token ungültig/);
     expect(await sevdesk.saveSevdeskKey(actor, TOKEN)).toEqual({ bookkeepingVersion: "2.0" });
     const [row] = await sql`select ciphertext from sevdesk_connection`;
@@ -158,12 +161,14 @@ describe.skipIf(!testDatabaseUrl)("sevDesk-Übernahme (Postgres)", () => {
 
   it("übernimmt Kontakte, Rechnungen und Belege mit Dateien; ein Fehler hält den Lauf nicht auf", async () => {
     await sql`insert into contacts (name) values ('Berliner Kindl GmbH')`;
-    useApi({ failVoucher: true });
+    installFakeApi({ failVoucher: true });
     const id = await sevdesk.startSevdeskImport(actor, { wait: true });
     const run = await sevdesk.latestSevdeskImport();
     expect(run).toMatchObject({ id, status: "fertig", source: "sevdesk" });
     expect(run!.progress).toMatchObject({ contacts: 2, contactsLinked: 1, listed: 3, imported: 2, files: 2 });
-    expect(run!.progress.failed).toEqual([expect.objectContaining({ lexofficeId: "voucher/301", number: "B-2024-17", message: expect.stringContaining("500") })]);
+    expect(run!.progress.failed).toEqual([
+      expect.objectContaining({ lexofficeId: "voucher/301", number: "B-2024-17", message: expect.stringContaining("500") }),
+    ]);
     // Der Lexoffice-Abruf sieht den sevDesk-Lauf nicht
     expect(await lexoffice.latestImport()).toBeNull();
 
@@ -182,13 +187,14 @@ describe.skipIf(!testDatabaseUrl)("sevDesk-Übernahme (Postgres)", () => {
     ]);
     expect(vouchers.every((v) => v.contact_id)).toBe(true);
     expect(vouchers[1]!.taxes).toEqual([{ rate: 700, net: 20000, tax: 1400 }]);
-    expect(vouchers[0]!.payment).toMatchObject({ openAmount: 0, items: [{ date: "2024-03-20", amount: 11900 }] });
-    const [file] = await sql`select filename, mime_type, role from lexoffice_voucher_files f join lexoffice_vouchers v on v.id = f.voucher_id where v.number = 'RE-1001'`;
+    expect(vouchers[0]!.payment).toMatchObject({ openAmount: 0, paidDate: "2024-03-20", items: [] });
+    const [file] =
+      await sql`select filename, mime_type, role from lexoffice_voucher_files f join lexoffice_vouchers v on v.id = f.voucher_id where v.number = 'RE-1001'`;
     expect(file).toMatchObject({ filename: "101.pdf", mime_type: "application/pdf", role: "pdf" });
   });
 
   it("setzt beim nächsten Abruf fort und holt die Datei des Belegs", async () => {
-    const api = useApi();
+    const api = installFakeApi();
     await sevdesk.startSevdeskImport(actor, { wait: true });
     const run = await sevdesk.latestSevdeskImport();
     expect(run!.progress).toMatchObject({ imported: 1, skipped: 2, contacts: 0, failed: [] });
@@ -200,11 +206,12 @@ describe.skipIf(!testDatabaseUrl)("sevDesk-Übernahme (Postgres)", () => {
     expect(attachment).toMatchObject({ filename: "B-2024-17.jpg", mime_type: "image/jpeg", lexoffice_file_id: "880" });
   });
 
-  it("zählt reguläre sevDesk-Rechnungen im Abgleich unter Kz 81 und Kz 86", async () => {
+  it("sperrt den Ist-Monatsabgleich bei sevDesk-Zahlungen ohne belegte Einzelhistorie", async () => {
     const { years } = await lexoffice.reconciliation();
     const year = years.find((y) => y.year === 2024)!;
-    // Ist: RE-1001 bezahlt im März; RE-1002 (7 %) ist noch offen
-    expect(year.vat.find((m) => m.month === "2024-03")).toMatchObject({ kz81: 10_000, tax81: 1_900, otherBase: 0 });
+    // Auch eine vollständig bezahlte Rechnung kann mehrere Raten gehabt haben.
+    expect(year.vat).toEqual([]);
+    expect(year.vatIssue).toMatch(/Zahlungshistorie/);
     expect(year.taxTypes).toEqual([{ taxType: "net", count: 2 }]);
   });
 

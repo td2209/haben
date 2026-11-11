@@ -1,9 +1,12 @@
-import { formatEuro, TAX_TREATMENTS, type UnitLabel } from "@haben/core";
+import { discountFromColumns, formatEuro, TAX_TREATMENTS, type UnitLabel } from "@haben/core";
 import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import { Icon } from "../../../components/Icon.tsx";
+import { InvoiceAttachments } from "../../../components/InvoiceAttachments.tsx";
 import { InvoiceEditor } from "../../../components/InvoiceEditor.tsx";
+import { QuoteChoices } from "../../../components/QuoteChoices.tsx";
+import { QuotePlan } from "../../../components/QuotePlan.tsx";
 import { QuoteStatus } from "../../../components/QuoteStatus.tsx";
 import { SendMailForm } from "../../../components/SendMail.tsx";
 import { formatDate, formatDateTime } from "../../../lib/format.ts";
@@ -24,10 +27,12 @@ type Detail = Awaited<ReturnType<typeof getQuoteDetail>>;
 function QuotePage() {
   const data = Route.useLoaderData();
   const { quote } = data;
+  const draftAction = useAction();
   if (quote.status === "draft") {
     return (
       <InvoiceEditor
         key={`${quote.id}-${String(quote.updatedAt)}`}
+        action={draftAction}
         id={quote.id}
         kind="angebot"
         initial={{
@@ -38,28 +43,45 @@ function QuotePage() {
           serviceTo: quote.serviceTo,
           paymentTermDays: 0,
           format: "zugferd",
+          intro: quote.intro,
           note: quote.note,
+          buyerOrderReference: quote.buyerOrderReference,
+          sellerOrderReference: quote.sellerOrderReference,
+          despatchAdviceReference: quote.despatchAdviceReference,
           taxTreatment: quote.taxTreatment,
           exemptionReason: quote.exemptionReason,
           priceMode: quote.priceMode,
           language: quote.language,
+          discount: discountFromColumns(quote.discountPercent, quote.discountAmount),
+          paymentPlan: quote.paymentPlan,
+          paymentPlanInConfirmation: quote.paymentPlanInConfirmation,
           lines: data.lines.map((line) => ({
             description: line.description,
+            detail: line.detail,
+            itemNumber: line.itemNumber,
             quantity: line.quantity,
             unit: line.unit as UnitLabel,
             unitPrice: line.unitPrice,
             taxRate: line.taxRate as 1900 | 700 | 0,
+            discount: discountFromColumns(line.discountPercent, line.discountAmount),
+            kind: line.kind,
           })),
         }}
+        planTemplates={data.planTemplates}
         contacts={data.contacts}
         seller={data.company}
         sellerIssues={data.sellerIssues}
+        letterIssues={data.letterIssues}
         issues={data.issues}
         numberCounters={data.numberCounters}
+        numberRunning={data.numberRunning}
+        numberFormat={data.numberFormat}
         corrects={null}
         bundesland={data.bundesland}
         kleinunternehmer={data.kleinunternehmer}
         articles={data.articles}
+        textBlocks={data.textBlocks}
+        attachments={<InvoiceAttachments kind="angebot" ownerId={quote.id} attachments={data.attachments} editable />}
       />
     );
   }
@@ -79,16 +101,29 @@ function FinalQuote({ data }: { data: Detail }) {
   const [mailing, setMailing] = useState(false);
   const [mailNotice, setMailNotice] = useState<string | null>(null);
   const buyer = quote.buyer as { name: string } | null;
+  // Auswahl optionaler und alternativer Positionen; fest, sobald eine Rechnung zum Angebot festgeschrieben ist
+  const hasChoices = data.lines.some((l) => l.kind !== null);
+  const choicesLocked = billing.some((b) => b.status === "final" && !b.cancelled);
+  const [chosen, setChosen] = useState<number[]>(data.choices);
+  const choicesChanged = chosen.length !== data.choices.length || chosen.some((p) => !data.choices.includes(p));
+  /** Auswahl, die mit Annahme und Rechnung gespeichert wird; null = unverändert lassen */
+  const choices = hasChoices && !choicesLocked ? chosen : null;
 
   const setDecision = (decision: "angenommen" | "abgelehnt" | null) =>
     run(async () => {
-      await decide({ data: { id: quote.id, decision } });
+      await decide({ data: { id: quote.id, decision, choices: decision === "angenommen" ? choices : null } });
       await router.invalidate();
     });
 
   const onInvoice = (variant: "abschlag" | "schluss" | null = null) =>
     run(async () => {
-      const created = await toInvoice({ data: { id: quote.id, variant } });
+      const created = await toInvoice({ data: { id: quote.id, variant, choices } });
+      await navigate({ to: "/rechnungen/$id", params: { id: created.id } });
+    });
+
+  const onPlanRow = (planRow: number) =>
+    run(async () => {
+      const created = await toInvoice({ data: { id: quote.id, variant: "abschlag", choices, planRow } });
       await navigate({ to: "/rechnungen/$id", params: { id: created.id } });
     });
 
@@ -105,7 +140,11 @@ function FinalQuote({ data }: { data: Detail }) {
           <div className="eyebrow">
             <Link to="/angebote">Angebote</Link> › Angebot
           </div>
-          <h1>Angebot {quote.number}</h1>
+          {/* Status neben der Überschrift wie bei der Rechnung: bleibt mit dem stehenden Kopf sichtbar */}
+          <div className="title-with-status">
+            <h1>Angebot {quote.number}</h1>
+            <QuoteStatus status={listStatus} />
+          </div>
         </div>
         <div className="actions">
           <a className="btn" href={`/api/angebot/${quote.id}?download`}>
@@ -196,6 +235,35 @@ function FinalQuote({ data }: { data: Detail }) {
             )}
           </section>
 
+          {hasChoices && (
+            <>
+              <QuoteChoices
+                lines={data.lines.map((l) => ({ position: l.position, description: l.description, kind: l.kind, net: l.net }))}
+                chosen={chosen}
+                onChange={setChosen}
+                locked={choicesLocked}
+              />
+              {quote.decision === "angenommen" && !invoice && !choicesLocked && choicesChanged && (
+                <div className="actions">
+                  <button type="button" className="btn" onClick={() => void setDecision("angenommen")} disabled={busy}>
+                    Auswahl speichern
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {data.plan && (
+            <QuotePlan
+              plan={data.plan}
+              taxed={quote.taxTreatment === "regulaer"}
+              canBill={quote.decision !== "abgelehnt" && !invoice}
+              busy={busy}
+              onAbschlag={(row) => void onPlanRow(row)}
+              onSchluss={() => void onInvoice("schluss")}
+            />
+          )}
+
           {billing.length > 0 && (
             <section className="card" aria-labelledby="billing-heading">
               <h2 id="billing-heading">Rechnungen zu diesem Angebot</h2>
@@ -262,6 +330,8 @@ function FinalQuote({ data }: { data: Detail }) {
             </dl>
           </section>
 
+          <InvoiceAttachments kind="angebot" ownerId={quote.id} attachments={data.attachments} editable={false} />
+
           <section className="card" aria-labelledby="mail-heading">
             <h2 id="mail-heading">Per E-Mail</h2>
             {data.mails.length > 0 ? (
@@ -273,6 +343,11 @@ function FinalQuote({ data }: { data: Detail }) {
                       {formatDateTime(m.createdAt)}
                       {!m.ok && ` · ${m.error}`}
                     </span>
+                    {m.attachments.length > 0 && (
+                      <span className="small muted" style={{ display: "block" }}>
+                        Anhang: {m.attachments.join(", ")}
+                      </span>
+                    )}
                   </span>
                   <span className={`pill ${m.ok ? "pill-ok" : "pill-danger"}`}>{m.ok ? "Gesendet" : "Fehlgeschlagen"}</span>
                 </div>

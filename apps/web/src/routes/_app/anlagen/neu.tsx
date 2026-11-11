@@ -1,3 +1,4 @@
+import { currentYear, elektroAvailable, isKapitalgesellschaft } from "@haben/core";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { AssetForm } from "../../../components/AssetForm.tsx";
@@ -11,10 +12,11 @@ export const Route = createFileRoute("/_app/anlagen/neu")({
 });
 
 function NewAssetPage() {
+  const { rechtsform } = Route.useRouteContext();
   const navigate = useNavigate();
   const create = useServerFn(createAssetFn);
   const { busy, notice, run } = useAction();
-  const year = new Date().getFullYear();
+  const year = currentYear();
 
   return (
     <>
@@ -37,6 +39,9 @@ function NewAssetPage() {
               acquisitionDate: "",
               cost: 0,
               usefulLifeMonths: 72,
+              degressiveRate: null,
+              linearFromYear: null,
+              memoValue: false,
               openingDate: `${year}-01-01`,
               openingBookValue: 0,
               disposalDate: null,
@@ -44,8 +49,11 @@ function NewAssetPage() {
               note: "",
             }}
             locked={false}
+            privateUseAvailable={!isKapitalgesellschaft(rechtsform)}
+            elektroOffered={elektroAvailable(rechtsform)}
             privateUseLocked={false}
             lifeEditable
+            switchEditable
             showOpening
             submitLabel="Anlage übernehmen"
             busy={busy}
@@ -61,13 +69,13 @@ function NewAssetPage() {
         <aside className="card stack" aria-label="Hinweise">
           <h2>Aus Lexoffice übernehmen</h2>
           <p className="small" style={{ margin: 0 }}>
-            Die Lexoffice-Schnittstelle liefert kein Anlagenverzeichnis. Öffne in Lexoffice das Anlagenverzeichnis
-            und übertrage je Anlage Bezeichnung, Anschaffungsdatum, Anschaffungskosten, Nutzungsdauer und den Buchwert zum 31.12. des
-            letzten Jahres, das Lexoffice abgeschlossen hat. Als Stichtag nimmst du den 01.01. des Folgejahres.
+            Die Lexoffice-Schnittstelle liefert kein Anlagenverzeichnis. Öffne in Lexoffice das Anlagenverzeichnis und übertrage je Anlage Bezeichnung,
+            Anschaffungsdatum, Anschaffungskosten, Nutzungsdauer und den Buchwert zum 31.12. des letzten Jahres, das Lexoffice abgeschlossen hat. Als Stichtag
+            nimmst du den 01.01. des Folgejahres.
           </p>
           <p className="small muted" style={{ margin: 0 }}>
-            Neue Anschaffungen legst du nicht hier an: Buche den Beleg mit der Kategorie „Anlagegut“, dann entsteht die Anlage mit dem
-            Beleg. Geringwertige Wirtschaftsgüter aus Vorjahren sind schon voll abgeschrieben und müssen nicht übernommen werden.
+            Neue Anschaffungen legst du nicht hier an: Buche den Beleg mit der Kategorie „Anlagegut“, dann entsteht die Anlage mit dem Beleg. Geringwertige
+            Wirtschaftsgüter aus Vorjahren sind schon voll abgeschrieben und müssen nicht übernommen werden.
           </p>
         </aside>
       </div>

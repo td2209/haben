@@ -2,7 +2,7 @@ import { EricGeprueftClient } from "../../test-eric.ts";
 import type { BelegabrufResult, ElsterClient } from "@haben/elster";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Belegabruf VaSt (Postgres)", () => {
   let vast: typeof import("./vast.ts");
@@ -11,7 +11,15 @@ describe.skipIf(!testDatabaseUrl)("Belegabruf VaSt (Postgres)", () => {
   let taxpayer: typeof import("../stammdaten/taxpayer.ts");
   let sql: postgres.Sql;
   const actor = "test-user";
-  const person = (idnr: string, vorname: string) => ({ idnr, anrede: "Frau" as const, vorname, name: "Muster", geburtsdatum: "1980-01-01", religion: "11", beruf: "" });
+  const person = (idnr: string, vorname: string) => ({
+    idnr,
+    anrede: "Frau" as const,
+    vorname,
+    name: "Muster",
+    geburtsdatum: "1980-01-01",
+    religion: "11",
+    beruf: "",
+  });
 
   beforeAll(async () => {
     sql = await setupTestDb();
@@ -26,7 +34,7 @@ describe.skipIf(!testDatabaseUrl)("Belegabruf VaSt (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate elster_certificates, company, vast_belege, vast_requests cascade`;
+    await leeren(sql)`truncate elster_certificates, company, vast_belege, vast_requests cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, steuernummer, bundesland) values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', '198/113/10010', 'BY')`;
     await taxpayer.saveTaxpayer(actor, { a: person("65929970489", "Erika") });
     await sql`insert into elster_certificates (filename, ciphertext) values ('test.pfx', ${crypto.encrypt(new Uint8Array([1]))})`;
@@ -105,6 +113,16 @@ describe.skipIf(!testDatabaseUrl)("Belegabruf VaSt (Postgres)", () => {
     expect(belege.every((b) => !b.test)).toBe(true);
   });
 
+  it("GmbH und UG: kein Belegabruf, die vorausgefüllte Steuererklärung gibt es nur für die Einkommensteuer", async () => {
+    await sql`update company set rechtsform = 'ug'`;
+    const calls: { idnr: string; test: boolean; pin: string }[] = [];
+    await expect(vast.fetchVastBelege(actor, scriptedClient(calls), { kind: "test", year: 2025, person: "a", pin: "1234" })).rejects.toThrow(
+      /nur im Einzelunternehmen/,
+    );
+    expect(calls).toEqual([]);
+    expect(await sql`select id from vast_requests`).toEqual([]);
+  });
+
   it("nimmt die gespeicherte PIN, wenn keine eingegeben ist", async () => {
     await sql`update elster_certificates set pin_ciphertext = ${crypto.encrypt(new TextEncoder().encode("gespeichert"))}`;
     const calls: { idnr: string; test: boolean; pin: string }[] = [];
@@ -118,7 +136,7 @@ describe.skipIf(!testDatabaseUrl)("Belegabruf VaSt (Postgres)", () => {
     await expect(vast.fetchVastBelege(actor, fake, { kind: "test", year: 2025, person: "a" })).rejects.toThrow(/PIN/);
     await expect(vast.fetchVastBelege(actor, fake, { kind: "send", year: 2025, person: "a", pin: "1", herstellerId: "12345" })).rejects.toThrow(/Ohne ERiC/);
     await expect(vast.fetchVastBelege(actor, fake, { kind: "send", year: 2025, person: "a", pin: "1" })).rejects.toThrow(/Hersteller-ID/);
-    await sql`truncate elster_certificates`;
+    await leeren(sql)`truncate elster_certificates`;
     await expect(vast.fetchVastBelege(actor, fake, { kind: "test", year: 2025, person: "a", pin: "1" })).rejects.toThrow(/Zertifikat/);
   });
 
@@ -126,7 +144,12 @@ describe.skipIf(!testDatabaseUrl)("Belegabruf VaSt (Postgres)", () => {
     const client = scriptedClient();
     const failing: ElsterClient = {
       ...client,
-      fetchBelege: async (input) => ({ ...elster.failure("Keine Berechtigung", 610301200), requestXml: elster.buildVastAnfrageXml(input), liste: [], belege: [] }),
+      fetchBelege: async (input) => ({
+        ...elster.failure("Keine Berechtigung", 610301200),
+        requestXml: elster.buildVastAnfrageXml(input),
+        liste: [],
+        belege: [],
+      }),
     };
     const summary = await vast.fetchVastBelege(actor, failing, { kind: "test", year: 2025, person: "a", pin: "1" });
     expect(summary).toMatchObject({ ok: false, message: "Keine Berechtigung", neu: 0 });

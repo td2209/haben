@@ -1,4 +1,4 @@
-import { formatEuro, formatQuantity, formatRate, treatmentNote, type Cents, type Millis, type TaxTreatment, type UnitLabel } from "@haben/core";
+import { formatEuro, formatPercent, formatQuantity, formatRate, treatmentNote, type Cents, type Millis, type TaxTreatment, type UnitLabel } from "@haben/core";
 import type { InvoiceKind } from "./types.ts";
 
 /** Sprache der Belege für den Kunden; XML und Buchhaltung bleiben unverändert */
@@ -18,6 +18,8 @@ const EN_UNITS: Record<UnitLabel, [string, string]> = {
 const EN_NOTES: Record<Exclude<TaxTreatment, "regulaer">, string> = {
   reverse_charge: "Reverse charge: VAT liability of the recipient (Art. 196 VAT Directive).",
   drittland: "Not taxable in Germany (place of supply outside the EU).",
+  ig_lieferung: "VAT-exempt intra-Community supply of goods (Art. 138 VAT Directive; § 4 No. 1(b), § 6a UStG).",
+  ausfuhr: "VAT-exempt export of goods outside the EU (Art. 146 VAT Directive; § 4 No. 1(a), § 6 UStG).",
   steuerfrei: "VAT exempt under § 4 UStG.",
   kleinunternehmer: "No VAT is charged under § 19 UStG (small business).",
 };
@@ -35,6 +37,7 @@ export const TEXTS = {
     quoteRef: "Zu Angebot",
     invoiceRef: "Zu Rechnung",
     deliveryDate: "Lieferdatum",
+    orderReferences: { buyerOrder: "Ihre Bestellung", sellerOrder: "Unser Auftrag", despatchAdvice: "Lieferschein" },
     orderTotal: "Auftragssumme",
     confirmationText: "Vielen Dank für Ihren Auftrag. Wir bestätigen ihn mit den oben genannten Positionen und Preisen.",
     received: "Leistung vollständig und ordnungsgemäß erhalten:",
@@ -52,9 +55,22 @@ export const TEXTS = {
     customerNumber: "Kundennummer",
     leitwegId: "Leitweg-ID",
     buyerVatId: "Ihre USt-IdNr.",
-    columns: { pos: "Pos.", description: "Beschreibung", quantity: "Menge", unitPrice: "Einzelpreis", vat: "USt", net: "Netto" },
+    columns: { pos: "Pos.", itemNumber: "Art.-Nr.", description: "Beschreibung", quantity: "Menge", unitPrice: "Einzelpreis", vat: "USt", net: "Netto" },
     grossColumn: "Brutto",
     totalNet: "Summe netto",
+    subtotal: "Zwischensumme",
+    documentDiscount: (label: string | null) => (label ? `Gesamtrabatt ${label}` : "Gesamtrabatt"),
+    lineDiscount: (label: string, amount: string | null) => `abzüglich ${label} Rabatt${amount ? ` (${amount})` : ""}`,
+    optionalTag: "Optional, nicht in der Angebotssumme",
+    alternativeTag: (position: string) => `Alternative zu Pos. ${position}, nicht in der Angebotssumme`,
+    plan: {
+      title: "Zahlungsplan",
+      columns: { label: "Zahlung", due: "Fällig bei", share: "Anteil", amount: "Betrag" },
+      rest: "Rest",
+      netAndGross: (net: string, gross: string) => `${net} netto (${gross} brutto)`,
+    },
+    planAbschlag: (n: number, label: string, share: string | null, quote: string, date: string) =>
+      `${n}. ${label}${share ? ` ${share}` : ""} gemäß Angebot ${quote} vom ${date}`,
     inclVat: (label: string) => `${label} (inkl. USt)`,
     included: "darin enthalten",
     includedNet: (rate?: string) => (rate ? `Netto ${rate}` : "Netto"),
@@ -70,11 +86,27 @@ export const TEXTS = {
     refund: "Der Betrag wird Ihnen erstattet.",
     noPayment: "Es ist keine Zahlung erforderlich.",
     payBy: (date: string) => `Bitte überweisen Sie den Betrag bis zum ${date} unter Angabe der Rechnungsnummer.`,
+    /** Vorabankündigung der Lastschrift (Pre-notification, SDD Core Rulebook PT-04.02): Betrag, Tag, Mandat, Gläubiger-ID */
+    directDebit: (amount: string, date: string, iban: string, reference: string, creditorId: string) =>
+      `Den Betrag von ${amount} ziehen wir am ${date} per SEPA-Lastschrift von Ihrem Konto ${iban} ein (Mandatsreferenz ${reference}, Gläubiger-ID ${creditorId}). Bitte sorgen Sie für Deckung; überweisen Sie den Betrag nicht.`,
+    skonto: (percent: string, date: string, amount: string, payable: string) =>
+      `Bei Zahlung bis zum ${date} gewähren wir ${percent} Skonto (${amount}); Sie überweisen dann ${payable}.`,
+    percent: (percent: number) => formatPercent(percent),
     quoteValid: (date: string) => `Dieses Angebot gilt bis zum ${date}. Wir freuen uns auf Ihren Auftrag.`,
     girocodeText: (number: string) => `Rechnung ${number}`,
+    /** Entwurfs-PDF: Vermerk über jeder Seite und statt der Nummer, Platzhalter des GiroCodes, Teil des Dateinamens */
+    draft: { mark: "ENTWURF", girocode: "erscheint im endgültigen PDF", file: "Entwurf" },
     phone: "Tel.",
+    accountHolder: "Kontoinhaber",
     taxNumber: "Steuernummer",
     vatId: "USt-IdNr.",
+    legal: {
+      legalForm: "Rechtsform",
+      seat: "Sitz der Gesellschaft",
+      registerCourt: "Registergericht",
+      managingDirectors: "Geschäftsführung",
+      supervisoryBoardChair: "Vorsitz des Aufsichtsrats",
+    },
     page: (n: string, total: string) => `Seite ${n} von ${total}`,
     date: (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`,
     money: (cents: Cents) => formatEuro(cents),
@@ -84,7 +116,10 @@ export const TEXTS = {
     countryLocale: "de",
   },
   en: {
-    titles: { rechnung: "Invoice", storno: "Cancellation invoice", korrektur: "Corrective invoice", angebot: "Quote" } as Record<InvoiceKind | "angebot", string>,
+    titles: { rechnung: "Invoice", storno: "Cancellation invoice", korrektur: "Corrective invoice", angebot: "Quote" } as Record<
+      InvoiceKind | "angebot",
+      string
+    >,
     variants: { abschlag: "Partial invoice", schluss: "Final invoice" },
     confirmation: "Order confirmation",
     deliveryNote: "Delivery note",
@@ -92,6 +127,7 @@ export const TEXTS = {
     quoteRef: "Quote",
     invoiceRef: "Invoice",
     deliveryDate: "Delivery date",
+    orderReferences: { buyerOrder: "Your order", sellerOrder: "Our order", despatchAdvice: "Delivery note" },
     orderTotal: "Order total",
     confirmationText: "Thank you for your order. We hereby confirm it with the items and prices listed above.",
     received: "Received in full and in good order:",
@@ -109,9 +145,22 @@ export const TEXTS = {
     customerNumber: "Customer number",
     leitwegId: "Leitweg ID",
     buyerVatId: "Your VAT ID",
-    columns: { pos: "No.", description: "Description", quantity: "Qty", unitPrice: "Unit price", vat: "VAT", net: "Net" },
+    columns: { pos: "No.", itemNumber: "Item no.", description: "Description", quantity: "Qty", unitPrice: "Unit price", vat: "VAT", net: "Net" },
     grossColumn: "Gross",
     totalNet: "Total net",
+    subtotal: "Subtotal",
+    documentDiscount: (label: string | null) => (label ? `Discount ${label}` : "Discount"),
+    lineDiscount: (label: string, amount: string | null) => `less ${label} discount${amount ? ` (${amount})` : ""}`,
+    optionalTag: "Optional, not included in the quote total",
+    alternativeTag: (position: string) => `Alternative to item ${position}, not included in the quote total`,
+    plan: {
+      title: "Payment schedule",
+      columns: { label: "Payment", due: "Due on", share: "Share", amount: "Amount" },
+      rest: "Balance",
+      netAndGross: (net: string, gross: string) => `${net} net (${gross} gross)`,
+    },
+    planAbschlag: (n: number, label: string, share: string | null, quote: string, date: string) =>
+      `${n}. ${label}${share ? ` ${share}` : ""} as per quote ${quote} of ${date}`,
     inclVat: (label: string) => `${label} (incl. VAT)`,
     included: "included",
     includedNet: (rate?: string) => (rate ? `Net ${rate}` : "Net"),
@@ -127,15 +176,33 @@ export const TEXTS = {
     refund: "The amount will be refunded to you.",
     noPayment: "No payment is required.",
     payBy: (date: string) => `Please transfer the amount by ${date}, quoting the invoice number.`,
+    directDebit: (amount: string, date: string, iban: string, reference: string, creditorId: string) =>
+      `The amount of ${amount} will be collected by SEPA direct debit on ${date} from your account ${iban} (mandate reference ${reference}, creditor identifier ${creditorId}). Please ensure sufficient funds; do not transfer the amount.`,
+    skonto: (percent: string, date: string, amount: string, payable: string) =>
+      `If paid by ${date}, you may deduct a ${percent} cash discount (${amount}) and transfer ${payable}.`,
+    percent: (percent: number) => `${new Intl.NumberFormat("en-GB", { maximumFractionDigits: 2 }).format(percent / 100)}%`,
     quoteValid: (date: string) => `This quote is valid until ${date}. We look forward to your order.`,
     girocodeText: (number: string) => `Invoice ${number}`,
+    draft: { mark: "DRAFT", girocode: "appears in the final PDF", file: "Draft" },
     phone: "Phone",
+    accountHolder: "Account holder",
     taxNumber: "Tax number",
     vatId: "VAT ID",
+    legal: {
+      legalForm: "Legal form",
+      seat: "Registered office",
+      registerCourt: "Register court",
+      managingDirectors: "Managing directors",
+      supervisoryBoardChair: "Chair of the supervisory board",
+    },
     page: (n: string, total: string) => `Page ${n} of ${total}`,
     date: (iso: string) => {
       const [y, m, d] = isoParts(iso);
-      return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
+      // ICU liefert je nach Plattform „Sep“ oder „Sept“; Belege und E-Mails verwenden einheitlich „Sept“.
+      return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+        .formatToParts(new Date(Date.UTC(y, m - 1, d)))
+        .map((part) => (part.type === "month" && part.value === "Sep" ? "Sept" : part.value))
+        .join("");
     },
     money: (cents: Cents) => new Intl.NumberFormat("en-GB", { style: "currency", currency: "EUR" }).format(cents / 100),
     rate: (rate: number) => `${rate / 100} %`,

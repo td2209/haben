@@ -1,4 +1,7 @@
 import { INTERNAL_ERROR, isUniqueViolation, UserError, userMessage } from "../../errors.ts";
+import { datevGuidFound, datevInternalId, datevVoucherFound, datevWithoutReceipt, truncatedNumberMatches } from "./datev-belegnummer.ts";
+import { effectivePayment, paymentHistoryIssue, unclearFrom, visiblePayment } from "./payment-history.ts";
+import { effectiveContactName, effectiveDirection, effectiveTaxes, effectiveType } from "./sevdesk-richtung.ts";
 import {
   datevYearSums,
   LexofficeApiError,
@@ -9,17 +12,30 @@ import {
   mapVoucher,
   type LegacyVoucher,
   type LexFile,
+  readWebExport,
   type LexofficeClientOptions,
+  type LexofficeSource,
+  webExportSource,
 } from "@haben/import";
-import { legacyVatByMonth, type Versteuerung } from "@haben/core";
+import {
+  LEGACY_PAYMENT_TYPES,
+  legacyNeutralKind,
+  legacyNeutralSums,
+  legacyVatByMonth,
+  type LegacyNeutralKind,
+  type LegacyNeutralSum,
+  type Rechtsform,
+  type Versteuerung,
+} from "@haben/core";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { loadCompany } from "../stammdaten/index.ts";
 import { decrypt, encrypt } from "../../crypto.ts";
 import { withActor } from "../../db/actor.ts";
 import { env } from "../../env.ts";
 import { db, schema } from "../../db/index.ts";
-import type { LegacyPayment, LegacyTaxRow, LexofficeImportProgress } from "../../db/schema.ts";
-import { sha256Of, sniff, storeFile } from "../../storage.ts";
+import type { LegacyCategoryRow, LegacyPayment, LegacySource, LegacyTaxRow, LexofficeImportProgress } from "../../db/schema.ts";
+import { sniff } from "../../storage.ts";
+import { storeLegacyVoucher } from "./legacy-store.ts";
 import { latestSevdeskImport } from "./sevdesk.ts";
 
 export class LexofficeError extends UserError {}
@@ -106,12 +122,26 @@ export async function latestImport() {
 const running = new Map<string, AbortController>();
 
 /**
- * Startet den Abruf im Hintergrund. Schon übernommene Belege werden übersprungen, ein neuer Lauf setzt
- * also nach einem Abbruch fort. Gibt die ID des Laufs zurück; den Fortschritt liefert latestImport().
+ * Startet den Abruf über die Public API im Hintergrund. Schon übernommene Belege werden übersprungen, ein neuer Lauf
+ * setzt also nach einem Abbruch fort. Gibt die ID des Laufs zurück; den Fortschritt liefert latestImport().
  */
 export async function startImport(actor: string, options: { wait?: boolean } = {}): Promise<string> {
   const key = await apiKey();
   if (!key) throw new LexofficeError("Zuerst den API-Schlüssel hinterlegen.");
+  return launchImport(actor, (signal) => clientFactory({ apiKey: key, signal }), options);
+}
+
+/**
+ * Übernimmt eine Sicherung aus der Web-Oberfläche (Skript lexware-sicherung.js, für Tarife ohne Public API).
+ * Derselbe Ablauf wie beim Abruf über die API: Kontakte, Belege mit Zahlungen und Dateien; Vorhandenes wird
+ * übersprungen, Teile dürfen nacheinander kommen.
+ */
+export async function startWebImport(actor: string, parts: { name: string; bytes: Uint8Array }[], options: { wait?: boolean } = {}): Promise<string> {
+  const source = webExportSource(readWebExport(parts));
+  return launchImport(actor, () => source, options);
+}
+
+async function launchImport(actor: string, sourceFor: (signal: AbortSignal) => LexofficeSource, options: { wait?: boolean }): Promise<string> {
   const current = await latestImport();
   if (current?.status === "laeuft") throw new LexofficeError("Ein Abruf läuft bereits.");
   // Der eindeutige Index gilt für beide Quellen: auch einen verwaisten sevDesk-Lauf als abgebrochen markieren
@@ -126,18 +156,18 @@ export async function startImport(actor: string, options: { wait?: boolean } = {
     files: 0,
     failed: [],
   };
-  const [row] = await withActor(actor, (tx) =>
-    tx.insert(schema.lexofficeImports).values({ progress }).returning({ id: schema.lexofficeImports.id }),
-  ).catch((error: unknown) => {
-    // Gleichzeitig gestartet: der eindeutige Index lässt nur einen laufenden Abruf zu
-    if (isUniqueViolation(error, "lexoffice_imports_one_running")) throw new LexofficeError("Ein Abruf läuft bereits.");
-    throw error;
-  });
+  const [row] = await withActor(actor, (tx) => tx.insert(schema.lexofficeImports).values({ progress }).returning({ id: schema.lexofficeImports.id })).catch(
+    (error: unknown) => {
+      // Gleichzeitig gestartet: der eindeutige Index lässt nur einen laufenden Abruf zu
+      if (isUniqueViolation(error, "lexoffice_imports_one_running")) throw new LexofficeError("Ein Abruf läuft bereits.");
+      throw error;
+    },
+  );
   const id = row!.id;
   const controller = new AbortController();
   running.set(id, controller);
-  const client = clientFactory({ apiKey: key, signal: controller.signal });
-  const job = runImport(actor, id, client, progress, controller.signal)
+  const source = sourceFor(controller.signal);
+  const job = runImport(actor, id, source, progress, controller.signal)
     .then(() => finish(id, progress, "fertig", null))
     .catch((error: unknown) =>
       finish(id, progress, controller.signal.aborted ? "abgebrochen" : "fehler", controller.signal.aborted ? "Abgebrochen." : progressMessage(error)),
@@ -164,7 +194,7 @@ export async function finish(id: string, progress: LexofficeImportProgress, stat
     .where(eq(schema.lexofficeImports.id, id));
 }
 
-async function runImport(actor: string, importId: string, client: LexofficeClient, progress: LexofficeImportProgress, signal: AbortSignal) {
+async function runImport(actor: string, importId: string, client: LexofficeSource, progress: LexofficeImportProgress, signal: AbortSignal) {
   let lastSave = 0;
   const save = async (force = false) => {
     if (!force && Date.now() - lastSave < 1000) return;
@@ -174,12 +204,11 @@ async function runImport(actor: string, importId: string, client: LexofficeClien
 
   // 1. Kontakte: vorhandene über die Lexoffice-ID überspringen, gleichnamige ohne ID verknüpfen
   for await (const raw of client.contacts()) {
+    // Die Sicherung aus der Web-Oberfläche liest ohne Netz und kennt das Signal nicht: selbst prüfen
+    signal.throwIfAborted();
     const contact = mapContact(raw);
     await withActor(actor, async (tx) => {
-      const [known] = await tx
-        .select({ id: schema.contacts.id })
-        .from(schema.contacts)
-        .where(eq(schema.contacts.lexofficeId, contact.lexofficeId));
+      const [known] = await tx.select({ id: schema.contacts.id }).from(schema.contacts).where(eq(schema.contacts.lexofficeId, contact.lexofficeId));
       if (known) return;
       const [sameName] = await tx
         .select({ id: schema.contacts.id })
@@ -187,13 +216,26 @@ async function runImport(actor: string, importId: string, client: LexofficeClien
         .where(and(isNull(schema.contacts.lexofficeId), sql`lower(${schema.contacts.name}) = lower(${contact.name})`))
         .limit(1);
       if (sameName) {
-        await tx.update(schema.contacts).set({ lexofficeId: contact.lexofficeId }).where(eq(schema.contacts.id, sameName.id));
+        // Rollen nur ergänzen: Lieferant in Lexoffice wird auch hier Lieferant, die Kundenrolle bleibt
+        await tx
+          .update(schema.contacts)
+          .set({
+            lexofficeId: contact.lexofficeId,
+            ...(contact.isVendor
+              ? { isSupplier: true, lieferantennummer: sql`coalesce(${schema.contacts.lieferantennummer}, ${contact.lieferantennummer})` }
+              : {}),
+          })
+          .where(eq(schema.contacts.id, sameName.id));
         progress.contactsLinked += 1;
         return;
       }
       await tx.insert(schema.contacts).values({
         lexofficeId: contact.lexofficeId,
         kundennummer: contact.kundennummer,
+        // Ohne Rolle in Lexoffice gilt der Kontakt wie bisher als Kunde
+        isCustomer: contact.isCustomer || !contact.isVendor,
+        isSupplier: contact.isVendor,
+        lieferantennummer: contact.lieferantennummer,
         name: contact.name,
         strasse: contact.strasse,
         plz: contact.plz,
@@ -219,14 +261,13 @@ async function runImport(actor: string, importId: string, client: LexofficeClien
     progress.listed = listed.length;
     await save();
   }
-  const done = new Set(
-    (await db.select({ id: schema.lexofficeVouchers.lexofficeId }).from(schema.lexofficeVouchers)).map((r) => r.id),
-  );
+  const done = new Set((await db.select({ id: schema.lexofficeVouchers.lexofficeId }).from(schema.lexofficeVouchers)).map((r) => r.id));
 
   // 3. Je Beleg Details, Zahlungen und Dateien; Fehler einzelner Belege halten den Lauf nicht auf
   progress.phase = "belege";
   await save(true);
   for (const item of listed) {
+    signal.throwIfAborted();
     if (done.has(item.id)) {
       progress.skipped += 1;
       continue;
@@ -250,7 +291,7 @@ async function runImport(actor: string, importId: string, client: LexofficeClien
 async function importVoucher(
   actor: string,
   importId: string,
-  client: LexofficeClient,
+  client: LexofficeSource,
   item: { id: string; type: string },
   categories: Map<string, string>,
   progress: LexofficeImportProgress,
@@ -274,15 +315,13 @@ async function importVoucher(
   }
   const payments = await client.payments(item.id);
 
-  for (const entry of files) await storeFile(entry.file.bytes);
-
   return withActor(actor, async (tx) => {
     const [contact] = voucher.contactLexofficeId
       ? await tx.select({ id: schema.contacts.id }).from(schema.contacts).where(eq(schema.contacts.lexofficeId, voucher.contactLexofficeId))
       : [];
-    const [row] = await tx
-      .insert(schema.lexofficeVouchers)
-      .values({
+    const row = await storeLegacyVoucher(
+      tx,
+      {
         lexofficeId: voucher.lexofficeId,
         importId,
         type: voucher.type,
@@ -304,26 +343,17 @@ async function importVoucher(
         payment: payments ? mapPayments(payments) : null,
         remark: voucher.remark,
         raw: raw as Record<string, unknown>,
-      })
-      .onConflictDoNothing({ target: schema.lexofficeVouchers.lexofficeId })
-      .returning({ id: schema.lexofficeVouchers.id });
-    if (!row) return false;
-    const seen = new Set<string>();
-    for (const entry of files) {
-      const sha256 = sha256Of(entry.file.bytes);
-      if (seen.has(sha256)) continue;
-      seen.add(sha256);
-      await tx.insert(schema.lexofficeVoucherFiles).values({
-        voucherId: row.id,
+      },
+      files.map((entry) => ({
         role: entry.role,
-        lexofficeFileId: entry.lexofficeFileId,
-        filename: (entry.file.filename ?? fallbackName(voucher, entry.role, entry.file.bytes)).slice(0, 200),
-        mimeType: entry.file.mimeType.split(";")[0]!.trim() || "application/octet-stream",
-        sha256,
-        size: entry.file.bytes.byteLength,
-      });
-      progress.files += 1;
-    }
+        sourceFileId: entry.lexofficeFileId,
+        filename: entry.file.filename ?? fallbackName(voucher, entry.role, entry.file.bytes),
+        mimeType: entry.file.mimeType,
+        bytes: entry.file.bytes,
+      })),
+    );
+    if (!row) return false;
+    progress.files += row.files;
     return true;
   });
 }
@@ -342,7 +372,7 @@ export async function listLegacyVouchers(filter: { year: number; direction: "all
   const term = filter.search.trim() ? `%${filter.search.trim()}%` : null;
   const rows = await db.execute<{
     id: string;
-    source: "lexoffice" | "sevdesk";
+    source: LegacySource;
     type: string;
     direction: "einnahme" | "ausgabe";
     number: string;
@@ -354,13 +384,13 @@ export async function listLegacyVouchers(filter: { year: number; direction: "all
     gross: number;
     files: number;
   }>(sql`
-    select v.id, v.source, v.type, v.direction, v.number, v.date::text as date, v.status, v.contact_name, v.net, v.tax, v.gross,
+    select v.id, v.source, ${effectiveType("v")} as type, ${effectiveDirection("v")} as direction, v.number, v.date::text as date, v.status, ${effectiveContactName("v")} as contact_name, v.net, v.tax, v.gross,
       (select count(*)::int from lexoffice_voucher_files f where f.voucher_id = v.id) as files
     from lexoffice_vouchers v
     where v.date between ${`${filter.year}-01-01`} and ${`${filter.year}-12-31`}
-      ${filter.direction === "alle" ? sql`` : sql`and v.direction = ${filter.direction}`}
-      ${term ? sql`and (v.number ilike ${term} or v.contact_name ilike ${term} or v.remark ilike ${term})` : sql``}
-      ${filter.ohneDatei ? sql`and not exists (select 1 from lexoffice_voucher_files f where f.voucher_id = v.id)` : sql``}
+      ${filter.direction === "alle" ? sql`` : sql`and ${effectiveDirection("v")} = ${filter.direction}`}
+      ${term ? sql`and (v.number ilike ${term} or ${effectiveContactName("v")} ilike ${term} or v.remark ilike ${term})` : sql``}
+      ${filter.ohneDatei ? sql`and not exists (select 1 from lexoffice_voucher_files f where f.voucher_id = v.id) and not coalesce((v.raw->>'ohneBeleg')::boolean, false)` : sql``}
     order by v.date, v.number
     limit 1000`);
   return [...rows].map((r) => ({
@@ -385,8 +415,10 @@ export async function legacyVoucherDetail(id: string) {
       id: schema.lexofficeVouchers.id,
       lexofficeId: schema.lexofficeVouchers.lexofficeId,
       source: schema.lexofficeVouchers.source,
-      type: schema.lexofficeVouchers.type,
-      direction: schema.lexofficeVouchers.direction,
+      sourceName: sql<string | null>`case when ${schema.lexofficeVouchers.source} = 'import' then ${schema.lexofficeVouchers.raw}->>'sourceName' else null end`,
+      externalId: sql<string>`case when ${schema.lexofficeVouchers.source} = 'import' then ${schema.lexofficeVouchers.raw}->>'externalId' else ${schema.lexofficeVouchers.lexofficeId} end`,
+      type: effectiveType("lexoffice_vouchers"),
+      direction: effectiveDirection("lexoffice_vouchers"),
       number: schema.lexofficeVouchers.number,
       date: schema.lexofficeVouchers.date,
       dueDate: schema.lexofficeVouchers.dueDate,
@@ -394,14 +426,15 @@ export async function legacyVoucherDetail(id: string) {
       serviceTo: schema.lexofficeVouchers.serviceTo,
       status: schema.lexofficeVouchers.status,
       contactId: schema.lexofficeVouchers.contactId,
-      contactName: schema.lexofficeVouchers.contactName,
+      contactName: effectiveContactName("lexoffice_vouchers"),
       currency: schema.lexofficeVouchers.currency,
       net: schema.lexofficeVouchers.net,
       tax: schema.lexofficeVouchers.tax,
       gross: schema.lexofficeVouchers.gross,
-      taxes: schema.lexofficeVouchers.taxes,
+      taxes: effectiveTaxes("lexoffice_vouchers"),
       categories: schema.lexofficeVouchers.categories,
-      payment: schema.lexofficeVouchers.payment,
+      payment: effectivePayment("lexoffice_vouchers"),
+      payDate: sql<string | null>`${schema.lexofficeVouchers.raw}->>'payDate'`,
       remark: schema.lexofficeVouchers.remark,
       createdAt: schema.lexofficeVouchers.createdAt,
     })
@@ -419,7 +452,7 @@ export async function legacyVoucherDetail(id: string) {
     })
     .from(schema.lexofficeVoucherFiles)
     .where(eq(schema.lexofficeVoucherFiles.voucherId, id));
-  return { voucher, files };
+  return { voucher: { ...voucher, payment: visiblePayment(voucher), paymentHistoryIssue: paymentHistoryIssue(voucher) }, files };
 }
 
 export async function legacyVoucherFile(fileId: string) {
@@ -427,13 +460,11 @@ export async function legacyVoucherFile(fileId: string) {
   return file ?? null;
 }
 
-/** Zahlungsarten, die Geld bewegen; Skonto, Mahnkosten, Kursdifferenz und Forderungsausfall zählen nicht als Entgelt */
-const PAYMENT_ITEM_TYPES = new Set(["partPaymentFinancialTransaction", "partPaymentCashBox", "manualPayment", "partPaymentCreditNote"]);
-
 /** Zahlungen, die bei Ist-Versteuerung als Entgelt zählen, mit dem Vorzeichen des Belegs (Gutschriften mindern die Umsätze) */
-function legacyPayments(v: { gross: number; payment: LegacyPayment | null }) {
+function legacyPayments(v: { source: LegacySource; gross: number; status: string; payment: LegacyPayment | null }) {
+  if (paymentHistoryIssue(v)) return [];
   return (v.payment?.items ?? [])
-    .filter((p) => PAYMENT_ITEM_TYPES.has(p.type) && p.date)
+    .filter((p) => LEGACY_PAYMENT_TYPES.has(p.type) && p.date)
     .map((p) => ({ date: p.date, amount: Math.sign(v.gross) * Math.abs(p.amount) }));
 }
 
@@ -456,6 +487,14 @@ function taxTypeOf(t: string) {
 const TAX_TYPE = sql<string | null>`${taxTypeOf("lexoffice_vouchers")}`;
 const TAX_SUB_TYPE = sql<string | null>`lexoffice_vouchers.raw->'taxConditions'->>'taxSubType'`;
 
+/** Buchung ohne Beleg aus der Sicherung der Web-Oberfläche: hat keine Datei und braucht keine */
+const WITHOUT_RECEIPT = sql<boolean>`coalesce((lexoffice_vouchers.raw->>'ohneBeleg')::boolean, false)`;
+
+/** Weder Einnahme noch Ausgabe? Zur Laufzeit aus Kategorien und Rechtsform (legacyNeutralKind); die Rohdaten sind gesperrt */
+function neutralKindOf(v: { privat: boolean; categories: LegacyCategoryRow[]; tax: number }, rechtsform: Rechtsform): LegacyNeutralKind | null {
+  return legacyNeutralKind({ privat: v.privat, categories: v.categories.map((c) => c.name), tax: Number(v.tax) }, rechtsform);
+}
+
 export type ReconciliationCheck = { ok: boolean; label: string; detail: string };
 
 /** Abgleich je Geschäftsjahr: Was liegt vor, was fehlt noch vor der Kündigung? */
@@ -465,33 +504,55 @@ export async function reconciliation() {
 
   const voucherRows = await db
     .select({
-      direction: schema.lexofficeVouchers.direction,
-      type: schema.lexofficeVouchers.type,
+      source: schema.lexofficeVouchers.source,
+      lexofficeId: schema.lexofficeVouchers.lexofficeId,
+      direction: effectiveDirection("lexoffice_vouchers"),
+      type: effectiveType("lexoffice_vouchers"),
       number: schema.lexofficeVouchers.number,
       date: schema.lexofficeVouchers.date,
       status: schema.lexofficeVouchers.status,
       net: schema.lexofficeVouchers.net,
       tax: schema.lexofficeVouchers.tax,
       gross: schema.lexofficeVouchers.gross,
-      taxes: schema.lexofficeVouchers.taxes,
-      payment: schema.lexofficeVouchers.payment,
+      taxes: effectiveTaxes("lexoffice_vouchers"),
+      categories: schema.lexofficeVouchers.categories,
+      payment: effectivePayment("lexoffice_vouchers"),
+      payDate: sql<string | null>`lexoffice_vouchers.raw->>'payDate'`,
       taxType: TAX_TYPE,
       taxSubType: TAX_SUB_TYPE,
+      ohneBeleg: WITHOUT_RECEIPT,
+      privat: sql<boolean>`coalesce((lexoffice_vouchers.raw->>'privat')::boolean, false)`,
+      bbNeutral: sql<boolean>`coalesce((lexoffice_vouchers.raw->>'neutral')::boolean, false)`,
       // Spalte ausdrücklich qualifizieren: drizzle schreibt sonst nur "id", und das träfe f.id
       files: sql<number>`(select count(*)::int from lexoffice_voucher_files f where f.voucher_id = lexoffice_vouchers.id)`,
     })
     .from(schema.lexofficeVouchers);
+  // Archiviert, aber weder Einnahme noch Ausgabe: im Einzelunternehmen Privates und Geldtransit, in GmbH und UG
+  // Gesellschafter, Kapital, Darlehen und Steuern vom Einkommen; sie stehen je Jahr getrennt (neutral)
+  const classified = voucherRows.map((v) => ({ ...v, neutral: neutralKindOf(v, company.rechtsform) }));
+  // BuchhaltungsButler-Belege nur als Archiv (Suche, PDF): Einnahme, Ausgabe oder neutral ließe sich aus den Konten nur
+  // schätzen. Summen und Steuer kommen für diese Jahre aus dem DATEV-Buchungsstapel desselben Exports.
+  const figures = classified.filter((v) => v.source !== "buchhaltungsbutler");
+  const businessRows = figures.filter((v) => !v.neutral);
+  // Ohne Einzelzahlungen können selbst bereits vollständig bezahlte sevDesk-Rechnungen mehrere Monate betreffen.
+  // Gesperrt ist jedes Jahr, in das eine solche Zahlung fallen kann: bis zum Ausgleich, ohne Ausgleichsdatum alle.
+  const vatIssueOf = (year: number) => {
+    if (versteuerung !== "ist") return null;
+    if (businessRows.some((v) => v.direction === "einnahme" && unclearFrom(v, String(year)))) {
+      return "sevDesk-Zahlungshistorie unvollständig: Der Ist-Monatsabgleich ist bis zur Klärung der Einzelzahlungen gesperrt.";
+    }
+    return null;
+  };
 
   const bookingRows = await db.execute<{ year: number; total: number; unmatched: number; without_number: number }>(sql`
     select extract(year from b.date)::int as year, count(*)::int as total,
-      count(*) filter (where b.voucher_field1 <> '' and not exists (
-        select 1 from lexoffice_vouchers v where v.number <> ''
-          and lower(regexp_replace(v.number, '\\s+', '', 'g')) = lower(regexp_replace(b.voucher_field1, '\\s+', '', 'g'))))::int as unmatched,
-      count(*) filter (where b.voucher_field1 = '')::int as without_number
+      count(*) filter (where b.voucher_field1 <> '' and not ${datevInternalId("b.voucher_field1")}
+        and not ${datevVoucherFound("b.voucher_field1")}
+        and not ${datevGuidFound("b.document_link")}
+        and not ${datevWithoutReceipt(company.kontenrahmen, "b.contra_account", "b.file_id")})::int as unmatched,
+      count(*) filter (where b.voucher_field1 = '' or ${datevInternalId("b.voucher_field1")})::int as without_number
     from datev_bookings b group by 1`);
-  const files = await db
-    .select({ kind: schema.archiveFiles.kind, year: schema.archiveFiles.year })
-    .from(schema.archiveFiles);
+  const files = await db.select({ kind: schema.archiveFiles.kind, year: schema.archiveFiles.year }).from(schema.archiveFiles);
   const lastImport = await latestImport();
   // Für Jahre ohne Belege per API (Umzug nur über DATEV): Summen aus dem Buchungsstapel
   const datevRows = await db
@@ -503,9 +564,17 @@ export async function reconciliation() {
       contraAccount: schema.datevBookings.contraAccount,
       buKey: schema.datevBookings.buKey,
       accountLength: sql<number | null>`(${schema.archiveFiles.meta} -> 'header' ->> 'accountLength')::int`,
+      fileId: schema.datevBookings.fileId,
     })
     .from(schema.datevBookings)
     .leftJoin(schema.archiveFiles, eq(schema.archiveFiles.id, schema.datevBookings.fileId));
+
+  // DATEV-Stapel der BuchhaltungsButler-Importe, auch wenn die Datei schon vorher im Archiv lag
+  const bbImports = await db
+    .select({ progress: schema.lexofficeImports.progress })
+    .from(schema.lexofficeImports)
+    .where(eq(schema.lexofficeImports.source, "buchhaltungsbutler"));
+  const bbFileIds = new Set(bbImports.flatMap((i) => i.progress.datevFileIds ?? []));
 
   const years = new Set<number>();
   for (const v of voucherRows) years.add(Number(v.date.slice(0, 4)));
@@ -515,43 +584,57 @@ export async function reconciliation() {
   const result = [...years]
     .sort((a, b) => b - a)
     .map((year) => {
-      const vouchers = voucherRows.filter((v) => v.date.startsWith(`${year}-`));
-      const yearBookings = vouchers.length === 0 ? datevRows.filter((b) => b.date.startsWith(`${year}-`)) : [];
-      const fromDatev = yearBookings.length > 0 ? datevYearSums(yearBookings, company.kontenrahmen) : null;
+      const vouchers = businessRows.filter((v) => v.date.startsWith(`${year}-`));
+      // Alle Belege des Jahres, auch neutrale: Auch ein Körperschaftsteuerbescheid braucht seine Datei
+      const yearRows = classified.filter((v) => v.date.startsWith(`${year}-`));
+      const withoutReceipt = voucherRows.filter((v) => v.ohneBeleg && v.date.startsWith(`${year}-`)).length;
+      const yearDatev = datevRows.filter((b) => b.date.startsWith(`${year}-`));
+      // Accountable legt in den Belegen nur Ausgaben ab; die Erlöse stehen ausschließlich im
+      // Buchungsstapel. Ohne diese Ausnahme blieben die Einnahmen bei 0, obwohl die Buchung da ist.
+      const yearEinnahmeBelege = vouchers.some((v) => v.direction === "einnahme" && v.date.startsWith(`${year}-`));
+      const fromDatev = (vouchers.length === 0 || !yearEinnahmeBelege) && yearDatev.length > 0 ? datevYearSums(yearDatev, company.kontenrahmen) : null;
+      // Mischjahr (Wechsel unter dem Jahr): Belege aus Lexoffice oder sevDesk, dazu der BuchhaltungsButler-Teil aus dessen Stapel
+      const bbDatev = yearDatev.filter((b) => b.fileId !== null && bbFileIds.has(b.fileId));
+      const bbPart = !fromDatev && bbDatev.length > 0 ? datevYearSums(bbDatev, company.kontenrahmen) : null;
       const sum = (direction: "einnahme" | "ausgabe") => {
+        const pick = (sums: NonNullable<typeof fromDatev>) => (direction === "einnahme" ? sums.einnahmen : sums.ausgaben);
         if (fromDatev) {
-          const { net, tax } = direction === "einnahme" ? fromDatev.einnahmen : fromDatev.ausgaben;
+          const { net, tax } = pick(fromDatev);
           return { count: 0, net, tax, gross: net + tax };
         }
         const rows = vouchers.filter((v) => v.direction === direction);
+        const bb = bbPart ? pick(bbPart) : { net: 0, tax: 0 };
         return {
           count: rows.length,
-          net: rows.reduce((s, r) => s + r.net, 0),
-          tax: rows.reduce((s, r) => s + r.tax, 0),
-          gross: rows.reduce((s, r) => s + r.gross, 0),
+          net: rows.reduce((s, r) => s + r.net, 0) + bb.net,
+          tax: rows.reduce((s, r) => s + r.tax, 0) + bb.tax,
+          gross: rows.reduce((s, r) => s + r.gross, 0) + bb.net + bb.tax,
         };
       };
-      const withoutFile = vouchers.filter((v) => Number(v.files) === 0).length;
+      const withoutFile = yearRows.filter((v) => !v.ohneBeleg && Number(v.files) === 0).length;
       const unchecked = vouchers.filter((v) => v.status === "unchecked").length;
       const bookings = bookingRows.find((b) => Number(b.year) === year);
       const kinds = (kind: string) => files.filter((f) => f.year === year && f.kind === kind).length;
       // Ist-Versteuerung: Zahlungen aus dem Zahlungsstatus; sonst Belegdatum
-      const vat = legacyVatByMonth(
-        voucherRows
-          .filter((v) => (versteuerung === "ist" ? true : v.date.startsWith(`${year}-`)))
-          .map((v) => ({
-            direction: v.direction,
-            date: v.date,
-            net: v.net,
-            tax: v.tax,
-            gross: v.gross,
-            taxes: v.taxes,
-            payments: legacyPayments(v),
-            taxType: v.taxType,
-            taxSubType: v.taxSubType,
-          })),
-        versteuerung,
-      ).filter((m) => m.month.startsWith(`${year}-`));
+      const vatIssue = vatIssueOf(year);
+      const vat = vatIssue
+        ? []
+        : legacyVatByMonth(
+            businessRows
+              .filter((v) => (versteuerung === "ist" ? true : v.date.startsWith(`${year}-`)))
+              .map((v) => ({
+                direction: v.direction,
+                date: v.date,
+                net: v.net,
+                tax: v.tax,
+                gross: v.gross,
+                taxes: v.taxes,
+                payments: legacyPayments(v),
+                taxType: v.taxType,
+                taxSubType: v.taxSubType,
+              })),
+            versteuerung,
+          ).filter((m) => m.month.startsWith(`${year}-`));
       // Einnahmen je Steuerart, damit Sonderfälle (EU, Drittland, § 13b) beim Vergleich auffallen
       const taxTypes = new Map<string, number>();
       for (const v of vouchers) {
@@ -559,15 +642,31 @@ export async function reconciliation() {
         const key = [v.taxType ?? "net", v.taxSubType].filter(Boolean).join("/");
         taxTypes.set(key, (taxTypes.get(key) ?? 0) + 1);
       }
-      const invoices = vouchers
-        .filter((v) => v.type === "invoice" && v.number)
+      // Auch die Rechnungen aus BuchhaltungsButler: Der Nummernkreis läuft in Haben weiter (§ 14 Abs. 4 Satz 1 Nr. 4 UStG)
+      const invoices = [...vouchers, ...yearRows.filter((v) => v.source === "buchhaltungsbutler" && !v.bbNeutral)]
+        // Stornorechnung und Abschlagsrechnung von sevDesk belegen denselben Nummernkreis wie die Rechnungen (#472)
+        .filter(
+          (v) =>
+            v.number &&
+            (v.type === "invoice" ||
+              (v.source === "sevdesk" && (v.type === "downpaymentinvoice" || (v.type === "creditnote" && v.lexofficeId.startsWith("invoice/"))))),
+        )
         .sort((a, b) => a.date.localeCompare(b.date) || a.number.localeCompare(b.number, "de", { numeric: true }));
 
+      // Accountable exportiert keinen IDEA-Export. Den trotzdem zu verlangen, macht "vollständig"
+      // strukturell unerreichbar — der Punkt entfällt bei dieser Herkunft.
+      const nurAccountable = voucherRows.length > 0 && voucherRows.every((v) => v.source === "accountable");
       const checks: ReconciliationCheck[] = [
+        ...(vatIssue ? [{ ok: false, label: "Zahlungshistorie vollständig", detail: vatIssue }] : []),
         {
-          ok: vouchers.length > 0,
+          ok: vouchers.length > 0 || yearRows.some((v) => v.source === "buchhaltungsbutler"),
           label: "Belege und Rechnungen per API abgerufen",
-          detail: `${vouchers.length} Belege`,
+          detail: [
+            `${yearRows.filter((v) => !v.ohneBeleg).length} Belege`,
+            withoutReceipt > 0 ? `${withoutReceipt} ${withoutReceipt === 1 ? "Buchung" : "Buchungen"} ohne Beleg` : "",
+          ]
+            .filter(Boolean)
+            .join(", "),
         },
         {
           ok: withoutFile === 0,
@@ -592,7 +691,7 @@ export async function reconciliation() {
                 .join(", ")
             : "–",
         },
-        { ok: kinds("idea") > 0, label: "IDEA-Export archiviert", detail: kinds("idea") > 0 ? "liegt vor" : "fehlt" },
+        ...(nurAccountable ? [] : [{ ok: kinds("idea") > 0, label: "IDEA-Export archiviert", detail: kinds("idea") > 0 ? "liegt vor" : "fehlt" }]),
         {
           ok: kinds("elster") > 0,
           label: "ELSTER-Protokolle archiviert",
@@ -608,19 +707,24 @@ export async function reconciliation() {
         year,
         einnahmen: sum("einnahme"),
         ausgaben: sum("ausgabe"),
-        /** "datev": keine Belege per API, die Summen stammen aus dem Buchungsstapel */
-        sumsFrom: fromDatev ? ("datev" as const) : ("belege" as const),
+        /** Weder Einnahme noch Ausgabe, je Art: zum Vergleich sichtbar statt still weggelassen */
+        neutral: legacyNeutralSums(
+          figures.flatMap((v) => (v.neutral && v.date.startsWith(`${year}-`) ? [{ kind: v.neutral, direction: v.direction, gross: v.gross }] : [])),
+        ),
+        /** "datev": keine Belege per API, die Summen stammen aus dem Buchungsstapel; "gemischt": Belege und BB-Stapel */
+        sumsFrom: fromDatev ? ("datev" as const) : bbPart ? ("gemischt" as const) : ("belege" as const),
         withoutFile,
         unchecked,
         bookings: bookings ? { total: bookings.total, unmatched: bookings.unmatched, withoutNumber: bookings.without_number } : null,
         vat,
+        vatIssue,
         taxTypes: [...taxTypes].map(([taxType, count]) => ({ taxType, count })).sort((a, b) => b.count - a.count),
         lastInvoiceNumber: invoices.at(-1)?.number ?? null,
         checks,
         ready: checks.every((c) => c.ok),
       };
     });
-  return { versteuerung, years: result, lastImport };
+  return { versteuerung, rechtsform: company.rechtsform, years: result, lastImport };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -643,6 +747,7 @@ export interface LegacyVoucherForVat {
   taxSubType: string | null;
   /** Zahlungen, die bei Ist-Versteuerung als Entgelt zählen */
   payments: { date: string; amount: number }[];
+  paymentHistoryIssue: string | null;
   files: number;
 }
 
@@ -656,11 +761,31 @@ export async function legacyVouchersForPeriod(filter: {
   search: string;
   withPayments: boolean;
   limit: number;
-}): Promise<{ total: number; vouchers: LegacyVoucherForVat[] }> {
+}): Promise<{ total: number; vouchers: LegacyVoucherForVat[]; neutral: LegacyNeutralSum[] }> {
+  if (filter.withPayments) {
+    const sevdeskRows = await db
+      .select({
+        source: schema.lexofficeVouchers.source,
+        direction: effectiveDirection("lexoffice_vouchers"),
+        gross: schema.lexofficeVouchers.gross,
+        status: schema.lexofficeVouchers.status,
+        payment: effectivePayment("lexoffice_vouchers"),
+        payDate: sql<string | null>`${schema.lexofficeVouchers.raw}->>'payDate'`,
+      })
+      .from(schema.lexofficeVouchers)
+      .where(eq(schema.lexofficeVouchers.source, "sevdesk"));
+    // Wie der Abgleich: Bei Ist-Versteuerung zählen die Zahlungen nur auf der Einnahmenseite
+    if (sevdeskRows.some((v) => v.direction === "einnahme" && unclearFrom(v, filter.period))) {
+      throw new LexofficeError(
+        "sevDesk-Zahlungshistorie unvollständig: Eine zahlungsbezogene Zeitraumabfrage ist bis zur Klärung der Einzelzahlungen gesperrt.",
+      );
+    }
+  }
   const like = `${filter.period}%`;
   const term = filter.search.trim() ? `%${filter.search.trim()}%` : null;
   const rows = await db.execute<{
     id: string;
+    source: LegacySource;
     type: string;
     direction: "einnahme" | "ausgabe";
     number: string;
@@ -673,12 +798,14 @@ export async function legacyVouchersForPeriod(filter: {
     gross: number;
     taxes: LegacyTaxRow[];
     payment: LegacyPayment | null;
+    categories: LegacyCategoryRow[];
+    privat: boolean;
     tax_type: string | null;
     tax_sub_type: string | null;
     files: number;
   }>(sql`
-    select v.id, v.type, v.direction, v.number, v.date::text as date, v.status, v.contact_name, v.currency, v.net, v.tax, v.gross,
-      v.taxes, v.payment,
+    select v.id, v.source, ${effectiveType("v")} as type, ${effectiveDirection("v")} as direction, v.number, v.date::text as date, v.status, ${effectiveContactName("v")} as contact_name, v.currency, v.net, v.tax, v.gross,
+      ${effectiveTaxes("v")} as taxes, ${effectivePayment("v")} as payment, v.categories, coalesce((v.raw->>'privat')::boolean, false) as privat,
       ${taxTypeOf("v")} as tax_type,
       v.raw->'taxConditions'->>'taxSubType' as tax_sub_type,
       (select count(*)::int from lexoffice_voucher_files f where f.voucher_id = v.id) as files
@@ -686,33 +813,45 @@ export async function legacyVouchersForPeriod(filter: {
     where (v.date::text like ${like}
       ${
         filter.withPayments
-          ? sql`or (v.direction = 'einnahme' and exists (
-              select 1 from jsonb_array_elements(coalesce(v.payment->'items', '[]'::jsonb)) i
-              where i->>'date' like ${like} and i->>'type' in (${sql.join([...PAYMENT_ITEM_TYPES].map((t) => sql`${t}`), sql`, `)})))`
+          ? sql`or (${effectiveDirection("v")} = 'einnahme' and exists (
+              select 1 from jsonb_array_elements(coalesce((${effectivePayment("v")})->'items', '[]'::jsonb)) i
+              where i->>'date' like ${like} and i->>'type' in (${sql.join(
+                [...LEGACY_PAYMENT_TYPES].map((t) => sql`${t}`),
+                sql`, `,
+              )})))`
           : sql``
       })
-      ${filter.direction === "alle" ? sql`` : sql`and v.direction = ${filter.direction}`}
-      ${term ? sql`and (v.number ilike ${term} or v.contact_name ilike ${term} or v.remark ilike ${term})` : sql``}
+      -- BuchhaltungsButler-Belege gehen nicht in die Umsatzsteuer ein, wie im Abgleich (Summen aus dem DATEV-Stapel)
+      and v.source <> 'buchhaltungsbutler'
+      ${filter.direction === "alle" ? sql`` : sql`and ${effectiveDirection("v")} = ${filter.direction}`}
+      ${term ? sql`and (v.number ilike ${term} or ${effectiveContactName("v")} ilike ${term} or v.remark ilike ${term})` : sql``}
     order by v.date, v.number`);
-  const all = [...rows].map((r) => ({
-    id: r.id,
-    type: r.type,
-    direction: r.direction,
-    number: r.number,
-    date: r.date,
-    status: r.status,
-    contactName: r.contact_name,
-    currency: r.currency,
-    net: Number(r.net),
-    tax: Number(r.tax),
-    gross: Number(r.gross),
-    taxes: r.taxes,
-    taxType: r.tax_type,
-    taxSubType: r.tax_sub_type,
-    payments: legacyPayments({ gross: Number(r.gross), payment: r.payment }),
-    files: Number(r.files),
-  }));
-  return { total: all.length, vouchers: all.slice(0, filter.limit) };
+  // Was weder Einnahme noch Ausgabe ist, geht nicht in die Umsatzsteuer ein, wie im Abgleich; es steht summiert daneben
+  const { rechtsform } = await loadCompany();
+  const classified = [...rows].map((r) => ({ ...r, neutral: neutralKindOf(r, rechtsform) }));
+  const neutral = legacyNeutralSums(classified.flatMap((r) => (r.neutral ? [{ kind: r.neutral, direction: r.direction, gross: Number(r.gross) }] : [])));
+  const all = classified
+    .filter((r) => !r.neutral)
+    .map((r) => ({
+      id: r.id,
+      type: r.type,
+      direction: r.direction,
+      number: r.number,
+      date: r.date,
+      status: r.status,
+      contactName: r.contact_name,
+      currency: r.currency,
+      net: Number(r.net),
+      tax: Number(r.tax),
+      gross: Number(r.gross),
+      taxes: r.taxes,
+      taxType: r.tax_type,
+      taxSubType: r.tax_sub_type,
+      payments: legacyPayments({ source: r.source, status: r.status, gross: Number(r.gross), payment: r.payment }),
+      paymentHistoryIssue: paymentHistoryIssue({ source: r.source, status: r.status, gross: Number(r.gross), payment: r.payment }),
+      files: Number(r.files),
+    }));
+  return { total: all.length, vouchers: all.slice(0, filter.limit), neutral };
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -728,11 +867,11 @@ export async function findLegacyVouchers(ref: string) {
     .select({ id: schema.lexofficeVouchers.id, raw: schema.lexofficeVouchers.raw })
     .from(schema.lexofficeVouchers)
     .where(
-      UUID.test(value)
-        ? sql`${schema.lexofficeVouchers.id} = ${value}::uuid or ${schema.lexofficeVouchers.lexofficeId} = ${value}`
-        : // sevDesk-Kennungen wie "invoice/101" sind keine UUID
-          sql`${schema.lexofficeVouchers.lexofficeId} = ${value}
-            or lower(regexp_replace(${schema.lexofficeVouchers.number}, '\\s+', '', 'g')) = lower(regexp_replace(${value}, '\\s+', '', 'g'))`,
+      // Auch eine Belegnummer kann wie eine UUID aussehen; sevDesk-Kennungen wie "invoice/101" sind keine
+      sql`${schema.lexofficeVouchers.lexofficeId} = ${value}
+        or lower(regexp_replace(${schema.lexofficeVouchers.number}, '\\s+', '', 'g')) = lower(regexp_replace(${value}, '\\s+', '', 'g'))
+        or ${truncatedNumberMatches("lexoffice_vouchers", sql`${value}`)}
+        ${UUID.test(value) ? sql`or ${schema.lexofficeVouchers.id} = ${value}::uuid` : sql``}`,
     )
     .limit(10);
   const result = [];

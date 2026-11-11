@@ -1,21 +1,32 @@
-import { describeExchangeRate, DUNNING_LEVELS, formatEuro, formatExchangeRate, parseEuro, formatDecimal, TAX_TREATMENTS, WRITE_OFF_KINDS, type DunningLevel, type UnitLabel } from "@haben/core";
+import {
+  describeExchangeRate,
+  discountFromColumns,
+  DUNNING_LEVELS,
+  formatEuro,
+  formatExchangeRate,
+  parseEuro,
+  formatDecimal,
+  TAX_TREATMENTS,
+  WRITE_OFF_KINDS,
+  type DunningLevel,
+  type UnitLabel,
+} from "@haben/core";
 import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, type FormEvent } from "react";
 import { reverseWriteOffFn, writeOffRest } from "../../../server/functions/bank.ts";
 import { InvoiceStatus } from "../../../components/InvoiceStatus.tsx";
 import { Icon } from "../../../components/Icon.tsx";
+import { InvoiceAttachments } from "../../../components/InvoiceAttachments.tsx";
 import { InvoiceEditor } from "../../../components/InvoiceEditor.tsx";
 import { SendMailForm } from "../../../components/SendMail.tsx";
 import { formatDate, formatDateTime } from "../../../lib/format.ts";
 import { NoticeBanner } from "../../../components/NoticeBanner.tsx";
 import { useAction } from "../../../lib/use-action.ts";
 import { FORMAT_LABEL, KIND_TITLE, invoiceTitle } from "../../../lib/invoice.ts";
-import {
-  cancelFinalInvoice,
-  correctFinalInvoice,
-  getInvoiceDetail,
-} from "../../../server/functions/invoices.ts";
+import { cancelFinalInvoice, correctFinalInvoice, getInvoiceDetail } from "../../../server/functions/invoices.ts";
+import { ConfirmDialog } from "../../../components/ConfirmDialog.tsx";
+import { Field } from "../../../components/Field.tsx";
 
 export const Route = createFileRoute("/_app/rechnungen/$id")({
   loader: ({ params }) => getInvoiceDetail({ data: params.id }),
@@ -32,11 +43,13 @@ const titleOf = (invoice: Detail["invoice"]) => invoiceTitle(invoice.kind, invoi
 function InvoicePage() {
   const data = Route.useLoaderData();
   const { invoice } = data;
+  const draftAction = useAction();
   if (invoice.status === "draft") {
     return (
       <InvoiceEditor
         // nach dem Speichern mit den gespeicherten Werten neu aufsetzen
         key={`${invoice.id}-${String(invoice.updatedAt)}`}
+        action={draftAction}
         id={invoice.id}
         kind={invoice.kind}
         initial={{
@@ -45,8 +58,13 @@ function InvoicePage() {
           serviceFrom: invoice.serviceFrom,
           serviceTo: invoice.serviceTo,
           paymentTermDays: invoice.paymentTermDays,
+          skonto: invoice.skonto,
           format: invoice.format,
+          intro: invoice.intro,
           note: invoice.note,
+          buyerOrderReference: invoice.buyerOrderReference,
+          sellerOrderReference: invoice.sellerOrderReference,
+          despatchAdviceReference: invoice.despatchAdviceReference,
           taxTreatment: invoice.taxTreatment,
           exemptionReason: invoice.exemptionReason,
           priceMode: invoice.priceMode,
@@ -64,28 +82,64 @@ function InvoicePage() {
             ]),
           ],
           quoteId: invoice.quoteId,
+          discount: discountFromColumns(invoice.discountPercent, invoice.discountAmount),
+          paymentMethod: invoice.paymentMethod,
+          sepaMandateId: invoice.sepaMandateId,
           // Abzüge erzeugt Haben beim Speichern; im Editor stehen nur die eigenen Positionen
-          lines: data.lines.filter((line) => !line.deductionOf).map((line) => ({
-            description: line.description,
-            quantity: line.quantity,
-            unit: line.unit as UnitLabel,
-            unitPrice: line.unitPrice,
-            taxRate: line.taxRate as 1900 | 700 | 0,
-          })),
+          lines: data.lines
+            .filter((line) => !line.deductionOf)
+            .map((line) => ({
+              description: line.description,
+              detail: line.detail,
+              itemNumber: line.itemNumber,
+              quantity: line.quantity,
+              unit: line.unit as UnitLabel,
+              unitPrice: line.unitPrice,
+              taxRate: line.taxRate as 1900 | 700 | 0,
+              discount: discountFromColumns(line.discountPercent, line.discountAmount),
+            })),
         }}
         contacts={data.contacts}
         seller={data.company}
         sellerIssues={data.sellerIssues}
+        letterIssues={data.letterIssues}
         issues={data.issues}
         numberCounters={data.numberCounters}
+        numberRunning={data.numberRunning}
+        numberFormat={data.numberFormat}
         corrects={data.corrects}
         bundesland={data.bundesland}
         kleinunternehmer={data.kleinunternehmer}
+        companySkonto={data.companySkonto}
+        mandates={data.mandates}
         articles={data.articles}
+        textBlocks={data.textBlocks}
         abschlaege={data.abschlaege}
         quotes={data.quotes}
         tageskurs={data.tageskurs}
-        rateInfo={invoice.exchangeRate ? describeExchangeRate(invoice.currency, invoice.exchangeRate, invoice.exchangeRateSource, invoice.exchangeRateDate) : null}
+        rateInfo={
+          invoice.exchangeRate ? describeExchangeRate(invoice.currency, invoice.exchangeRate, invoice.exchangeRateSource, invoice.exchangeRateDate) : null
+        }
+        attachments={<InvoiceAttachments ownerId={invoice.id} attachments={data.attachments} editable />}
+        // Korrektur einer Schlussrechnung: Ihre Abzüge bleiben fest und außerhalb der Grundlage des Gesamtrabatts
+        keptDeductions={
+          invoice.kind === "rechnung"
+            ? []
+            : data.lines.flatMap((line) =>
+                line.deductionOf
+                  ? [
+                      {
+                        description: line.description,
+                        quantity: line.quantity,
+                        unit: line.unit as UnitLabel,
+                        unitPrice: line.unitPrice,
+                        taxRate: line.taxRate as 1900 | 700 | 0,
+                        deductionOf: line.deductionOf,
+                      },
+                    ]
+                  : [],
+              )
+        }
       />
     );
   }
@@ -94,6 +148,8 @@ function InvoicePage() {
 
 function FinalInvoice({ data }: { data: Detail }) {
   const { invoice, corrects, correctedBy } = data;
+  // Die Steuerberatung sieht die Rechnung, ändert und versendet aber nichts
+  const inhaber = Route.useRouteContext().user.role === "inhaber";
   const router = useRouter();
   const navigate = useNavigate();
   const cancel = useServerFn(cancelFinalInvoice);
@@ -110,16 +166,11 @@ function FinalInvoice({ data }: { data: Detail }) {
     void router.invalidate();
   };
   const cancelled = correctedBy.find((c) => c.kind === "storno" && c.status === "final");
-  const canAmend = invoice.kind === "rechnung" && !cancelled;
+  const canAmend = inhaber && invoice.kind === "rechnung" && !cancelled;
 
-  const onCancel = () => {
-    if (!confirming) {
-      setConfirming(true);
-      return;
-    }
+  const cancelNow = () => {
     void run(async () => {
       const storno = await cancel({ data: invoice.id });
-      setConfirming(false);
       await router.invalidate();
       await navigate({ to: "/rechnungen/$id", params: { id: storno.id } });
     });
@@ -155,7 +206,7 @@ function FinalInvoice({ data }: { data: Detail }) {
               XML herunterladen
             </a>
           )}
-          {invoice.kind === "rechnung" && (
+          {inhaber && invoice.kind === "rechnung" && (
             <a className="btn" href={`/api/dokument/lieferschein-rechnung/${invoice.id}`} target="_blank" rel="noreferrer">
               Lieferschein
             </a>
@@ -167,7 +218,11 @@ function FinalInvoice({ data }: { data: Detail }) {
         <div className="banner banner-danger" role="status">
           <Icon name="alert" />
           <span>
-            Storniert durch <Link to="/rechnungen/$id" params={{ id: cancelled.id }}>Stornorechnung {cancelled.number}</Link>.
+            Storniert durch{" "}
+            <Link to="/rechnungen/$id" params={{ id: cancelled.id }}>
+              Stornorechnung {cancelled.number}
+            </Link>
+            .
           </span>
         </div>
       )}
@@ -207,7 +262,9 @@ function FinalInvoice({ data }: { data: Detail }) {
                   <dt>Währung</dt>
                   <dd>
                     Rechnung in {invoice.currency}; Beträge oben in Euro, gebucht mit{" "}
-                    {invoice.exchangeRate ? describeExchangeRate(invoice.currency, invoice.exchangeRate, invoice.exchangeRateSource, invoice.exchangeRateDate) : "–"}
+                    {invoice.exchangeRate
+                      ? describeExchangeRate(invoice.currency, invoice.exchangeRate, invoice.exchangeRateSource, invoice.exchangeRateDate)
+                      : "–"}
                   </dd>
                 </>
               )}
@@ -288,6 +345,8 @@ function FinalInvoice({ data }: { data: Detail }) {
             </p>
           </section>
 
+          <InvoiceAttachments ownerId={invoice.id} attachments={data.attachments} editable={false} />
+
           <section className="card" aria-labelledby="mail-heading">
             <h2 id="mail-heading">Per E-Mail</h2>
             {data.mails.length > 0 ? (
@@ -299,6 +358,11 @@ function FinalInvoice({ data }: { data: Detail }) {
                       {formatDateTime(m.createdAt)}
                       {!m.ok && ` · ${m.error}`}
                     </span>
+                    {m.attachments.length > 0 && (
+                      <span className="small muted" style={{ display: "block" }}>
+                        Anhang: {m.attachments.join(", ")}
+                      </span>
+                    )}
                   </span>
                   <span className={`pill ${m.ok ? "pill-ok" : "pill-danger"}`}>{m.ok ? "Gesendet" : "Fehlgeschlagen"}</span>
                 </div>
@@ -313,7 +377,7 @@ function FinalInvoice({ data }: { data: Detail }) {
                 {mailNotice}
               </div>
             )}
-            {mailing?.kind === "rechnung" ? (
+            {!inhaber ? null : mailing?.kind === "rechnung" ? (
               <SendMailForm kind="rechnung" id={invoice.id} onDone={mailDone} />
             ) : (
               <div className="actions">
@@ -341,21 +405,23 @@ function FinalInvoice({ data }: { data: Detail }) {
                   </a>
                   <span className="small muted">
                     {formatEuro(d.total)} bis {formatDate(d.dueDate)}{" "}
-                    <button
-                      type="button"
-                      className="link-button"
-                      onClick={() => {
-                        setMailNotice(null);
-                        setMailing({ kind: "mahnung", id: d.id });
-                      }}
-                    >
-                      per E-Mail
-                    </button>
+                    {inhaber && (
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => {
+                          setMailNotice(null);
+                          setMailing({ kind: "mahnung", id: d.id });
+                        }}
+                      >
+                        per E-Mail
+                      </button>
+                    )}
                   </span>
                 </div>
               ))}
               {mailing?.kind === "mahnung" && <SendMailForm key={mailing.id} kind="mahnung" id={mailing.id} onDone={mailDone} />}
-              {data.overdue && (
+              {inhaber && data.overdue && (
                 <div className="actions">
                   <Link to="/rechnungen/mahnwesen/$id" params={{ id: invoice.id }} className="btn">
                     {data.dunnings.length === 0 ? "Zahlungserinnerung erstellen" : "Nächste Mahnstufe"}
@@ -365,7 +431,11 @@ function FinalInvoice({ data }: { data: Detail }) {
             </section>
           )}
 
-          {invoice.kind !== "storno" && (data.open > 0 || data.writeOffs.length > 0) && (
+          {inhaber && (data.payments.length > 0 || (data.open > 0 && invoice.kind !== "storno")) && (
+            <Payments invoiceId={invoice.id} payments={data.payments} open={data.open} cashable={invoice.kind !== "storno" && invoice.currency === "EUR"} />
+          )}
+
+          {inhaber && invoice.kind !== "storno" && (data.open > 0 || data.writeOffs.length > 0) && (
             <WriteOffs invoiceId={invoice.id} open={data.open} writeOffs={data.writeOffs} today={data.today} />
           )}
 
@@ -387,17 +457,27 @@ function FinalInvoice({ data }: { data: Detail }) {
             <section className="card" aria-labelledby="amend-heading">
               <h2 id="amend-heading">Korrigieren</h2>
               <p className="small muted" style={{ margin: 0 }}>
-                Festgeschriebene Rechnungen bleiben unverändert. Eine Stornorechnung hebt sie vollständig auf, eine
-                Rechnungskorrektur mindert den Betrag teilweise.
+                Festgeschriebene Rechnungen bleiben unverändert. Eine Stornorechnung hebt sie vollständig auf, eine Rechnungskorrektur mindert den Betrag
+                teilweise.
               </p>
-              {confirming && (
-                <div className="banner" role="alert">
-                  Es wird sofort eine Stornorechnung mit neuer Nummer erzeugt und gebucht. Noch einmal klicken zum Stornieren.
-                </div>
-              )}
+              <ConfirmDialog
+                open={confirming}
+                title="Rechnung stornieren?"
+                facts={[
+                  { label: "Nummer", value: invoice.number ?? "–" },
+                  ...(buyer ? [{ label: "Kunde", value: buyer.name }] : []),
+                  { label: "Betrag", value: formatEuro(invoice.gross), strong: true },
+                ]}
+                confirmLabel="Stornieren"
+                danger
+                onConfirm={cancelNow}
+                onClose={() => setConfirming(false)}
+              >
+                <p>Es wird sofort eine Stornorechnung mit neuer Nummer erzeugt und gebucht.</p>
+              </ConfirmDialog>
               <div className="actions">
-                <button type="button" className="btn btn-danger" onClick={onCancel} disabled={busy}>
-                  {confirming ? "Jetzt stornieren" : "Stornieren"}
+                <button type="button" className="btn btn-danger" onClick={() => setConfirming(true)} disabled={busy}>
+                  Stornieren
                 </button>
                 <button type="button" className="btn" onClick={onCorrect} disabled={busy}>
                   Rechnungskorrektur anlegen
@@ -408,6 +488,43 @@ function FinalInvoice({ data }: { data: Detail }) {
         </div>
       </div>
     </>
+  );
+}
+
+type PaymentRow = Awaited<ReturnType<typeof getInvoiceDetail>>["payments"][number];
+
+/** Zahlungen auf die Rechnung: über die Bank zugeordnet oder bar im Kassenbuch, dazu der Weg zur Bareinnahme */
+function Payments({ invoiceId, payments, open, cashable }: { invoiceId: string; payments: PaymentRow[]; open: number; cashable: boolean }) {
+  return (
+    <section className="card" aria-labelledby="payments-heading">
+      <h2 id="payments-heading">Zahlungen</h2>
+      {payments.length === 0 && (
+        <p className="small muted" style={{ margin: 0 }}>
+          Noch keine Zahlung. Überweisungen ordnest du im <Link to="/bank">Bankabgleich</Link> zu.
+        </p>
+      )}
+      {payments.map((p) => (
+        <div key={p.id} className="history-row">
+          <span style={{ textDecoration: p.reversed ? "line-through" : undefined }}>
+            {p.via === "bar" ? "bar" : "Bank"} am {formatDate(p.date)}
+            {p.via === "bar" && (
+              <span className="small muted">
+                {" "}
+                · <Link to="/kasse">Kassenbuch Nr. {p.cashNumber}</Link>
+              </span>
+            )}
+          </span>
+          <span className="small muted">{p.reversed ? (p.via === "bar" ? "storniert" : "aufgehoben") : formatEuro(p.amount)}</span>
+        </div>
+      ))}
+      {open > 0 && cashable && (
+        <div className="actions">
+          <Link className="btn" to="/kasse" search={{ rechnung: invoiceId }}>
+            Barzahlung in der Kasse erfassen
+          </Link>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -425,6 +542,7 @@ function WriteOffs({ invoiceId, open, writeOffs, today }: { invoiceId: string; o
   const [kind, setKind] = useState<"skonto" | "forderungsausfall">("forderungsausfall");
   const [amount, setAmount] = useState(formatDecimal(open));
   const [date, setDate] = useState(today);
+  const [reversing, setReversing] = useState<WriteOffRow | null>(null);
   const parsed = parseEuro(amount);
 
   function onSubmit(event: FormEvent) {
@@ -439,6 +557,31 @@ function WriteOffs({ invoiceId, open, writeOffs, today }: { invoiceId: string; o
   return (
     <section className="card" aria-labelledby="writeoff-heading">
       <h2 id="writeoff-heading">Ausbuchen</h2>
+      <ConfirmDialog
+        open={reversing !== null}
+        title="Ausbuchung aufheben?"
+        confirmLabel="Ausbuchung aufheben"
+        danger
+        facts={
+          reversing
+            ? [
+                { label: "Art", value: WRITE_OFF_KINDS[reversing.kind] },
+                { label: "Betrag", value: formatEuro(reversing.amount), strong: true },
+              ]
+            : []
+        }
+        onConfirm={() => {
+          if (!reversing) return;
+          const { id } = reversing;
+          void run(async () => {
+            await reverseFn({ data: id });
+            await router.invalidate();
+          });
+        }}
+        onClose={() => setReversing(null)}
+      >
+        <p>Haben erzeugt dafür eine Gegenbuchung. Der Betrag ist danach wieder offen, Erlöse und Umsatzsteuer werden entsprechend korrigiert.</p>
+      </ConfirmDialog>
       {writeOffs.map((w) => (
         <div key={w.id} className="history-row">
           <span style={{ textDecoration: w.reversed ? "line-through" : undefined }}>
@@ -449,8 +592,10 @@ function WriteOffs({ invoiceId, open, writeOffs, today }: { invoiceId: string; o
             {!w.reversed &&
               (w.transactionId ? (
                 "· mit der Zahlung im Bankabgleich aufheben"
+              ) : w.cashEntryId ? (
+                "· mit der Bareinnahme im Kassenbuch stornieren"
               ) : (
-                <button type="button" className="link-button" disabled={busy} onClick={() => void run(async () => { await reverseFn({ data: w.id }); await router.invalidate(); })}>
+                <button type="button" className="link-button" disabled={busy} onClick={() => setReversing(w)}>
                   Aufheben
                 </button>
               ))}
@@ -460,25 +605,32 @@ function WriteOffs({ invoiceId, open, writeOffs, today }: { invoiceId: string; o
       {open > 0 && (
         <form className="stack" style={{ gap: 10 }} onSubmit={onSubmit}>
           <p className="small muted" style={{ margin: 0 }}>
-            Offen sind noch {formatEuro(open)}. Ausbuchen mindert Erlöse und Umsatzsteuer anteilig je Steuersatz (§ 17 UStG), bei Soll-Versteuerung
-            in der Voranmeldung des Monats der Ausbuchung. Hat der Kunde Skonto abgezogen, geht es mit der Zahlung zusammen im Bankabgleich.
+            Offen sind noch {formatEuro(open)}. Ausbuchen mindert Erlöse und Umsatzsteuer anteilig je Steuersatz (§ 17 UStG), bei Soll-Versteuerung in der
+            Voranmeldung des Monats der Ausbuchung. Hat der Kunde Skonto abgezogen, geht es mit der Zahlung zusammen im Bankabgleich oder bei einer Barzahlung
+            im Kassenbuch.
           </p>
           <div className="form-grid">
-            <label className="field">
-              Art
-              <select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
-                <option value="forderungsausfall">{WRITE_OFF_KINDS.forderungsausfall} (uneinbringlich)</option>
-                <option value="skonto">{WRITE_OFF_KINDS.skonto}</option>
-              </select>
-            </label>
-            <label className="field">
-              Datum
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-            </label>
-            <label className="field">
-              Betrag
-              <input className="mono" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} aria-invalid={parsed === null || parsed <= 0 || parsed > open} />
-            </label>
+            <Field label="Art">
+              {(control) => (
+                <select {...control} value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+                  <option value="forderungsausfall">{WRITE_OFF_KINDS.forderungsausfall} (uneinbringlich)</option>
+                  <option value="skonto">{WRITE_OFF_KINDS.skonto}</option>
+                </select>
+              )}
+            </Field>
+            <Field label="Datum">{(control) => <input {...control} type="date" value={date} onChange={(e) => setDate(e.target.value)} required />}</Field>
+            <Field label="Betrag">
+              {(control) => (
+                <input
+                  {...control}
+                  className="mono"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  aria-invalid={parsed === null || parsed <= 0 || parsed > open}
+                />
+              )}
+            </Field>
           </div>
           <NoticeBanner notice={notice} />
           <div className="actions">

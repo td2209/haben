@@ -1,7 +1,7 @@
 import { EricGeprueftClient } from "../../test-eric.ts";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Nachrichten an das Finanzamt (Postgres)", () => {
   let finanzamt: typeof import("./finanzamt.ts");
@@ -20,7 +20,7 @@ describe.skipIf(!testDatabaseUrl)("Nachrichten an das Finanzamt (Postgres)", () 
   });
 
   beforeEach(async () => {
-    await sql`truncate elster_certificates, company cascade`;
+    await leeren(sql)`truncate elster_certificates, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, steuernummer, bundesland, versteuerung, kontenrahmen, einkunftsart)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', '198/113/10010', 'BY', 'ist', 'SKR03', 'selbstaendig')`;
   });
@@ -56,6 +56,18 @@ describe.skipIf(!testDatabaseUrl)("Nachrichten an das Finanzamt (Postgres)", () 
     await expect(finanzamt.sendMessage(actor, antrag, client, { kind: "validate" })).rejects.toThrow(/Hausnummer/);
   });
 
+  it("GmbH und UG: kein Antrag zu Einkommensteuer-Vorauszahlungen, freie Nachrichten schon", async () => {
+    const client = new EricGeprueftClient();
+    await sql`update company set rechtsform = 'gmbh', einkunftsart = null, name = 'Testfirma GmbH'`;
+    // elster_messages ist nur anhängen; gezählt wird, was dieser Test schreibt
+    const vorher = (await sql`select count(*)::int as n from elster_messages`)[0]!.n as number;
+    await expect(finanzamt.sendMessage(actor, antrag, client, { kind: "validate" })).rejects.toThrow(/nur im Einzelunternehmen/);
+    expect((await finanzamt.sendMessage(actor, { ...antrag, topic: "nachricht" }, client, { kind: "validate" })).ok).toBe(true);
+    const neu = await sql`select topic from elster_messages order by created_at desc limit 1`;
+    expect((await sql`select count(*)::int as n from elster_messages`)[0]!.n).toBe(vorher + 1);
+    expect(neu[0]!.topic).toBe("nachricht");
+  });
+
   it("rechnet den Gewinn aufs Jahr hoch", async () => {
     const basis = await finanzamt.prepaymentBasis("2026-07-02");
     expect(basis).toMatchObject({ year: 2026, until: "2026-07-02", profitSoFar: 0, profitForecast: 0, einkunftsart: "selbstaendig" });
@@ -64,7 +76,7 @@ describe.skipIf(!testDatabaseUrl)("Nachrichten an das Finanzamt (Postgres)", () 
 
   it("schätzt die Steuer mit den Angaben des Vorjahres, wenn es fürs laufende Jahr keine gibt", async () => {
     const incomeTax = await import("../jahreserklaerung/income-tax.ts");
-    await sql`truncate income_tax_inputs`;
+    await leeren(sql)`truncate income_tax_inputs`;
     expect((await finanzamt.prepaymentBasis("2026-07-02")).angabenAus).toBeNull();
     await incomeTax.saveEstAngaben(actor, 2025, { vorsorge: { a: { pkv: 500_000 } } });
     const basis = await finanzamt.prepaymentBasis("2026-07-02");

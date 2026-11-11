@@ -1,6 +1,8 @@
 name: CI
 
-# Changes to documentation alone don't build.
+# Reine Doku-Änderungen bauen nicht. Auf main filtert paths-ignore. Für Pull Requests geht das nicht: Ohne Lauf
+# bleiben die auf main geforderten Checks „Pending“ und blockieren den Merge (GitHub-Doku „Troubleshooting required
+# status checks“, „Handling skipped but required checks“). Dort überspringt deshalb der Job changes die Prüfungen.
 on:
   push:
     branches: [main]
@@ -10,10 +12,6 @@ on:
       - "LICENSE"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE"
   # Der Release-Workflow lässt vor dem Veröffentlichen dieselben Prüfungen laufen.
   workflow_call:
 
@@ -27,9 +25,51 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Stellt fest, ob ein Pull Request nur Markdown, docs/ oder LICENSE ändert. Ein Job, der per if übersprungen wird,
+  # zählt für die Regeln auf main als Erfolg, auch wenn er nur wegen eines fehlgeschlagenen needs-Jobs ausfällt. Darum
+  # steht in jedem Job !cancelled() und der Vergleich mit 'false': Läuft changes nicht (push, Release, Entwurf) oder
+  # schlägt fehl, ist die Ausgabe leer und die Prüfungen laufen
+  changes:
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      # Der Merge-Commit des Pull Requests und sein erster Elternteil, die Basis
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: filter
+        run: |
+          set -euo pipefail
+          # --no-renames: Eine umbenannte Datei zählt mit altem und neuem Pfad, Code wird nicht durch Verschieben zu Doku
+          changed="$(git -c core.quotePath=false diff --no-renames --name-only HEAD^1 HEAD)"
+          printf '%s\n' "$changed"
+          other="$(grep -Ev '\.md$|^docs/|^LICENSE$' <<< "$changed" || true)"
+          # Gelöscht oder verschoben zählt als Code: normen.test.ts verlangt die Seiten aus scripts/jahreswerte/normen.json
+          deleted="$(git diff --no-renames --diff-filter=D --name-only HEAD^1 HEAD)"
+          if [ -n "$changed" ] && [ -z "$other" ] && [ -z "$deleted" ]; then code=false; else code=true; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # Lint und Typecheck brauchen keine Datenbank; gebaut wird in den Jobs e2e-teil
   check:
     # Draft-Pull-Requests bauen nicht; "Ready for review" startet den Lauf
-    if: ${{ !github.event.pull_request.draft }}
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+
+  test:
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -40,28 +80,37 @@ jobs:
           POSTGRES_DB: haben_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U haben"
+          --health-cmd "pg_isready -U haben -d haben_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      # Die Datenbank ist nach dem Job weg: ohne Schreiben auf die Platte bei jedem Commit
+      - name: PostgreSQL ohne fsync
+        run: docker exec ${{ job.services.postgres.id }} psql -U haben -d haben_test -qc "ALTER SYSTEM SET fsync = off" -c "ALTER SYSTEM SET synchronous_commit = off" -c "ALTER SYSTEM SET full_page_writes = off" -c "SELECT pg_reload_conf()"
+      # pdftoppm wandelt PDFs für einen selbst betriebenen KI-Dienst in Seitenbilder (wie im Image)
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils
+      # Jeder Worker von Vitest klont seine Datenbank aus einer Vorlage (apps/web/src/server/test-db.ts)
+      - run: bun run test
         env:
           TEST_DATABASE_URL: postgres://haben:haben@localhost:5432/haben_test
-      - run: pnpm build
 
-  e2e:
-    if: ${{ !github.event.pull_request.draft }}
+  # Drei Teile parallel (Playwright --shard). Jeder Teil, der Tests aus „mit-daten“ hat, spielt vorher
+  # app.spec.ts („ablauf“) selbst durch, weil diese Tests auf dessen Daten aufbauen. Gebaut wird in jedem
+  # Teil, das läuft parallel und braucht kein Artefakt dazwischen
+  e2e-teil:
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        teil: [1, 2, 3]
     services:
       postgres:
         image: postgres:18
@@ -71,62 +120,80 @@ jobs:
           POSTGRES_DB: haben_e2e
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U haben"
+          --health-cmd "pg_isready -U haben -d haben_e2e"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # Chromium aus dem Cache, je Playwright-Version; die Systembibliotheken kommen bei jedem Lauf.
-      # Die Screenshots werden nur als Artefakt angehängt, nicht verglichen: die Umgebung bleibt die des Runners
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      # Chromium aus dem Cache, je Playwright-Version; die Systembibliotheken kommen bei jedem Lauf
       - id: playwright
-        run: echo "version=$(pnpm --filter @haben/web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        working-directory: apps/web
+        run: echo "version=$(bun --bun playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
       - id: browsers
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium
       - if: steps.browsers.outputs.cache-hit != 'true'
-        run: pnpm --filter @haben/web exec playwright install --with-deps chromium
+        working-directory: apps/web
+        run: bun --bun playwright install --with-deps chromium
       - if: steps.browsers.outputs.cache-hit == 'true'
-        run: pnpm --filter @haben/web exec playwright install-deps chromium
-      - run: pnpm build
-      - name: Ende-zu-Ende-Tests mit Screenshots aller Seiten
-        run: pnpm e2e
+        working-directory: apps/web
+        run: bun --bun playwright install-deps chromium
+      - name: PostgreSQL ohne fsync
+        run: docker exec ${{ job.services.postgres.id }} psql -U haben -d haben_e2e -qc "ALTER SYSTEM SET fsync = off" -c "ALTER SYSTEM SET synchronous_commit = off" -c "ALTER SYSTEM SET full_page_writes = off" -c "SELECT pg_reload_conf()"
+      # pdftotext prüft beim Hochladen eines eigenen Layouts die Pflichtangaben (wie im Image)
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils
+      - run: bun run build
+      # Vier Worker (playwright.config.ts), so viele Kerne hat der Runner
+      - name: Ende-zu-Ende-Tests, Teil ${{ matrix.teil }} von 3
+        run: bun run e2e --shard=${{ matrix.teil }}/3
         env:
           E2E_DATABASE_URL: postgres://haben:haben@localhost:5432/haben_e2e
           # Der gebaute Server statt des Entwicklungsservers
-          E2E_SERVER_COMMAND: node .output/server/index.mjs
+          E2E_SERVER_COMMAND: bun .output/server/index.mjs
+      - name: SSO-Ende-zu-Ende mit Produktionsbuild und TLS
+        if: matrix.teil == 1
+        run: bun run e2e --config playwright.sso-only.config.ts
+        env:
+          E2E_DATABASE_URL: postgres://haben:haben@localhost:5432/haben_sso_e2e
+          E2E_SERVER_COMMAND: bun .output/server/index.mjs
       - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-screenshots
+          name: e2e-bericht-teil-${{ matrix.teil }}
           path: |
             apps/web/test-results
             apps/web/playwright-report
           if-no-files-found: ignore
 
+  # Ein Ergebnis für die Regeln auf main (geforderter Check „e2e“), egal in wie viele Teile die Tests zerfallen
+  e2e:
+    if: ${{ always() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
+    needs: [changes, e2e-teil]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.e2e-teil.result }}" = success
+
   kosit:
-    if: ${{ !github.event.pull_request.draft }}
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 26
-          cache: pnpm
+          bun-version-file: package.json
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 25
-      - run: pnpm install --frozen-lockfile
+      - run: bun install --frozen-lockfile
       - name: KoSIT-Validator und XRechnung-Konfiguration laden
         env:
           GH_TOKEN: ${{ github.token }}
@@ -155,7 +222,7 @@ jobs:
           [ -n "$jar" ] || { echo "::error::$KOSIT_VALIDATOR: kein *-standalone.jar"; exit 1; }
           echo "KOSIT_JAR=$jar" >> "$GITHUB_ENV"
           echo "KOSIT_CONFIG=$RUNNER_TEMP/kosit/xr/scenarios.xml" >> "$GITHUB_ENV"
-      - run: pnpm --filter @haben/einvoice kosit "$RUNNER_TEMP/kosit/out"
+      - run: bun run --cwd packages/einvoice kosit "$RUNNER_TEMP/kosit/out"
       - if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -164,7 +231,8 @@ jobs:
           if-no-files-found: ignore
 
   container:
-    if: ${{ !github.event.pull_request.draft }}
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -185,7 +253,10 @@ jobs:
           docker run -d --name haben-db --network haben -e POSTGRES_USER=haben -e POSTGRES_PASSWORD=haben -e POSTGRES_DB=haben postgres:18
           # Das Postgres-Image startet nach der Initialisierung einmal neu; erst danach ist es bereit
           for i in $(seq 1 60); do [ "$(docker logs haben-db 2>&1 | grep -c 'ready to accept connections')" -ge 2 ] && break; sleep 1; done
+          # Gehärtet wie in deploy/compose.yml: schreibgeschützt bis auf /tmp und die Volumes, ohne Capabilities
           docker run -d --name haben-app --network haben -p 3000:3000 \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
+            -v belege:/var/lib/haben/belege -v eric-log:/var/lib/haben/eric-log -v eric:/var/lib/haben/eric \
             -e DATABASE_URL=postgres://haben:haben@haben-db:5432/haben \
             -e BETTER_AUTH_SECRET="$(openssl rand -hex 32)" \
             -e BETTER_AUTH_URL=http://localhost:3000 \
@@ -197,12 +268,43 @@ jobs:
           for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
           curl -sf -o /dev/null http://localhost:3000/login
           docker logs haben-app 2>&1 | grep -q "Migrationen angewendet"
-          docker exec haben-app sh -c 'cd /app/packages/elster && node -e "require.resolve(\"koffi\")"'
+          # Alle Pakete, die zur Laufzeit geladen werden, auch ohne Peer-Abhängigkeiten (Containerfile), und poppler
+          docker exec -i haben-app sh -c 'cat > /tmp/externe-module.ts && bun /tmp/externe-module.ts' < scripts/container/externe-module.ts
+          docker exec -i haben-app sh < scripts/container/pdf-werkzeuge.sh
       - if: failure()
         run: docker logs haben-app || true
 
+  # Die Entwicklungsumgebung aus compose.yml im Hauptordner: startet sie, läuft der Dev-Server mit Datenbank
+  dev-compose:
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Wie unter Linux üblich: erst `docker compose up` mit der Vorgabe-ID 1000, dann nach docs/entwicklung.md
+      # mit der eigenen ID neu bauen. Die Volumes gehören danach noch der alten ID; der Start muss trotzdem gehen.
+      - name: Erster Start mit der Vorgabe-ID
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 90); do docker compose logs app | grep -q "Migrationen angewendet" && break; sleep 2; done
+          docker compose logs app | grep -q "Migrationen angewendet"
+          docker compose down
+      - name: Starten
+        run: |
+          # Der Runner-Benutzer hat nicht die ID 1000; der Container muss in den Projektordner schreiben dürfen
+          HABEN_DEV_UID="$(id -u)" HABEN_DEV_GID="$(id -g)" docker compose up -d --build
+      - name: Prüfen
+        run: |
+          for i in $(seq 1 90); do curl -sf -o /dev/null http://localhost:3000/login && break; sleep 2; done
+          curl -sf -o /dev/null http://localhost:3000/login
+          docker compose logs app | grep -q "Migrationen angewendet"
+          docker compose logs app | grep -q "Einrichtungscode"
+      - if: failure()
+        run: docker compose logs
+
   backup:
-    if: ${{ !github.event.pull_request.draft }}
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -242,6 +344,15 @@ jobs:
           test "$(docker compose exec -T db psql -U haben -d postgres -Atc "SELECT count(*) FROM pg_database WHERE datname LIKE 'haben\_restore\_check%'")" = 0
           docker compose exec -T db psql -U haben -d haben -qc "UPDATE t SET x = 'nachher'"
           docker compose run --rm --no-deps -T --entrypoint sh restore -c 'rm /belege/ab/cd && echo neu > /belege/neu'
+          # Eine offene Verbindung wie die der laufenden App: der Restore bricht ab und ändert nichts
+          docker compose exec -T -d db psql -U haben -d haben -c "SELECT pg_sleep(300)"
+          active="SELECT count(*) FROM pg_stat_activity WHERE datname = 'haben' AND query LIKE '%pg_sleep(300)%' AND pid <> pg_backend_pid()"
+          for _ in $(seq 20); do [ "$(docker compose exec -T db psql -U haben -d postgres -Atc "$active")" = 1 ] && break; sleep 0.5; done
+          if echo ja | docker compose run --rm -T restore latest 2> restore.err; then exit 1; fi
+          grep -q 'noch Verbindungen offen' restore.err
+          test "$(docker compose exec -T db psql -U haben -d haben -Atc 'SELECT x FROM t')" = nachher
+          docker compose exec -T db psql -U haben -d postgres -qAtc \
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'haben' AND query LIKE '%pg_sleep(300)%' AND pid <> pg_backend_pid()"
           echo ja | docker compose run --rm -T restore latest
           test "$(docker compose exec -T db psql -U haben -d haben -Atc 'SELECT x FROM t')" = vorher
           docker compose run --rm --no-deps -T --entrypoint sh restore -c \
@@ -252,7 +363,8 @@ jobs:
   # Ein Bestand von postgres:16 (compose.yml bis Haben 0.2) unter dem neuen Backup-Image und danach
   # das automatische Upgrade durch haben-db beim Start, mit der compose.yml der Nutzer
   db-upgrade:
-    if: ${{ !github.event.pull_request.draft }}
+    needs: changes
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     defaults:
       run:

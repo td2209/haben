@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Angebote (Postgres)", () => {
   let quotes: typeof import("./quotes.ts");
@@ -73,7 +73,7 @@ describe.skipIf(!testDatabaseUrl)("Angebote (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate mail_log, quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
+    await leeren(sql)`truncate mail_log, quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
       invoice_number_counters, contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, steuernummer, ust_id, bundesland, iban, bic, bank, payment_term_days)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '198/113/10010', 'DE123456789', 'BY',
@@ -241,7 +241,9 @@ describe.skipIf(!testDatabaseUrl)("Angebote (Postgres)", () => {
     const full = await invoices.createDraft(actor, editorInvoice({ quoteId: quote.id }));
     const extra = await invoices.createDraft(actor, editorInvoice({ variant: "abschlag", quoteId: quote.id, lines: [line(100_000)] }));
     for (const id of [full.id, extra.id]) {
-      expect(await invoices.finalizeIssues(id)).toContain(`Angebot ${quote.number} ist schon mit Rechnung ${(await invoices.getInvoice(schluss.id))!.invoice.number} abgerechnet`);
+      expect(await invoices.finalizeIssues(id)).toContain(
+        `Angebot ${quote.number} ist schon mit Rechnung ${(await invoices.getInvoice(schluss.id))!.invoice.number} abgerechnet`,
+      );
     }
     // Der zusätzliche Entwurf über alles verdrängt die festgeschriebene Schlussrechnung nicht
     expect((await quotes.getQuote(quote.id))!.quote.invoiceId).toBe(schluss.id);
@@ -364,6 +366,28 @@ describe.skipIf(!testDatabaseUrl)("Angebote (Postgres)", () => {
     expect((await quotes.getQuote(quote.id))!.quote.invoiceId).toBeNull();
     const replacement = await invoices.finalizeInvoice(actor, (await invoices.createDraft(actor, editorInvoice({ quoteId: quote.id }))).id);
     expect((await quotes.getQuote(quote.id))!.quote.invoiceId).toBe(replacement.id);
+  });
+
+  it("Text zur Position: gespeichert, gesperrt und an Rechnung, Schlussrechnung und Kopie weitergegeben", async () => {
+    // Der Kunde bekommt XRechnung, die verlangt eine Telefonnummer des Verkäufers
+    await sql`update company set telefon = '+49 941 123456'`;
+    const detail = "Agenda nach Abstimmung\nzwei Tage vor Ort";
+    const quote = await quotes.finalizeQuote(actor, (await quotes.createQuoteDraft(actor, draft({ lines: [{ ...line(9500), detail: `  ${detail}  ` }] }))).id);
+    const [stored] = await sql`select detail from quote_lines where quote_id = ${quote.id}`;
+    expect(stored?.detail).toBe(detail);
+    await expect(sql`update quote_lines set detail = '' where quote_id = ${quote.id}`).rejects.toThrow(/festgeschrieben/);
+
+    const invoice = await quotes.quoteToInvoice(actor, quote.id, "2026-10-20");
+    expect((await invoices.getInvoice(invoice.id))!.lines.map((l) => l.detail)).toEqual([detail]);
+    await invoices.deleteDraft(actor, invoice.id);
+    // Abschlag: eine eigene Position ohne Text; die Schlussrechnung übernimmt die Positionen mit Text
+    await abschlag(quote.id, 50_000, "2026-10-21");
+    const schluss = await quotes.quoteToInvoice(actor, quote.id, "2026-12-01", "schluss");
+    const schlussLines = (await invoices.getInvoice(schluss.id))!.lines;
+    expect(schlussLines.filter((l) => !l.deductionOf).map((l) => l.detail)).toEqual([detail]);
+
+    const copy = await quotes.copyQuote(actor, quote.id, "2026-12-01");
+    expect((await quotes.getQuote(copy.id))!.lines.map((l) => l.detail)).toEqual([detail]);
   });
 
   it("kopiert ein Angebot als neuen Entwurf mit gleicher Gültigkeitsdauer", async () => {

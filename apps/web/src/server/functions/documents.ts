@@ -1,3 +1,4 @@
+import { notFound } from "@tanstack/react-router";
 import { EXPENSE_CATEGORIES } from "@haben/core";
 import { loadInboxSettings } from "../modules/belege/index.ts";
 import { createServerFn } from "@tanstack/react-start";
@@ -5,24 +6,35 @@ import { z } from "zod";
 import {
   bookDocument,
   bookingIssues,
+  cancelDocument,
+  cancellationInputSchema,
+  cancellationIssues,
+  documentCancellation,
+  plannedCancellationDate,
+  reenterDocument,
   deleteDocument,
   DocumentError,
   documentInputSchema,
   documentNavigation,
+  dauerbelegName,
   getDocument,
   supplierCategory,
+  supplierPayment,
   listDocuments,
   MAX_DOCUMENT_SIZE,
   runExtraction,
   updateDocument,
   uploadDocument,
 } from "../modules/belege/index.ts";
-import { extractionAvailable } from "../modules/belege/index.ts";
-import { authMiddleware } from "../middleware.ts";
-import { loadCompany } from "../modules/stammdaten/index.ts";
+import { extractionAvailable, extractionSettings, supplierSuggestion } from "../modules/belege/index.ts";
+import { authMiddleware, readMiddleware } from "../middleware.ts";
+import { listContacts, loadCompany } from "../modules/stammdaten/index.ts";
+import { documentIbanCheck, documentSepaTransfers } from "../modules/bank/index.ts";
 import { db, schema } from "../db/index.ts";
 import { eq } from "drizzle-orm";
 import { UserError } from "../errors.ts";
+import { today } from "../today.ts";
+import { detailId } from "./schemas.ts";
 
 /** KI-Auslesung läuft nach der Antwort weiter; Fehler landen am Beleg. */
 const inBackground = (work: Promise<void>) => void work.catch((error) => console.error("Belegauslesung", error));
@@ -30,9 +42,10 @@ const inBackground = (work: Promise<void>) => void work.catch((error) => console
 const categoryOptions = Object.entries(EXPENSE_CATEGORIES).map(([value, { label }]) => ({ value, label }));
 
 export const getDocuments = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async () => {
-    const inbox = await loadInboxSettings();
+  .middleware([readMiddleware])
+  .handler(async ({ context }) => {
+    // Postfach für Belege per E-Mail ist eine Einstellung des Inhabers
+    const inbox = context.user.role === "inhaber" ? await loadInboxSettings() : null;
     return {
       documents: await listDocuments(),
       aiAvailable: extractionAvailable(),
@@ -41,28 +54,51 @@ export const getDocuments = createServerFn({ method: "GET" })
   });
 
 export const getDocumentDetail = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .validator(z.uuid())
+  .middleware([readMiddleware])
+  .validator(detailId)
   .handler(async ({ data }) => {
     const result = await getDocument(data);
-    if (!result) throw new UserError("Beleg nicht gefunden.");
+    if (!result) throw notFound();
     // Rohdaten der Auslesung bleiben auf dem Server
     const { extraction: _extraction, ...document } = result.document;
     const [asset] = await db.select({ id: schema.assets.id }).from(schema.assets).where(eq(schema.assets.documentId, data));
     const company = await loadCompany();
+    const { cancellation, reentryId } = await documentCancellation(data);
     return {
       document,
+      cancellation,
+      reentryId,
+      // Vermerk: für diesen Beleg erzeugte SEPA-Überweisungen
+      sepaTransfers: await documentSepaTransfers(data),
+      // IBAN der E-Rechnung gegen die des Kontakts (#410)
+      ibanCheck: await documentIbanCheck(data),
+      // Was gegen einen Storno spricht; die Zahlung im Bankabgleich prüft erst der Storno selbst
+      cancellationIssues: result.document.lockedAt && !cancellation ? cancellationIssues(result.document) : [],
+      // Datum, das ein Storno heute bekäme: im noch offenen Zeitraum der Belegbuchung oder heute
+      cancellationDate: result.document.lockedAt && !cancellation ? await plannedCancellationDate(data, today()) : null,
+      today: today(),
       // Vor und zurück in der Reihenfolge der Belegliste
       navigation: documentNavigation(await listDocuments(), data),
       assetId: asset?.id ?? null,
       privateShares: company.privateShares,
+      rechtsform: company.rechtsform,
       tageskurs: company.tageskurs,
       amounts: result.amounts,
-      issues: result.document.lockedAt ? [] : bookingIssues(result.document, result.amounts),
-      // Bisherige Kategorie des Lieferanten als Hinweis am Feld, nur solange der Beleg offen ist
-      categoryHint: result.document.lockedAt ? null : await supplierCategory(result.document.supplierName, result.document.supplierUstId),
+      splits: result.splits,
+      issues: result.document.lockedAt ? [] : bookingIssues(result.document, result.amounts, today(), result.splits),
+      // Bisherige Kategorie und Bezahlung des Lieferanten als Hinweis am Feld, nur solange der Beleg offen ist (#295)
+      categoryHint: result.document.lockedAt ? null : await supplierCategory(result.document),
+      paymentHint: result.document.lockedAt ? null : await supplierPayment(result.document),
       aiAvailable: extractionAvailable(),
       categories: categoryOptions,
+      // Vorschlag für „Neuen Lieferanten anlegen“ aus E-Rechnung oder Auslesung; die IBAN nur zum ausdrücklichen Übernehmen (#329)
+      supplierSuggestion: result.document.lockedAt ? null : await supplierSuggestion(data),
+      // Lieferanten aus den Kontakten zur Auswahl im Beleg
+      suppliers: (await listContacts(false, "lieferant")).map(({ id, name, ustId }) => ({ id, name, ustId })),
+      // Aus einem Dauerbeleg angelegt: Name der Vorlage für den Verweis
+      dauerbeleg: result.document.recurringDocumentId
+        ? { id: result.document.recurringDocumentId, name: await dauerbelegName(result.document.recurringDocumentId) }
+        : null,
     };
   });
 
@@ -119,11 +155,29 @@ export const deleteDocumentFn = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/** Einstellungen › KI-Assistenten und API: welcher Anbieter Belege ausliest; ohne Schlüssel */
+export const getExtractionSettings = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(() => extractionSettings());
+
 export const reextractDocument = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.uuid())
   .handler(async ({ data, context }) => {
-    if (!extractionAvailable()) throw new UserError("Die KI-Auslesung ist nicht eingerichtet (ANTHROPIC_API_KEY).");
+    if (!extractionAvailable()) throw new UserError("Die KI-Auslesung ist nicht eingerichtet (ANTHROPIC_API_KEY oder EXTRACTION_BASE_URL).");
     inBackground(runExtraction(context.user.id, data));
     return { ok: true };
   });
+
+export const cancelDocumentFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.uuid(), cancellation: cancellationInputSchema }))
+  .handler(async ({ data, context }) => {
+    await cancelDocument(context.user.id, data.id, data.cancellation, today());
+    return { ok: true };
+  });
+
+export const reenterDocumentFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.uuid())
+  .handler(async ({ data, context }) => ({ id: await reenterDocument(context.user.id, data) }));

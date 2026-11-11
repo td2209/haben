@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 import { computeEuer, euerToCsv, type EuerPayment } from "./euer.ts";
 import { computeInvoiceTotals } from "./invoice.ts";
 
-const amount = (euer: ReturnType<typeof computeEuer>, key: string) =>
-  [...euer.einnahmen, ...euer.ausgaben].find((l) => l.key === key)?.amount ?? 0;
+const amount = (euer: ReturnType<typeof computeEuer>, key: string) => [...euer.einnahmen, ...euer.ausgaben].find((l) => l.key === key)?.amount ?? 0;
 
 const invoice19 = computeInvoiceTotals([{ quantity: 1000, unitPrice: 400_000, taxRate: 1900 }]);
 const mixed = computeInvoiceTotals([
@@ -65,11 +64,12 @@ describe("computeEuer", () => {
 
   it("Anlagekauf: nur die Vorsteuer ist Ausgabe, abgeschrieben wird über die AfA", () => {
     const auto = computeInvoiceTotals([{ quantity: 1000, unitPrice: 3_000_000, taxRate: 1900 }]);
-    const euer = computeEuer(
-      2026,
-      [{ kind: "document", date: "2026-03-10", paid: auto.gross, totals: auto, category: "anlage" }],
-      { afa: 416_667, gwg: 0, sammelposten: 0, restbuchwert: 0 },
-    );
+    const euer = computeEuer(2026, [{ kind: "document", date: "2026-03-10", paid: auto.gross, totals: auto, category: "anlage" }], {
+      afa: 416_667,
+      gwg: 0,
+      sammelposten: 0,
+      restbuchwert: 0,
+    });
     expect(amount(euer, "vorsteuer")).toBe(570_000);
     expect(amount(euer, "ausgabe:anlage")).toBe(0);
     expect(amount(euer, "afa")).toBe(416_667);
@@ -89,6 +89,22 @@ describe("computeEuer", () => {
     expect(amount(euer, "privateKfz")).toBe(176_700);
     expect(amount(euer, "ustEntnahmen")).toBe(107_436);
     expect(euer.totalEinnahmen).toBe(176_700 + 107_436);
+  });
+
+  it("§ 13b mit Privatanteil: der private Teil der selbst geschuldeten Steuer zählt anteilig zur Zahlung in Zeile 17", () => {
+    // Netto 1.000 €, gezahlt wird nur netto; Steuer 190 €, davon 30 % privat
+    const rc = { net: 100_000, tax: 0, gross: 100_000, taxes: [{ rate: 1900, base: 100_000, tax: 0 }] };
+    const beleg = { kind: "document", totals: rc, category: "edv", privateShare: 30, selbstGeschuldet: [19_000] } as const;
+    const teil = computeEuer(2026, [{ ...beleg, date: "2026-03-02", paid: 40_000 }]);
+    expect(amount(teil, "vereinnahmteUst")).toBe(2_280);
+    const ganz = computeEuer(2026, [
+      { ...beleg, date: "2026-03-02", paid: 40_000 },
+      { ...beleg, date: "2026-04-02", paid: 60_000 },
+    ]);
+    expect(amount(ganz, "vereinnahmteUst")).toBe(5_700);
+    expect(amount(ganz, "ausgabe:edv")).toBe(70_000);
+    // Storno (negativ) nimmt den Betrag wieder heraus
+    expect(amount(computeEuer(2026, [{ ...beleg, date: "2026-05-02", paid: -100_000 }]), "vereinnahmteUst")).toBe(-5_700);
   });
 
   it("Teilzahlungen werden anteilig aufgeteilt und ergeben zusammen die Rechnung", () => {
@@ -161,6 +177,27 @@ describe("computeEuer", () => {
     expect(euer.monthly.ausgaben[0]).toBe(3857);
     expect(euer.monthly.ausgaben[11]).toBe(3857);
     expect(computeEuer(2025, payments).totalEinnahmen).toBe(476_000);
+  });
+
+  it("Lohn: Auszahlung, Lohnsteuer und SV-Beiträge sind Ausgaben für Personal, wenn sie abfließen (§ 11 Abs. 2 EStG)", () => {
+    // Abrechnung Oktober 2026 (lohn-buchung.test.ts): 2.640,17 € Auszahlung am 30.10., 539,83 € Lohnsteuer am 10.11.,
+    // 1.757,60 € SV-Beiträge am 28.10.; die Dezemberbeiträge erst im Januar. Eine Rückzahlung mindert die Ausgabe.
+    const payments: EuerPayment[] = [
+      { kind: "lohn", date: "2026-10-30", amount: -2640_17 },
+      { kind: "lohn", date: "2026-11-10", amount: -539_83 },
+      { kind: "lohn", date: "2026-10-28", amount: -1757_60 },
+      { kind: "lohn", date: "2026-11-12", amount: 10_00 },
+      { kind: "lohn", date: "2027-01-08", amount: -539_83 },
+    ];
+    const euer = computeEuer(2026, payments);
+    expect(amount(euer, "personal")).toBe(2640_17 + 539_83 + 1757_60 - 10_00);
+    expect(euer.ausgaben.find((l) => l.key === "personal")?.label).toBe("Löhne und Gehälter einschließlich Lohnsteuer und Sozialversicherung");
+    expect(euer.totalAusgaben).toBe(4927_60);
+    expect(euer.monthly.ausgaben[9]).toBe(2640_17 + 1757_60);
+    expect(euer.monthly.ausgaben[10]).toBe(539_83 - 10_00);
+    expect(amount(computeEuer(2027, payments), "personal")).toBe(539_83);
+    // Ohne Lohn keine Zeile
+    expect(computeEuer(2026, []).ausgaben.some((l) => l.key === "personal")).toBe(false);
   });
 
   it("CSV mit Semikolon und Dezimalkomma", () => {

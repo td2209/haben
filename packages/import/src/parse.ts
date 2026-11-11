@@ -2,7 +2,9 @@ import { isCamt053, parseCamt053 } from "./camt.ts";
 import { parseCsv } from "./csv.ts";
 import { decodeText } from "./decode.ts";
 import { isDkbAltHeader, isDkbHeader, parseDkb, parseDkbAlt } from "./dkb.ts";
+import { isEbayHeader, parseEbay } from "./ebay.ts";
 import { StatementParseError } from "./errors.ts";
+import { isEtsyHeader, parseEtsy } from "./etsy.ts";
 import { isN26Header, parseN26 } from "./n26.ts";
 import { isPayPalHeader, isShopifyHeader, isStripeHeader, parsePayPal, parseShopify, parseStripe } from "./psp.ts";
 import { findHeaderRow } from "./table.ts";
@@ -10,16 +12,19 @@ import type { ParsedStatement, StatementFormat } from "./types.ts";
 
 type Detected =
   | { format: "camt053"; text: string }
-  | { format: Exclude<StatementFormat, "camt053" | "enablebanking">; rows: string[][]; headerRow: number };
+  | {
+      // accountable-xlsx steht nicht in der Liste: diese Umsaetze kommen mit dem Export, nie als Datei
+      format: Exclude<StatementFormat, "camt053" | "enablebanking" | "googleplay-earnings" | "appstore-finance" | "store-payout" | "accountable-xlsx">;
+      rows: string[][];
+      headerRow: number;
+    };
 
 function detect(text: string, label: string): Detected {
   const trimmed = text.trimStart();
   if (trimmed.startsWith("<")) {
     if (isCamt053(trimmed)) return { format: "camt053", text: trimmed };
     if (/BkToCstmrAcctRpt|BkToCstmrDbtCdtNtfctn/.test(trimmed)) {
-      throw new StatementParseError(
-        `${label} ist ein CAMT.052- oder CAMT.054-Bericht. Unterstützt wird nur der Tagesauszug CAMT.053.`,
-      );
+      throw new StatementParseError(`${label} ist ein CAMT.052- oder CAMT.054-Bericht. Unterstützt wird nur der Tagesauszug CAMT.053.`);
     }
     throw new StatementParseError(`${label} ist eine XML-Datei, aber kein CAMT.053-Kontoauszug.`);
   }
@@ -31,19 +36,26 @@ function detect(text: string, label: string): Detected {
   if (dkb >= 0) return { format: "dkb-csv", rows: parseCsv(text, ";"), headerRow: dkb };
   const dkbAlt = findHeaderRow(semicolon, isDkbAltHeader);
   if (dkbAlt >= 0) return { format: "dkb-csv-alt", rows: parseCsv(text, ";"), headerRow: dkbAlt };
+  const ebaySemicolon = findHeaderRow(semicolon, isEbayHeader);
+  if (ebaySemicolon >= 0) return { format: "ebay-csv", rows: parseCsv(text, ";"), headerRow: ebaySemicolon };
 
   const comma = parseCsv(head, ",");
   const n26 = findHeaderRow(comma, isN26Header);
   if (n26 >= 0) return { format: "n26-csv", rows: parseCsv(text, ","), headerRow: n26 };
+  // Vor PayPal: dessen englische Kopfzeile (gross, fee, net, transactionid) passt dem Präfix nach auch auf eBay
+  const ebay = findHeaderRow(comma, isEbayHeader);
+  if (ebay >= 0) return { format: "ebay-csv", rows: parseCsv(text, ","), headerRow: ebay };
   const paypal = findHeaderRow(comma, isPayPalHeader);
   if (paypal >= 0) return { format: "paypal-csv", rows: parseCsv(text, ","), headerRow: paypal };
   const stripe = findHeaderRow(comma, isStripeHeader);
   if (stripe >= 0) return { format: "stripe-csv", rows: parseCsv(text, ","), headerRow: stripe };
   const shopify = findHeaderRow(comma, isShopifyHeader);
   if (shopify >= 0) return { format: "shopify-payments-csv", rows: parseCsv(text, ","), headerRow: shopify };
+  const etsy = findHeaderRow(comma, isEtsyHeader);
+  if (etsy >= 0) return { format: "etsy-csv", rows: parseCsv(text, ","), headerRow: etsy };
 
   throw new StatementParseError(
-    `${label} wurde nicht erkannt. Unterstützt werden CSV-Exporte von DKB und N26, CAMT.053 (XML) sowie die Exporte von PayPal, Stripe und Shopify Payments.`,
+    `${label} wurde nicht erkannt. Unterstützt werden CSV-Exporte von DKB und N26, CAMT.053 (XML) sowie die Exporte von PayPal, Stripe, Shopify Payments, der Transaktionsbericht von eBay und die Monatsabrechnung von Etsy.`,
   );
 }
 
@@ -73,6 +85,10 @@ export function parseStatement(bytes: Uint8Array, filename?: string): ParsedStat
       return parseStripe(detected.rows, detected.headerRow);
     case "shopify-payments-csv":
       return parseShopify(detected.rows, detected.headerRow);
+    case "ebay-csv":
+      return parseEbay(detected.rows, detected.headerRow);
+    case "etsy-csv":
+      return parseEtsy(detected.rows, detected.headerRow);
   }
 }
 

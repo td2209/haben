@@ -1,10 +1,4 @@
-import {
-  buildPostfachAnfrageXml,
-  buildPostfachBestaetigungXml,
-  postfachDateiname,
-  type ElsterClient,
-  type PostfachBereitstellung,
-} from "@haben/elster";
+import { buildPostfachAnfrageXml, buildPostfachBestaetigungXml, postfachDateiname, type ElsterClient, type PostfachBereitstellung } from "@haben/elster";
 import { einspruchsfrist, parseBescheiddatum, type Bundesland } from "@haben/core";
 import { and, desc, eq } from "drizzle-orm";
 import { loadCompany } from "../stammdaten/index.ts";
@@ -65,7 +59,11 @@ export async function listPostfachDocuments(limit = 200) {
   ]);
   return rows.map((row) => {
     const datum = parseBescheiddatum(row.bescheiddatum);
-    return { ...row, bescheiddatumIso: datum, frist: datum && isBescheid(row.datenart) ? einspruchsfrist(datum, company.bundesland as Bundesland | null) : null };
+    return {
+      ...row,
+      bescheiddatumIso: datum,
+      frist: datum && isBescheid(row.datenart) ? einspruchsfrist(datum, company.bundesland as Bundesland | null) : null,
+    };
   });
 }
 
@@ -74,7 +72,11 @@ export async function openAppealDeadlines(today: string) {
   const seen = new Set<string>();
   return (await listPostfachDocuments())
     .filter((d) => !d.test && d.frist && d.frist.fristende >= today)
-    .filter((d) => (seen.has(d.bereitstellungId) ? false : (seen.add(d.bereitstellungId), true)))
+    .filter((d) => {
+      if (seen.has(d.bereitstellungId)) return false;
+      seen.add(d.bereitstellungId);
+      return true;
+    })
     .sort((a, b) => a.frist!.fristende.localeCompare(b.frist!.fristende));
 }
 
@@ -88,7 +90,12 @@ export async function postfachDocumentFile(id: string) {
 
 export async function lastPostfachRequest() {
   const [row] = await db
-    .select({ createdAt: schema.postfachRequests.createdAt, ok: schema.postfachRequests.ok, message: schema.postfachRequests.message, test: schema.postfachRequests.test })
+    .select({
+      createdAt: schema.postfachRequests.createdAt,
+      ok: schema.postfachRequests.ok,
+      message: schema.postfachRequests.message,
+      test: schema.postfachRequests.test,
+    })
     .from(schema.postfachRequests)
     .where(eq(schema.postfachRequests.art, "anfrage"))
     .orderBy(desc(schema.postfachRequests.createdAt))
@@ -125,9 +132,7 @@ export async function fetchPostfach(actor: string, client: ElsterClient, options
   const inhalt = new Map(result.dateien.flatMap((d) => (d.inhalt ? [[d.referenzId, d.inhalt] as const] : [])));
   const fehler = result.dateien.flatMap((d) => (d.fehler ? [{ referenzId: d.referenzId, fehler: d.fehler }] : []));
   const stored = await storeAll(result.bereitstellungen, inhalt);
-  const complete = result.bereitstellungen
-    .filter((b) => b.anhaenge.length > 0 && b.anhaenge.every((a) => stored.has(a.referenzId)))
-    .map((b) => b.id);
+  const complete = result.bereitstellungen.filter((b) => b.anhaenge.length > 0 && b.anhaenge.every((a) => stored.has(a.referenzId))).map((b) => b.id);
 
   const neu = await withActor(actor, async (tx) => {
     const [request] = await tx
@@ -252,11 +257,7 @@ export async function disableAutoFetch(actor: string): Promise<void> {
 }
 
 /** Für den Scheduler: echter Abruf mit gespeicherter PIN, höchstens alle 20 Stunden */
-export async function runDuePostfachFetch(
-  client: ElsterClient,
-  herstellerId: string | undefined,
-  now = new Date(),
-): Promise<PostfachFetchSummary | null> {
+export async function runDuePostfachFetch(client: ElsterClient, herstellerId: string | undefined, now = new Date()): Promise<PostfachFetchSummary | null> {
   if (!herstellerId || isSimulated(client)) return null;
   const certificate = await loadActiveCertificate();
   if (!certificate?.pinCiphertext) return null;

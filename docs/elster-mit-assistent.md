@@ -1,6 +1,16 @@
+---
+title: "Mein ELSTER mit KI-Assistent ausfüllen"
+description: >-
+  Die Umsatzsteuer-Voranmeldung in Mein ELSTER von einem KI-Assistenten wie Claude Code ausfüllen
+  lassen – mit den Werten aus dem Haben-MCP.
+---
+
 # In Mein ELSTER mit einem KI-Assistenten abgeben
 
 Direkt aus Haben senden geht nur mit ERiC und einer eigenen **Hersteller-ID** ([einrichtung.md › Hersteller-ID](einrichtung.md#hersteller-id-wer-ist-hersteller)). Die Beantragung dauert oft Wochen. Bis dahin gibst du im Portal **Mein ELSTER** ab und überträgst die Kennzahlen aus Haben von Hand.
+
+> [!TIP]
+> Ohne Abtippen und ohne Assistent: Die **Voranmeldung** schreibt Haben als Datei für den XML-Import von Mein ELSTER ([Umsatzsteuer › XML-Import in Mein ELSTER](umsatzsteuer.md#ohne-hersteller-id-xml-import-in-mein-elster)); alle vier Formulare (Voranmeldung, USt-Erklärung, EÜR, Einkommensteuer) trägt die Erweiterung [Haben für Mein ELSTER](elster-mit-erweiterung.md) anhand der Feldkennungen ein. Der Assistent bleibt für das, was beide nicht abdecken. Alle Wege im Vergleich: [Abgabe an ELSTER](elster-abgabe.md).
 
 Das Abtippen kann ein KI-Assistent übernehmen, etwa Claude Code. Er braucht dafür zwei Dinge:
 
@@ -106,11 +116,12 @@ Ich bin im Browser schon angemeldet.
 
 ### Was die Ausfüllliste liefert
 
-`ustva_ausfuellliste` nimmt die Werte, die Haben auch senden würde: einen von Hand überschriebenen Entwurf, sonst die aktuell aus den Buchungen berechneten Kennzahlen.
+`ustva_ausfuellliste` nimmt die Werte, die Haben auch senden würde: einen von Hand überschriebenen Entwurf, sonst die aktuell aus den Buchungen berechneten Kennzahlen. Ist die Voranmeldung in Haben schon gesendet oder vermerkt, liefert es die festgeschriebenen Werte mit einem Hinweis, dass eine Korrektur eine berichtigte Anmeldung braucht.
 
 | Feld | Inhalt |
 | --- | --- |
 | `formular`, `anmeldungszeitraum` | Name des Formulars und Monat, wie sie in Mein ELSTER heißen |
+| `faellig`, `grundlage`, `hinweis` | Fälligkeit; ob die Werte aus den Buchungen berechnet, von Hand überschrieben oder schon gesendet sind; ein Hinweis bei schon gesendeter Anmeldung oder für Kleinunternehmer |
 | `felder` | nur Kennzahlen mit Wert, in der Reihenfolge des Formulars: Kennzahl, Abschnitt, Bezeichnung und `eingabe`, der Wert zum Eintippen (Dezimalkomma, kein Tausenderpunkt, Bemessungsgrundlagen in vollen Euro). Bei einer [berichtigten Anmeldung](umsatzsteuer.md#berichtigte-anmeldung) steht Kz 10 = 1 vorn. |
 | `zumVergleich` | was Mein ELSTER selbst rechnet: Steuer zu Kz 81 und 86 sowie Kz 83 |
 | `vorpruefung` | die offenen Hinweise der [Vorprüfung](umsatzsteuer.md#vorprüfung) |
@@ -120,7 +131,7 @@ Maßgeblich ist immer die Kennzahl. Abschnitte und Bezeichnungen folgen dem amtl
 
 ## Grenzen
 
-- **Haben erfährt nichts von der Abgabe.** Die Voranmeldung bleibt in Haben ein Entwurf, und die [Frist](fristen.md) bleibt offen. Ein Werkzeug „Abgabe vermerken“ mit Datum, Transferticket und Protokoll wäre der erste schreibende Zugang ([#96](https://github.com/firsttris/haben/issues/96)).
+- **Die Abgabe vermerkst du selbst in Haben**, unter **Außerhalb von Haben abgegeben** auf der Seite der Voranmeldung, mit Tag, Transferticket, Kz 83 und Protokoll ([Abgabe vermerken](umsatzsteuer.md#abgabe-außerhalb-von-haben-vermerken)). Der Assistent kann das nicht: Der MCP-Zugang liest nur.
 - **Kein Ersatz für ERiC:** kein Senden aus Haben heraus, kein Postfachabruf, keine Übernahme von Bescheiden. Wer eine Hersteller-ID hat, sendet weiter direkt aus Haben.
-- **Nur die Voranmeldung.** Für die Jahreserklärungen (Umsatzsteuererklärung, Anlage EÜR) gibt es noch keine Ausfüllliste; die Werte liefert das Werkzeug `jahreserklaerung`.
+- **Nur die Voranmeldung.** Für die Jahreserklärungen (Umsatzsteuererklärung, Anlage EÜR, Einkommensteuer) gibt es noch keine Ausfüllliste; das Werkzeug `jahreserklaerung` liefert nur Summen, Hinweise und die Steuerprognose, nicht die einzelnen Zeilen.
 - **Abgesendet wird nur von dir.**

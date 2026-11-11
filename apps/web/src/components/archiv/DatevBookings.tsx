@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { formatDate } from "../../lib/format.ts";
 import type { ArchiveSearch } from "../../routes/_app/archiv/index.tsx";
 import type { getDatevBookings } from "../../server/functions/archive.ts";
+import { DatevAbschluss } from "./DatevAbschluss.tsx";
 import { YearSwitch } from "./YearSwitch.tsx";
 
 type Data = Awaited<ReturnType<typeof getDatevBookings>>;
@@ -25,10 +26,11 @@ export function DatevBookings({ year, years, data, search }: { year: number; yea
         <YearSwitch year={year} years={years} search={search} />
         <div className="archive-filter" style={{ justifyContent: "space-between" }}>
           <Link
-            to="/archiv" activeProps={{}}
+            to="/archiv"
+            activeProps={{}}
             search={{ ...search, ohneBeleg: search.ohneBeleg ? undefined : true, seite: undefined }}
             className={search.ohneBeleg ? "chip active" : "chip"}
-            aria-pressed={Boolean(search.ohneBeleg)}
+            aria-current={search.ohneBeleg ? "page" : undefined}
           >
             Nur ohne passenden Beleg
           </Link>
@@ -103,9 +105,12 @@ export function DatevBookings({ year, years, data, search }: { year: number; yea
           </nav>
         )}
       </section>
+      {data.abschluss && <DatevAbschluss data={data.abschluss} />}
       {data.totals.length > 0 && (
         <section className="card stack" aria-labelledby="totals-heading">
-          <h2 id="totals-heading" style={{ margin: 0 }}>Umsätze je Konto {year}</h2>
+          <h2 id="totals-heading" style={{ margin: 0 }}>
+            Umsätze je Konto {year}
+          </h2>
           <p className="small muted" style={{ margin: 0 }}>
             Summe aller Buchungen auf jedem Konto, wie im DATEV-Stapel. Wo eine Steuerautomatik greift, sind die Beträge brutto.
           </p>

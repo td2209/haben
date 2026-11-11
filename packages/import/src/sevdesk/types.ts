@@ -41,6 +41,7 @@ export const sevContactSchema = z.looseObject({
   customerNumber: str,
   /** Ansprechpartner einer Organisation haben einen parent */
   parent: ref,
+  /** Contact-Tags laut OpenAPI: 2 Lieferant, 3 Kunde, 4 Partner, 28 Interessent. */
   category: ref,
   status: numeric,
   vatNumber: str,
@@ -145,6 +146,8 @@ export const sevVoucherSchema = z.looseObject({
   voucherDate: str,
   supplier: ref,
   supplierName: str,
+  /** Name des Lieferanten beim Speichern des Belegs; bleibt beim Umbenennen des Kontakts gleich */
+  supplierNameAtSave: str,
   /** Belegnummer */
   description: str,
   document: ref,
@@ -155,7 +158,7 @@ export const sevVoucherSchema = z.looseObject({
   sumTax: numeric,
   sumGross: numeric,
   paidAmount: numeric,
-  /** C Einnahme (credit), D Ausgabe (debit) */
+  /** C Ausgabe (credit), D Einnahme (debit); belegt mit echten Antworten, siehe mapSevVoucher */
   creditDebit: str,
   /** VOU Beleg, RV wiederkehrender Beleg (Vorlage) */
   voucherType: str,
@@ -181,6 +184,68 @@ export const sevVoucherPosSchema = z.looseObject({
   comment: str,
 });
 export type SevVoucherPos = z.infer<typeof sevVoucherPosSchema>;
+
+/** Order umfasst Angebote (AN), Auftragsbestätigungen (AB) und Lieferscheine (LI). */
+export const sevOrderSchema = z.looseObject({
+  id,
+  objectName: str,
+  orderType: str,
+  orderNumber: str,
+  orderDate: str,
+  create: str,
+  status: numeric,
+  contact: ref,
+  address: str,
+  currency: str,
+  sumNet: numeric,
+  sumTax: numeric,
+  sumGross: numeric,
+  sumNetForeignCurrency: numeric,
+  sumTaxForeignCurrency: numeric,
+  sumGrossForeignCurrency: numeric,
+});
+export type SevOrder = z.infer<typeof sevOrderSchema>;
+// ---------------------------------------------------------------- Zahlungen
+
+/** Zahlungskonto (Bank, Kasse, Zahlungsdienst) */
+export const sevCheckAccountSchema = z.looseObject({ id, objectName: str, name: str, type: str, currency: str });
+export type SevCheckAccount = z.infer<typeof sevCheckAccountSchema>;
+
+/** Bankumsatz, eingebettet in CheckAccountTransactionLog (embed=checkAccountTransaction) */
+export const sevCheckAccountTransactionSchema = z.looseObject({
+  id,
+  objectName: str,
+  valueDate: str,
+  entryDate: str,
+  amount: numeric,
+  checkAccount: ref,
+  status: numeric,
+  deletedAt: str,
+});
+
+/**
+ * Zuordnung eines Bankumsatzes zu einem Beleg (Rechnung, Gutschrift, Beleg) mit dem zugeordneten Betrag. Ein geteilter
+ * Umsatz hat je Beleg einen eigenen Eintrag. Belegt mit echten V1-Antworten (#343); in der OpenAPI nicht beschrieben.
+ */
+export const sevCheckAccountTransactionLogSchema = z.looseObject({
+  id,
+  objectName: str,
+  create: str,
+  /** Mit embed=checkAccountTransaction der ganze Umsatz, sonst nur { id, objectName } */
+  checkAccountTransaction: sevCheckAccountTransactionSchema.nullish(),
+  fromStatus: numeric,
+  toStatus: numeric,
+  amountPaid: numeric,
+  bookingDate: str,
+  object: ref,
+});
+export type SevCheckAccountTransactionLog = z.infer<typeof sevCheckAccountTransactionLogSchema>;
+
+// V1 liefert bei Beziehungen teils ein Objekt mit lückenhaften Zahlenschlüsseln, sonst eine Liste.
+// Die Form und alle unbekannten Felder bleiben für die unveränderte Archivantwort erhalten.
+export const sevRelatedObjectsResponseSchema = z.looseObject({
+  objects: z.union([z.array(z.record(z.string(), z.unknown())), z.record(z.string(), z.unknown())]),
+});
 
 // ---------------------------------------------------------------- Dateien
 

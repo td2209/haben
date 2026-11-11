@@ -1,5 +1,5 @@
 import { UserError } from "../../errors.ts";
-import { toElsterSteuernummer, type Cents, type Prognose } from "@haben/core";
+import { isKapitalgesellschaft, toElsterSteuernummer, type Cents, type Prognose, type Rechtsform } from "@haben/core";
 import {
   buildBankverbindungXml,
   buildNachrichtXml,
@@ -22,6 +22,15 @@ import { createHash } from "node:crypto";
 
 export class FinanzamtError extends UserError {}
 
+/**
+ * Lehnt ab, was es nur für die Einkommensteuer einer Person gibt: Eine GmbH oder UG zahlt Körperschaftsteuer
+ * (§ 1 Abs. 1 Nr. 1 KStG), hat keine Einkommensteuer-Vorauszahlungen, keine vorausgefüllte Steuererklärung und
+ * keine Zusammenveranlagung (docs/einrichtung.md, Rechtsform).
+ */
+export function nurEinzelunternehmen(rechtsform: Rechtsform, was: string): void {
+  if (isKapitalgesellschaft(rechtsform)) throw new FinanzamtError(`${was} gibt es nur im Einzelunternehmen; eine GmbH oder UG zahlt keine Einkommensteuer.`);
+}
+
 export const messageSchema = z.object({
   topic: z.enum(["nachricht", "vorauszahlung"]),
   betreff: z.string().trim().min(1, "Betreff fehlt").max(NACHRICHT_BETREFF_MAX, `Der Betreff hat höchstens ${NACHRICHT_BETREFF_MAX} Zeichen`),
@@ -36,8 +45,7 @@ export const messageSchema = z.object({
 
 export type MessageInput = z.input<typeof messageSchema>;
 
-const dayOfYear = (date: string) =>
-  Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${date.slice(0, 4)}-01-01T00:00:00Z`)) / 86_400_000) + 1;
+const dayOfYear = (date: string) => Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${date.slice(0, 4)}-01-01T00:00:00Z`)) / 86_400_000) + 1;
 
 export interface PrepaymentBasis {
   year: number;
@@ -111,6 +119,7 @@ export interface SendMessageOptions {
 export async function sendMessage(actor: string, rawInput: MessageInput, client: ElsterClient, options: SendMessageOptions): Promise<ElsterResult> {
   const input = messageSchema.parse(rawInput);
   const company = await loadCompany();
+  if (input.topic === "vorauszahlung") nurEinzelunternehmen(company.rechtsform, "Die Herabsetzung der Einkommensteuer-Vorauszahlungen");
   const issues = messageIssues(company);
   if (issues.length > 0) throw new FinanzamtError(`Firmendaten unvollständig: ${issues.join(", ")}.`);
 
@@ -185,7 +194,9 @@ function submit(
   options: SendMessageOptions,
   buildXml: (herstellerId: string, test: boolean) => string,
 ): Promise<ElsterResult> {
-  const key = createHash("sha256").update(JSON.stringify([record.topic, record.betreff, record.text, record.figures ?? null])).digest("hex");
+  const key = createHash("sha256")
+    .update(JSON.stringify([record.topic, record.betreff, record.text, record.figures ?? null]))
+    .digest("hex");
   return uebermitteln(client, {
     sperre: `haben.nachricht.${key}`,
     vorgang: options.kind,

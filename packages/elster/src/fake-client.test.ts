@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { checkXml, FakeElsterClient, fakeProtokollPdf } from "./fake-client.ts";
-import { createElsterClient } from "./factory.ts";
+import { createElsterClient, parseWorkerCommand } from "./factory.ts";
 import { EricProcessClient } from "./process-client.ts";
 import { parseTransferTicket } from "./ticket.ts";
 import { parseVastBeleg } from "./vast.ts";
 import { buildUstvaXml, TEST_HERSTELLER_ID } from "./xml.ts";
+import { buildDauerfristXml } from "./dauerfrist.ts";
 
 const xml = (test = true) =>
   buildUstvaXml({
@@ -65,13 +66,28 @@ describe("fakeProtokollPdf", () => {
     const startxref = Number(/startxref\n(\d+)/.exec(pdf)?.[1]);
     expect(pdf.slice(startxref).startsWith("xref")).toBe(true);
     const offsets = [...pdf.matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
-    offsets.forEach((offset, i) => expect(pdf.slice(offset).startsWith(`${i + 1} 0 obj`)).toBe(true));
+    offsets.forEach((offset, i) => {
+      expect(pdf.slice(offset).startsWith(`${i + 1} 0 obj`)).toBe(true);
+    });
   });
 });
 
 describe("checkXml", () => {
   it("erlaubt selbstschließende Elemente", () => {
     expect(checkXml("<Elster><a/><Kz83>1,00</Kz83></Elster>")).toBeUndefined();
+  });
+
+  it("verlangt Kz 83 nur in der Voranmeldung, nicht im Antrag auf Dauerfristverlängerung derselben Datenart", () => {
+    const antrag = buildDauerfristXml({
+      year: 2026,
+      steuernummer13: "9198011310010",
+      sondervorauszahlung: 100_000,
+      datenlieferant: { name: "Erika Mustermann", strasse: "Hauptstr. 1", plz: "10115", ort: "Berlin" },
+      herstellerId: TEST_HERSTELLER_ID,
+      produktVersion: "0.1.0",
+      test: true,
+    });
+    expect(checkXml(antrag)).toBeUndefined();
   });
 });
 
@@ -83,5 +99,24 @@ describe("createElsterClient", () => {
 
   it("nimmt ERiC mit ERIC_HOME", () => {
     expect(createElsterClient({ ERIC_HOME: "/opt/eric" })).toBeInstanceOf(EricProcessClient);
+    expect(createElsterClient({ ERIC_HOME: "/opt/eric", ERIC_WORKER_COMMAND: "/opt/haben-x86_64/worker.sh" })).toBeInstanceOf(EricProcessClient);
+  });
+});
+
+describe("parseWorkerCommand", () => {
+  it("zerlegt ERIC_WORKER_COMMAND an Leerzeichen", () => {
+    expect(parseWorkerCommand("/opt/haben-x86_64/worker.sh")).toEqual(["/opt/haben-x86_64/worker.sh"]);
+    expect(parseWorkerCommand("  qemu-x86_64  -L /opt/x86_64\t/opt/x86_64/usr/local/bin/bun ")).toEqual([
+      "qemu-x86_64",
+      "-L",
+      "/opt/x86_64",
+      "/opt/x86_64/usr/local/bin/bun",
+    ]);
+  });
+
+  it("gibt ohne Befehl nichts zurück, dann läuft der Worker mit der eigenen Laufzeit", () => {
+    expect(parseWorkerCommand(undefined)).toBeUndefined();
+    expect(parseWorkerCommand("")).toBeUndefined();
+    expect(parseWorkerCommand("   ")).toBeUndefined();
   });
 });

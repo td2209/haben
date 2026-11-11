@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { texts } from "./i18n.ts";
 import { pdfData, renderInvoicePdf } from "./pdf.ts";
 import { quotePdfData } from "./quote.ts";
 import { sampleDocument } from "./samples.ts";
 
 describe("Belege auf Englisch", () => {
+  it.each(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"].map((month, index) => [index + 1, month] as const))(
+    "formatiert Monat %i einheitlich als %s",
+    (month, expected) => {
+      expect(texts("en").date(`2026-${String(month).padStart(2, "0")}-02`)).toBe(`2 ${expected} 2026`);
+    },
+  );
+
   it("übersetzt Titel, Felder, Beträge, Einheiten und Zahlungssatz", () => {
     const doc = { ...sampleDocument({ taxTreatment: "reverse_charge" }), language: "en" as const };
     doc.buyer = { ...doc.buyer, land: "GB", ustId: "GB123456789" };
@@ -25,7 +33,7 @@ describe("Belege auf Englisch", () => {
     expect(data.payment).toBe("Please transfer the amount by 16 Oct 2026, quoting the invoice number.");
     expect(data.taxNote).toBe("Reverse charge: VAT liability of the recipient (Art. 196 VAT Directive).");
     expect(data.labels).toEqual({
-      columns: { pos: "No.", description: "Description", quantity: "Qty", unitPrice: "Unit price", vat: "VAT", net: "Net" },
+      columns: { pos: "No.", itemNumber: "Item no.", description: "Description", quantity: "Qty", unitPrice: "Unit price", vat: "VAT", net: "Net" },
       page: ["Page", "of", ""],
     });
     expect(data.footer[0]).toContain("Phone +49 30 1234567");
@@ -36,7 +44,10 @@ describe("Belege auf Englisch", () => {
   it("übersetzt Angebote und behält Deutsch als Vorgabe", () => {
     const { seller, buyer, lines, totals } = sampleDocument();
     const quote = { number: "AN-2026-007", issueDate: "2026-10-01", validUntil: "2026-10-31", seller, buyer, lines, totals };
-    expect(quotePdfData({ ...quote, language: "en" })).toMatchObject({ title: "Quote", payment: "This quote is valid until 31 Oct 2026. We look forward to your order." });
+    expect(quotePdfData({ ...quote, language: "en" })).toMatchObject({
+      title: "Quote",
+      payment: "This quote is valid until 31 Oct 2026. We look forward to your order.",
+    });
     expect(quotePdfData(quote).labels.columns.pos).toBe("Pos.");
     expect(pdfData(sampleDocument()).labels.page).toEqual(["Seite", "von", ""]);
   });

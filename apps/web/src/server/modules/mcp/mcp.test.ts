@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", () => {
   let mcp: typeof import("./index.ts");
@@ -11,6 +11,7 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
 
   beforeAll(async () => {
     sql = await setupTestDb();
+    await sql`insert into "user"(id,name,email,role) values (${actor}, 'Testinhaber', 'inhaber@example.de', 'inhaber')`;
     mcp = await import("./index.ts");
     server = await import("./server.ts");
     tools = await import("./tools.ts");
@@ -22,7 +23,7 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
 
   beforeEach(async () => {
     server.resetRateLimitForTests();
-    await sql`truncate mcp_calls, mcp_tokens, company cascade`;
+    await leeren(sql)`truncate mcp_calls, mcp_tokens, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, steuernummer, bundesland) values (1, 'Testfirma', 'Musterstraße 1', '77815', 'Bühl', '35/123/45678', 'BW')`;
   });
 
@@ -44,12 +45,12 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
 
   async function enabledToken(days: 30 | 90 | 365 = 30) {
     await mcp.setMcpEnabled(actor, true);
-    return (await mcp.createMcpToken({ name: "Claude Code", days })).token;
+    return (await mcp.createMcpToken({ name: "Claude Code", days }, new Date(), actor)).token;
   }
 
   it("ist standardmäßig aus; Tokens gibt es erst nach dem Einschalten", async () => {
     expect(await mcp.mcpEnabled()).toBe(false);
-    await expect(mcp.createMcpToken({ name: "Claude Code", days: 30 })).rejects.toThrow(/einschalten/);
+    await expect(mcp.createMcpToken({ name: "Claude Code", days: 30 }, new Date(), actor)).rejects.toThrow(/einschalten/);
   });
 
   it("speichert nur den Hash und zeigt das Token nur beim Anlegen", async () => {
@@ -78,18 +79,46 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
     await mcp.setMcpEnabled(actor, true);
 
     const { id } = (await mcp.listMcpTokens())[0]!;
-    await mcp.revokeMcpToken(id);
+    await mcp.revokeMcpToken(actor, id);
     expect((await rpc(token, "tools/list")).status).toBe(401);
     expect((await mcp.listMcpTokens())[0]!.status).toBe("widerrufen");
 
-    const expired = await mcp.createMcpToken({ name: "Alt", days: 30 }, new Date(Date.now() - 31 * 86_400_000));
+    const expired = await mcp.createMcpToken({ name: "Alt", days: 30 }, new Date(Date.now() - 31 * 86_400_000), actor);
     expect((await rpc(expired.token, "tools/list")).status).toBe(401);
     expect((await mcp.listMcpTokens()).find((t) => t.name === "Alt")!.status).toBe("abgelaufen");
   });
 
+  it("speichert die gewählten Rechte geordnet und ohne Doppelte; ohne Recht kein Token", async () => {
+    await mcp.setMcpEnabled(actor, true);
+    await mcp.createMcpToken({ name: "Automation", days: 90, scopes: ["rechnungen:entwuerfe", "kontakte:lesen", "rechnungen:entwuerfe"] }, new Date(), actor);
+    const [row] = await sql`select scopes from mcp_tokens`;
+    expect(row!.scopes).toEqual(["kontakte:lesen", "rechnungen:entwuerfe"]);
+    expect((await mcp.listMcpTokens())[0]!.scopes).toEqual(["kontakte:lesen", "rechnungen:entwuerfe"]);
+    await expect(mcp.createMcpToken({ name: "leer", days: 30, scopes: [] }, new Date(), actor)).rejects.toThrow(/mindestens ein Recht/);
+    await expect(mcp.createMcpToken({ name: "falsch", days: 30, scopes: ["haben:alles" as never] }, new Date(), actor)).rejects.toThrow();
+  });
+
+  it("ein Token nur für die REST-API wird über MCP mit 403 abgelehnt", async () => {
+    await mcp.setMcpEnabled(actor, true);
+    const { token } = await mcp.createMcpToken({ name: "Automation", days: 30, scopes: ["rechnungen:lesen"] }, new Date(), actor);
+    const response = await rpc(token, "tools/list");
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toContain("haben:lesen");
+  });
+
+  it("schreiben schließt lesen ein, nicht umgekehrt und nicht über Bereiche hinweg", () => {
+    expect(mcp.hasScope(["kontakte:schreiben"], "kontakte:lesen")).toBe(true);
+    expect(mcp.hasScope(["rechnungen:entwuerfe"], "rechnungen:lesen")).toBe(true);
+    expect(mcp.hasScope(["kontakte:lesen"], "kontakte:schreiben")).toBe(false);
+    expect(mcp.hasScope(["kontakte:schreiben"], "rechnungen:lesen")).toBe(false);
+    expect(mcp.hasScope(["haben:lesen"], "kontakte:lesen")).toBe(false);
+  });
+
   it("nimmt nur POST an, der Server hält keine Sitzungen", async () => {
     const token = await enabledToken();
-    const response = await server.handleMcpRequest(new Request("http://localhost:3000/api/mcp", { method: "GET", headers: { Authorization: `Bearer ${token}` } }));
+    const response = await server.handleMcpRequest(
+      new Request("http://localhost:3000/api/mcp", { method: "GET", headers: { Authorization: `Bearer ${token}` } }),
+    );
     expect(response.status).toBe(405);
   });
 
@@ -135,7 +164,12 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
       felder: unknown[];
       zumVergleich: { bezeichnung: string; wert: string }[];
     };
-    expect(liste).toMatchObject({ formular: "Umsatzsteuer-Voranmeldung 2026", anmeldungszeitraum: "September 2026", grundlage: "aus den Buchungen berechnet", felder: [] });
+    expect(liste).toMatchObject({
+      formular: "Umsatzsteuer-Voranmeldung 2026",
+      anmeldungszeitraum: "September 2026",
+      grundlage: "aus den Buchungen berechnet",
+      felder: [],
+    });
     expect(liste.zumVergleich).toEqual([{ bezeichnung: "Kz 83 Verbleibende Umsatzsteuer-Vorauszahlung", wert: "0,00" }]);
 
     const legacy = JSON.parse((await call("lexoffice_belege", { zeitraum: "2023-03" })).content[0]!.text) as { anzahl: number; nachZahlung: boolean };
@@ -148,7 +182,18 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
     const missing = await call("lexoffice_beleg", { beleg: "RE1019" });
     expect(missing.isError).toBe(true);
     expect(missing.content[0]!.text).toMatch(/Kein Lexoffice-Beleg „RE1019“/);
-    for (const name of ["fristen", "offene_posten", "ueberfaellige_rechnungen", "rechnungen", "belege", "bankumsaetze_ohne_zuordnung", "euer", "jahreserklaerung", "vorausgefuellte_belege", "lexoffice_abgleich"]) {
+    for (const name of [
+      "fristen",
+      "offene_posten",
+      "ueberfaellige_rechnungen",
+      "rechnungen",
+      "belege",
+      "bankumsaetze_ohne_zuordnung",
+      "euer",
+      "jahreserklaerung",
+      "vorausgefuellte_belege",
+      "lexoffice_abgleich",
+    ]) {
       expect((await call(name)).isError, name).toBeFalsy();
     }
 
@@ -192,9 +237,35 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
     ]);
 
     const belege = (await run_("lexoffice_belege", { zeitraum: "2025-05", richtung: "alle", suche: "", limit: 50 })) as { belege: Record<string, unknown>[] };
-    expect(belege.belege[0]).toMatchObject({ nummer: "RE1", steuerart: "intraCommunitySupply", brutto: 1000, zahlungen: [{ datum: "2025-05-02", betrag: 1000 }] });
+    expect(belege.belege[0]).toMatchObject({
+      nummer: "RE1",
+      steuerart: "intraCommunitySupply",
+      brutto: 1000,
+      zahlungen: [{ datum: "2025-05-02", betrag: 1000 }],
+    });
 
-    const [file] = await sql`insert into archive_files (kind, year, filename, sha256, mime_type, size) values ('datev', 2025, 'DATEV_2025.csv', 'abc', 'text/csv', 1) returning id`;
+    // GmbH: Körperschaftsteuer ist weder Einnahme noch Ausgabe, steht aber summiert da
+    await sql`insert into lexoffice_vouchers (lexoffice_id, import_id, type, direction, number, date, status, contact_name, net, tax, gross, taxes, categories, raw)
+      values ('lx-3', ${run!.id}, 'purchaseinvoice', 'ausgabe', 'KSt', '2025-05-10', 'paid', 'Finanzamt', 50000, 0, 50000,
+        ${JSON.stringify([{ rate: 0, net: 50000, tax: 0 }])}::jsonb,
+        ${JSON.stringify([{ categoryId: "k", name: "Körperschaftsteuer", rate: 0, net: 50000, tax: 0 }])}::jsonb, '{}'::jsonb)`;
+    await sql`update company set rechtsform = 'gmbh'`;
+    try {
+      const gmbh = (await run_("lexoffice_abgleich", { jahr: 2025 })) as { rechtsform: string; jahre: { nichtEinnahmeOderAusgabe: unknown[] }[] };
+      expect(gmbh.rechtsform).toBe("gmbh");
+      expect(gmbh.jahre[0]!.nichtEinnahmeOderAusgabe).toEqual([{ art: "Körperschaft- und Gewerbesteuer", anzahl: 1, zufluss: 0, abfluss: 500 }]);
+      const mai = (await run_("lexoffice_belege", { zeitraum: "2025-05", richtung: "alle", suche: "", limit: 50 })) as {
+        belege: { nummer: string }[];
+        nichtEinnahmeOderAusgabe: unknown[];
+      };
+      expect(mai.belege.map((b) => b.nummer)).toEqual(["RE1"]);
+      expect(mai.nichtEinnahmeOderAusgabe).toEqual([{ art: "Körperschaft- und Gewerbesteuer", anzahl: 1, zufluss: 0, abfluss: 500 }]);
+    } finally {
+      await sql`update company set rechtsform = 'einzelunternehmen'`;
+    }
+
+    const [file] =
+      await sql`insert into archive_files (kind, year, filename, sha256, mime_type, size) values ('datev', 2025, 'DATEV_2025.csv', 'abc', 'text/csv', 1) returning id`;
     await sql`insert into datev_bookings (file_id, row, date, amount, side, account, contra_account, voucher_field1, raw) values
       (${file!.id}, 3, '2025-04-10', 119000, 'S', '1200', '8400', 'RE1', '{}'::jsonb),
       (${file!.id}, 4, '2025-04-12', 11900, 'H', '1200', '4930', '', '{}'::jsonb)`;
@@ -207,7 +278,17 @@ describe.skipIf(!testDatabaseUrl)("MCP-Zugang für KI-Assistenten (Postgres)", (
     ]);
     const buchungen = (await run_("lexoffice_buchungen", { zeitraum: "2025", konto: "8400", ohneBeleg: false, limit: 50 })) as { buchungen: unknown[] };
     expect(buchungen.buchungen).toEqual([
-      { datum: "2025-04-10", betrag: 1190, sollHaben: "S", konto: "1200", gegenkonto: "8400", buSchluessel: "", belegnummer: "RE1", text: "", belegGefunden: true },
+      {
+        datum: "2025-04-10",
+        betrag: 1190,
+        sollHaben: "S",
+        konto: "1200",
+        gegenkonto: "8400",
+        buSchluessel: "",
+        belegnummer: "RE1",
+        text: "",
+        belegGefunden: true,
+      },
     ]);
     const abgleich2025 = (await run_("lexoffice_abgleich", { jahr: 2025 })) as { jahre: { abgelegteDateien: unknown[] }[] };
     expect(abgleich2025.jahre[0]!.abgelegteDateien).toEqual([{ art: "datev", name: "DATEV_2025.csv", notiz: "" }]);

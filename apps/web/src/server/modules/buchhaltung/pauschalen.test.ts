@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Pauschalen (Postgres)", () => {
   let pauschalen: typeof import("./pauschalen.ts");
@@ -20,14 +20,16 @@ describe.skipIf(!testDatabaseUrl)("Pauschalen (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate pauschalen, asset_depreciations, assets, allocations, bank_transactions, bank_imports, bank_accounts,
+    await leeren(sql)`truncate pauschalen, asset_depreciations, assets, allocations, bank_transactions, bank_imports, bank_accounts,
       journal_lines, journal_entries, document_amounts, documents, company cascade`;
     await sql`insert into company (id, name, versteuerung, kontenrahmen, bundesland) values (1, 'Testfirma', 'ist', 'SKR03', 'BW')`;
   });
 
   const linesOf = async (journalEntryId: string) =>
-    (await sql`select e.date::text as date, e.locked_at is not null as locked, l.account, l.debit, l.credit from journal_lines l
-      join journal_entries e on e.id = l.entry_id where e.id = ${journalEntryId} order by l.debit desc`).map((r) => ({ ...r }));
+    (
+      await sql`select e.date::text as date, e.locked_at is not null as locked, l.account, l.debit, l.credit from journal_lines l
+      join journal_entries e on e.id = l.entry_id where e.id = ${journalEntryId} order by l.debit desc`
+    ).map((r) => ({ ...r }));
 
   it("bucht Homeoffice-Tage zum Monatsende an Privateinlage", async () => {
     const row = await pauschalen.createPauschale(actor, { art: "homeoffice", month: "2026-03", tage: 12 }, today);
@@ -104,11 +106,7 @@ describe.skipIf(!testDatabaseUrl)("Pauschalen (Postgres)", () => {
 
   it("landet in den Zeilen der Anlage EÜR und als Einlage", async () => {
     await pauschalen.createPauschale(actor, { art: "homeoffice", month: "2026-03", tage: 10 }, today);
-    await pauschalen.createPauschale(
-      actor,
-      { art: "fahrt", date: "2026-03-10", description: "Kunde", km: 100, fahrzeug: "pkw", hinUndZurueck: false },
-      today,
-    );
+    await pauschalen.createPauschale(actor, { art: "fahrt", date: "2026-03-10", description: "Kunde", km: 100, fahrzeug: "pkw", hinUndZurueck: false }, today);
     await pauschalen.createPauschale(actor, { art: "verpflegung", date: "2026-03-10", description: "Kunde", tag: "eintaegig" }, today);
     const storno = await pauschalen.createPauschale(actor, { art: "verpflegung", date: "2026-03-11", description: "Kunde", tag: "eintaegig" }, today);
     await pauschalen.reversePauschale(actor, storno.id);

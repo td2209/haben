@@ -1,7 +1,7 @@
 import { INTERNAL_ERROR } from "../../errors.ts";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Wiederkehrende Rechnungen (Postgres)", () => {
   let recurring: typeof import("./recurring.ts");
@@ -21,14 +21,23 @@ describe.skipIf(!testDatabaseUrl)("Wiederkehrende Rechnungen (Postgres)", () => 
   });
 
   beforeEach(async () => {
-    await sql`truncate journal_lines, journal_entries, invoice_lines, invoices, recurring_invoices, invoice_number_counters,
+    await leeren(sql)`truncate journal_lines, journal_entries, invoice_lines, invoices, recurring_invoices, invoice_number_counters,
       contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, telefon, steuernummer, ust_id, bundesland, iban, bic, bank)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '+49 941 123456',
               '198/113/10010', 'DE123456789', 'BY', 'DE89370400440532013000', 'COBADEFFXXX', 'Commerzbank')`;
     const contact = await contacts.createContact(actor, {
-      kundennummer: "10001", name: "Nordwerk Software GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-      email: "rechnung@nordwerk.example", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+      kundennummer: "10001",
+      name: "Nordwerk Software GmbH",
+      strasse: "Hafenstraße 5",
+      plz: "20457",
+      ort: "Hamburg",
+      land: "DE",
+      email: "rechnung@nordwerk.example",
+      ustId: "",
+      iban: "",
+      leitwegId: "",
+      defaultFormat: null,
     });
     contactId = contact.id;
   });
@@ -51,14 +60,51 @@ describe.skipIf(!testDatabaseUrl)("Wiederkehrende Rechnungen (Postgres)", () => 
     ...overrides,
   });
 
+  it("übernimmt die Einleitung mit Platzhaltern in die Rechnung", async () => {
+    await recurring.createRecurring(actor, template({ intro: "Leistungen {zeitraum} gemäß Wartungsvertrag", nextDate: "2026-09-30", endDate: "2026-09-30" }));
+    await recurring.runDueRecurring("2026-10-02");
+    const rows = await sql`select intro, note from invoices`;
+    expect(rows.map((r) => ({ ...r }))).toEqual([{ intro: "Leistungen September 2026 gemäß Wartungsvertrag", note: "Abrechnung September 2026" }]);
+  });
+
+  it("übernimmt den Text zur Position mit Platzhaltern in die Rechnung", async () => {
+    const lines = [{ ...template().lines[0]!, detail: "Leistungszeitraum {zeitraum}\nlaut Wartungsvertrag" }];
+    await recurring.createRecurring(actor, template({ lines, nextDate: "2026-09-30", endDate: "2026-09-30" }));
+    await recurring.runDueRecurring("2026-10-02");
+    const rows = await sql`select description, detail from invoice_lines`;
+    expect(rows.map((r) => ({ ...r }))).toEqual([{ description: "Wartung September 2026", detail: "Leistungszeitraum September 2026\nlaut Wartungsvertrag" }]);
+  });
+
+  it("Vorlagen von vor dem Text zur Position erzeugen Positionen ohne Text", async () => {
+    const created = await recurring.createRecurring(actor, template({ nextDate: "2026-09-30", endDate: "2026-09-30" }));
+    await sql`update recurring_invoices set lines = jsonb_build_array((lines -> 0) - 'detail') where id = ${created.id}`;
+    await recurring.runDueRecurring("2026-10-02");
+    const [line] = await sql`select detail from invoice_lines`;
+    expect(line?.detail).toBe("");
+  });
+
   it("holt verpasste Termine als Entwürfe nach, mit Platzhaltern und Leistungszeitraum", async () => {
     const created = await recurring.createRecurring(actor, template());
     expect(await recurring.runDueRecurring("2026-10-02")).toEqual({ created: 2, finalized: 0, mailed: 0, errors: [] });
     const rows = await sql`select i.issue_date::text, i.service_from::text, i.service_to::text, i.status, i.note, l.description
       from invoices i join invoice_lines l on l.invoice_id = i.id order by i.issue_date`;
     expect(rows.map((r) => ({ ...r }))).toEqual([
-      { issue_date: "2026-08-31", service_from: "2026-08-01", service_to: "2026-08-31", status: "draft", note: "Abrechnung August 2026", description: "Wartung August 2026" },
-      { issue_date: "2026-09-30", service_from: "2026-09-01", service_to: "2026-09-30", status: "draft", note: "Abrechnung September 2026", description: "Wartung September 2026" },
+      {
+        issue_date: "2026-08-31",
+        service_from: "2026-08-01",
+        service_to: "2026-08-31",
+        status: "draft",
+        note: "Abrechnung August 2026",
+        description: "Wartung August 2026",
+      },
+      {
+        issue_date: "2026-09-30",
+        service_from: "2026-09-01",
+        service_to: "2026-09-30",
+        status: "draft",
+        note: "Abrechnung September 2026",
+        description: "Wartung September 2026",
+      },
     ]);
     const [after] = await sql`select next_date::text, active from recurring_invoices where id = ${created.id}`;
     expect(after).toEqual({ next_date: "2026-10-31", active: true });

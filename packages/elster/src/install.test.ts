@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { ericDownloadUrl, ericHomeIn, installedEricVersion, installEric, type InstallProgress } from "./install.ts";
+import { ericDownloadUrl, ericHomeIn, ericPlatformSupported, installedEricVersion, installEric, type InstallProgress } from "./install.ts";
 
 const big = randomBytes(3 * 1024 * 1024);
 
@@ -38,6 +38,33 @@ async function tempDir() {
 }
 
 describe("ERiC installieren", () => {
+  it("lässt ERiC nur auf Linux x86_64 zu, auf anderen Rechnern nur mit ERIC_WORKER_COMMAND", () => {
+    expect(ericPlatformSupported(undefined, "linux", "x64")).toBe(true);
+    expect(ericPlatformSupported(undefined, "linux", "arm64")).toBe(false);
+    expect(ericPlatformSupported("   ", "linux", "arm64")).toBe(false);
+    expect(ericPlatformSupported(undefined, "darwin", "x64")).toBe(false);
+    expect(ericPlatformSupported("/opt/haben-x86_64/worker.sh", "linux", "arm64")).toBe(true);
+  });
+
+  // Nur auf Rechnern ohne Linux x86_64 prüfbar (arm64, macOS); die CI läuft auf x86_64
+  it.skipIf(ericPlatformSupported())("verweigert die Installation ohne passende Plattform, bevor etwas geladen wird", async () => {
+    const fetch = (() => Promise.reject(new Error("darf nicht laden"))) as unknown as typeof globalThis.fetch;
+    await expect(installEric({ version: "43.4.6.0", dir: "/gibt/es/nicht", fetch })).rejects.toThrow(/ERIC_WORKER_COMMAND/);
+  });
+
+  // Dieselbe Sperre auf jedem Rechner, auch in der CI auf x86_64: process.arch für die Dauer des Tests auf arm64
+  it("verweigert die Installation auf arm64 ohne ERIC_WORKER_COMMAND, bevor etwas geladen wird", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "arch")!;
+    Object.defineProperty(process, "arch", { ...original, value: "arm64" });
+    try {
+      const fetch = (() => Promise.reject(new Error("darf nicht laden"))) as unknown as typeof globalThis.fetch;
+      await expect(installEric({ version: "43.4.6.0", dir: "/gibt/es/nicht", fetch })).rejects.toThrow(/ERIC_WORKER_COMMAND/);
+      await expect(installEric({ version: "43.4.6.0", dir: "/gibt/es/nicht", fetch, workerCommand: "  " })).rejects.toThrow(/ERIC_WORKER_COMMAND/);
+    } finally {
+      Object.defineProperty(process, "arch", original);
+    }
+  });
+
   it("baut die Download-Adresse aus der Version", () => {
     expect(ericDownloadUrl("43.4.6.0")).toBe("https://download.elster.de/download/eric/eric_43/ERiC-43.4.6.0-Linux-x86_64.jar");
     expect(() => ericDownloadUrl("../../etc")).toThrow(/Ungültige/);
@@ -47,7 +74,14 @@ describe("ERiC installieren", () => {
     const dir = join(await tempDir(), "eric");
     const { fn, urls } = fakeFetch(goodJar);
     const progress: InstallProgress[] = [];
-    const result = await installEric({ version: "43.4.6.0", dir, fetch: fn, baseUrl: "http://elster.test/eric", checkPlatform: false, onProgress: (p) => progress.push(p) });
+    const result = await installEric({
+      version: "43.4.6.0",
+      dir,
+      fetch: fn,
+      baseUrl: "http://elster.test/eric",
+      checkPlatform: false,
+      onProgress: (p) => progress.push(p),
+    });
     expect(urls).toEqual(["http://elster.test/eric/eric_43/ERiC-43.4.6.0-Linux-x86_64.jar"]);
     expect(result).toMatchObject({ version: "43.4.6.0", files: 3 });
     const home = ericHomeIn(dir)!;
@@ -56,6 +90,47 @@ describe("ERiC installieren", () => {
     expect(existsSync(join(home, "dll"))).toBe(false);
     expect(await installedEricVersion(home)).toBe("43.4.6.0");
     expect(progress.at(-1)?.phase).toBe("fertig");
+  });
+
+  // Im Container ist /tmp ein tmpfs (deploy/compose.yml): Das Paket (rund 520 MB) läge dort im Arbeitsspeicher. Es
+  // gehört ins Volume, in das ERiC ohnehin entpackt wird, und ist danach wieder weg.
+  it("lädt das Paket ins Zielverzeichnis statt nach TMPDIR und räumt es danach weg", async () => {
+    const tmp = await tempDir();
+    const dir = join(await tempDir(), "eric");
+    const { fn } = fakeFetch(goodJar);
+    const original = process.env.TMPDIR;
+    process.env.TMPDIR = tmp;
+    const waehrendDesEntpackens: { tmp: string[]; ziel: string[] }[] = [];
+    try {
+      await installEric({
+        version: "43.4.6.0",
+        dir,
+        fetch: fn,
+        baseUrl: "http://elster.test/eric",
+        checkPlatform: false,
+        onProgress: (p) => {
+          if (p.phase !== "entpacken" || waehrendDesEntpackens.length > 0) return;
+          const ziel = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((name) => name.endsWith("eric.jar"));
+          waehrendDesEntpackens.push({ tmp: readdirSync(tmp), ziel });
+        },
+      });
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = original;
+    }
+    expect(waehrendDesEntpackens).toEqual([{ tmp: [], ziel: [expect.stringMatching(/eric\.jar$/)] }]);
+    expect((await readdir(dir)).sort()).toEqual(["AKTUELL", "ERiC-43.4.6.0"]);
+  });
+
+  // Das Paket liegt jetzt im Volume statt in /tmp: Bricht eine Installation hart ab (Neustart des Containers während des
+  // Downloads), bliebe der Ordner .download-… mit bis zu 520 MB für immer im Volume. Die nächste Installation räumt ihn weg.
+  it("räumt Download-Ordner einer abgebrochenen Installation im Zielverzeichnis weg", async () => {
+    const dir = join(await tempDir(), "eric");
+    await mkdir(join(dir, ".download-abgebrochen"), { recursive: true });
+    await writeFile(join(dir, ".download-abgebrochen", "eric.jar"), big);
+    const { fn } = fakeFetch(goodJar);
+    await installEric({ version: "43.4.6.0", dir, fetch: fn, baseUrl: "http://elster.test/eric", checkPlatform: false });
+    expect((await readdir(dir)).sort()).toEqual(["AKTUELL", "ERiC-43.4.6.0"]);
   });
 
   it("schaltet erst auf die neue Version um, wenn sie vollständig ist, und räumt danach auf", async () => {

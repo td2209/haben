@@ -6,6 +6,7 @@ import { useAction } from "../lib/use-action.ts";
 import { NoticeBanner } from "./NoticeBanner.tsx";
 import { comparePruefwert, runIntegrityCheck, type getChainHead } from "../server/functions/integrity.ts";
 import type { IntegrityReport } from "../server/modules/auswertungen/index.ts";
+import { Field } from "./Field.tsx";
 
 type Head = Awaited<ReturnType<typeof getChainHead>>;
 
@@ -64,16 +65,17 @@ export function IntegrityCard({ head }: { head: Head }) {
     <section className="card" aria-labelledby="integrity-heading">
       <h2 id="integrity-heading">Änderungsprotokoll prüfen</h2>
       <p className="small muted" style={{ margin: 0 }}>
-        Jede Änderung steht im Audit-Log, jeder Eintrag ist per SHA-256 mit seinem Vorgänger verkettet. Festgeschriebene Buchungen, Rechnungen,
-        Belege, Voranmeldungen, Kassenbuch, Zuordnungen, Pauschalen und AfA tragen zusätzlich ein Siegel über ihren Inhalt. Außerdem gleicht
-        die Prüfung das Journal mit Umsatzsteuer und EÜR ab. Sie findet nachträgliche Änderungen an der Datenbank,
-        verhindert sie aber nicht. Wer die Datenbank ändern kann, kann auch die Kette neu berechnen; das zeigt erst ein Vergleich mit einem
-        Prüfwert, den du außerhalb des Servers aufbewahrst (wöchentliche Mail, Jahresarchiv).
+        Jede Änderung steht im Audit-Log, jeder Eintrag ist per SHA-256 mit seinem Vorgänger verkettet. Festgeschriebene Buchungen, Rechnungen, Belege,
+        Voranmeldungen, Kassenbuch, Zuordnungen, Pauschalen und AfA tragen zusätzlich ein Siegel über ihren Inhalt. Außerdem gleicht die Prüfung das Journal mit
+        Umsatzsteuer und EÜR ab. Sie findet nachträgliche Änderungen an der Datenbank, verhindert sie aber nicht. Wer die Datenbank ändern kann, kann auch die
+        Kette neu berechnen; das zeigt erst ein Vergleich mit einem Prüfwert, den du außerhalb des Servers aufbewahrst (wöchentliche Mail, Jahresarchiv).
       </p>
       {current && (
         <div className="small">
           <div className="muted">Aktueller Prüfwert</div>
-          <code style={{ overflowWrap: "anywhere" }}>Nr. {current.seq} · {current.hash}</code>
+          <code style={{ overflowWrap: "anywhere" }}>
+            Nr. {current.seq} · {current.hash}
+          </code>
           {current.at && <div className="muted">Letzte Änderung {formatDateTime(current.at)}</div>}
         </div>
       )}
@@ -89,7 +91,10 @@ export function IntegrityCard({ head }: { head: Head }) {
               const differences = result.abgleich.abweichungen.length;
               action.setNotice(
                 result.problems.length > 0
-                  ? { tone: "danger", text: `${result.problems.length}${result.truncated ? " oder mehr" : ""} Befunde. Die Datenbank wurde außerhalb von Haben verändert.` }
+                  ? {
+                      tone: "danger",
+                      text: `${result.problems.length}${result.truncated ? " oder mehr" : ""} Befunde. Die Datenbank wurde außerhalb von Haben verändert.`,
+                    }
                   : differences > 0
                     ? {
                         tone: "danger",
@@ -107,7 +112,7 @@ export function IntegrityCard({ head }: { head: Head }) {
         </button>
       </div>
       {report && report.problems.length > 0 && (
-        <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+        <ul className="small" style={{ margin: 0, paddingLeft: 20 }}>
           {report.problems.map((p, i) => (
             <li key={i} style={{ overflowWrap: "anywhere" }}>
               <strong>{TABELLEN[p.tabelle] ?? p.tabelle}</strong>
@@ -120,7 +125,7 @@ export function IntegrityCard({ head }: { head: Head }) {
       {report && (report.abgleich.abweichungen.length > 0 || report.abgleich.hinweise.length > 0) && (
         <div className="small">
           <div className="muted">Abgleich von Journal, Umsatzsteuer und EÜR</div>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
             {report.abgleich.abweichungen.map((a, i) => (
               <li key={i}>
                 <strong>
@@ -138,10 +143,19 @@ export function IntegrityCard({ head }: { head: Head }) {
         </div>
       )}
       <form className="actions" style={{ alignItems: "flex-end", borderTop: "1px solid var(--line)", paddingTop: 16 }} onSubmit={onCompare}>
-        <label className="field" style={{ flex: 1, minWidth: 0 }}>
-          Prüfwert aus Mail oder Jahresarchiv
-          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Nr. 1234 · 3f5a…" autoComplete="off" spellCheck={false} required />
-        </label>
+        <Field label="Prüfwert aus Mail oder Jahresarchiv" style={{ flex: 1, minWidth: 0 }}>
+          {(control) => (
+            <input
+              {...control}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Nr. 1234 · 3f5a…"
+              autoComplete="off"
+              spellCheck={false}
+              required
+            />
+          )}
+        </Field>
         <button type="submit" className="btn" disabled={busy || !text.trim()}>
           Vergleichen
         </button>

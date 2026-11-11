@@ -18,12 +18,17 @@ function NewQuotePage() {
       contacts={data.contacts}
       seller={data.company}
       sellerIssues={data.sellerIssues}
+      letterIssues={data.letterIssues}
       issues={[]}
       numberCounters={data.numberCounters}
+      numberRunning={data.numberRunning}
+      numberFormat={data.numberFormat}
       corrects={null}
       bundesland={data.bundesland}
       kleinunternehmer={data.kleinunternehmer}
       articles={data.articles}
+      textBlocks={data.textBlocks}
+      planTemplates={data.planTemplates}
     />
   );
 }

@@ -1,5 +1,6 @@
 import { lexDate, lexToBasisPoints, lexToCents, type ImportedPayments, type LegacyVoucher, type LegacyVoucherType } from "../lexoffice/map.ts";
 import type {
+  SevCheckAccountTransactionLog,
   SevCommunicationWay,
   SevContact,
   SevContactAddress,
@@ -9,6 +10,7 @@ import type {
   SevVoucher,
   SevVoucherPos,
 } from "./types.ts";
+import { taxesFromPositions } from "./steuersaetze.ts";
 
 /*
  * Reine Abbildungen der sevDesk-Antworten auf dieselben Strukturen wie beim Lexoffice-Import,
@@ -21,6 +23,8 @@ import type {
 export interface SevImportedContact {
   sevdeskId: string;
   name: string;
+  /** Nur eine eindeutige sevDesk-Kategorie; null ist keine belegte Kunden- oder Lieferantenrolle. */
+  role: "customer" | "supplier" | null;
   kundennummer: string | null;
   strasse: string;
   plz: string;
@@ -71,6 +75,10 @@ export function isSevMainContact(c: SevContact): boolean {
 }
 
 export function mapSevContact(c: SevContact, address?: SevContactAddress, email?: SevCommunicationWay): SevImportedContact {
+  // Contact-Tags der sevDesk-OpenAPI: Supplier 2, Customer 3, Partner 4, Prospect 28.
+  // Partner und Interessent belegen keine der beiden Haben-Rollen: https://api.sevdesk.de/openapi.yaml
+  const category = refId(c.category);
+  const role = category === "2" ? "supplier" : category === "3" ? "customer" : null;
   const person = [c.surename, c.familyname]
     .map((s) => s?.trim())
     .filter(Boolean)
@@ -78,7 +86,10 @@ export function mapSevContact(c: SevContact, address?: SevContactAddress, email?
   return {
     sevdeskId: String(c.id),
     name: c.name?.trim() || person || `Kontakt ${c.id}`,
-    kundennummer: c.customerNumber?.trim() || null,
+    role,
+    // Wer in Haben Kunde wird (auch Partner und unklare Kategorien), behält die sevDesk-Nummer; die eigene Nummer
+    // des Lieferanten ist weder unsere Kundennummer noch unsere Nummer bei ihm.
+    kundennummer: role === "supplier" ? null : c.customerNumber?.trim() || null,
     strasse: address?.street?.trim() ?? "",
     plz: address?.zip?.trim() ?? "",
     ort: address?.city?.trim() ?? "",
@@ -103,38 +114,6 @@ export function firstByContact<T extends { contact?: { id: string | number } | n
 
 // ------------------------------------------------------------ Steuersätze
 
-type Bucket = { rate: number; net: number; tax: number };
-
-/**
- * Netto und Steuer je Steuersatz aus den Positionen. Maßgeblich sind die Summen des Belegs:
- * Rundungsdifferenzen zwischen Positionen und Kopf landen beim größten Satz, die der Steuer beim größten Satz mit Steuer.
- */
-function taxesFromPositions(
-  positions: { taxRate?: string | number | null; net: number; tax: number }[],
-  net: number,
-  tax: number,
-): Bucket[] {
-  const byRate = new Map<number, Bucket>();
-  for (const p of positions) {
-    const rate = lexToBasisPoints(sevNumber(p.taxRate));
-    const b = byRate.get(rate) ?? { rate, net: 0, tax: 0 };
-    b.net += p.net;
-    b.tax += p.tax;
-    byRate.set(rate, b);
-  }
-  const buckets = [...byRate.values()];
-  if (buckets.length <= 1) {
-    if (net === 0 && tax === 0 && buckets.length === 0) return [];
-    return [{ rate: buckets[0]?.rate ?? 0, net, tax }];
-  }
-  const largestOf = (list: Bucket[]) => list.reduce((a, b) => (Math.abs(b.net) > Math.abs(a.net) ? b : a));
-  largestOf(buckets).net += net - buckets.reduce((s, b) => s + b.net, 0);
-  // Steuerdifferenzen nur auf einen Satz mit Steuer, sonst stünde beim 0-%-Satz Steuer
-  const taxed = buckets.filter((b) => b.rate !== 0);
-  largestOf(taxed.length > 0 ? taxed : buckets).tax += tax - buckets.reduce((s, b) => s + b.tax, 0);
-  return buckets;
-}
-
 function positionAmounts(p: SevDocumentPos | SevVoucherPos): { net: number; tax: number } {
   const net = cents(p.sumNet ?? p.sumNetAccounting);
   const grossRaw = p.sumGross ?? p.sumGrossAccounting;
@@ -148,21 +127,61 @@ function positionAmounts(p: SevDocumentPos | SevVoucherPos): { net: number; tax:
 const PAID = 1000;
 
 /**
- * Zahlungsstand aus paidAmount und payDate. sevDesk liefert keine einzelnen Zahlungen über diese
- * Endpunkte; die bezahlte Summe zählt deshalb als eine Zahlung am letzten Zahldatum.
+ * Zahlungsstand ohne erfundene Einzelzahlungen: paidAmount/payDate belegen keine zeitliche Aufteilung. Ausgeglichen
+ * ist payDate laut sevDesk-OpenAPI der Tag der Zahlung (https://api.sevdesk.de/openapi.yaml) und wird paidDate;
+ * fehlt es, bleibt paidDate leer statt des Belegdatums.
  */
-function payments(statusCode: number, gross: number, paidAmount: string | number | null | undefined, payDate: string | null | undefined, date: string): ImportedPayments {
+function payments(statusCode: number, gross: number, paidAmount: string | number | null | undefined, payDate: string | null | undefined): ImportedPayments {
   const absGross = Math.abs(gross);
   let paid = Math.min(Math.abs(cents(paidAmount)), absGross);
   if (statusCode === PAID) paid = absGross;
   const open = absGross - paid;
-  const paidDate = lexDate(payDate) ?? (paid > 0 ? date : null);
   return {
     status: open === 0 ? "balanced" : paid > 0 ? "partlyPaid" : "open",
     openAmount: Math.sign(gross) * open + 0,
-    paidDate: open === 0 ? paidDate : null,
-    items: paid > 0 && paidDate ? [{ type: "manualPayment", date: paidDate, amount: Math.sign(gross) * paid + 0 }] : [],
+    paidDate: open === 0 ? lexDate(payDate) : null,
+    items: [],
   };
+}
+
+/** Einzelzahlung aus sevDesk: zugeordneter Betrag in Cent mit Vorzeichen der Zahlungsrichtung */
+export interface SevPaymentItem {
+  sourceId: string;
+  transactionId: string | null;
+  accountId: string | null;
+  date: string;
+  amount: number;
+}
+
+const LOG_OBJECTS: Record<string, string> = { Invoice: "invoice", CreditNote: "creditnote", Voucher: "voucher" };
+
+/**
+ * Einzelzahlungen je Beleg ("invoice/123") aus CheckAccountTransactionLog. Betrag ist amountPaid, also der dem Beleg
+ * zugeordnete Teil; bei einem geteilten Umsatz nicht der Umsatzbetrag. Gelöschte Umsätze und Zahlungen ohne Datum
+ * entfallen: Ob die übrigen den Zahlungsstand ergeben, prüft erst die Auswertung.
+ */
+export function mapSevPaymentLogs(logs: SevCheckAccountTransactionLog[]): Map<string, SevPaymentItem[]> {
+  const out = new Map<string, SevPaymentItem[]>();
+  for (const log of logs) {
+    const kind = LOG_OBJECTS[log.object?.objectName ?? ""];
+    const objectId = refId(log.object);
+    if (!kind || !objectId) continue;
+    const tx = log.checkAccountTransaction;
+    if (tx?.deletedAt) continue;
+    const date = lexDate(log.bookingDate) ?? lexDate(tx?.valueDate);
+    if (!date) continue;
+    const item: SevPaymentItem = {
+      sourceId: String(log.id),
+      transactionId: refId(log.checkAccountTransaction),
+      accountId: refId(tx?.checkAccount),
+      date,
+      amount: cents(log.amountPaid),
+    };
+    const key = `${kind}/${objectId}`;
+    out.set(key, [...(out.get(key) ?? []), item]);
+  }
+  for (const items of out.values()) items.sort((a, b) => a.date.localeCompare(b.date) || a.sourceId.localeCompare(b.sourceId));
+  return out;
 }
 
 function statusName(code: number, fallback: string): string {
@@ -185,6 +204,16 @@ export function isSevInvoiceImportable(i: SevInvoice): boolean {
   return !["WKR", "MA"].includes((i.invoiceType ?? "RE").toUpperCase());
 }
 
+// Das Brutto zeigt wie im Kopf des Belegs, ob die Positionen schon negativ stehen; das Netto kann null sein oder gegenläufig.
+// Heben sie sich brutto auf, entscheidet die Steuer. Zeilen mit Gegenvorzeichen sind Rabatte oder Verrechnungen
+function creditPositionSign(positions: SevDocumentPos[]): (n: number) => number {
+  const amounts = positions.map(positionAmounts);
+  const tax = amounts.reduce((sum, a) => sum + a.tax, 0);
+  const gross = amounts.reduce((sum, a) => sum + a.net + a.tax, 0);
+  const positive = (gross || tax) > 0;
+  return (n) => (positive ? neg(n) : n);
+}
+
 export function mapSevInvoice(i: SevInvoice, positions: SevDocumentPos[]): SevMappedVoucher {
   const id = String(i.id);
   const invoiceType = (i.invoiceType ?? "RE").toUpperCase();
@@ -192,6 +221,7 @@ export function mapSevInvoice(i: SevInvoice, positions: SevDocumentPos[]): SevMa
   const storno = invoiceType === "SR";
   const type: LegacyVoucherType = storno ? "creditnote" : invoiceType === "AR" ? "downpaymentinvoice" : "invoice";
   const sign = (n: number) => (storno ? neg(Math.abs(n)) : n);
+  const positionSign = storno ? creditPositionSign(positions) : (n: number) => n;
 
   const tax = sign(cents(i.sumTax));
   const gross = sign(cents(i.sumGross));
@@ -199,7 +229,7 @@ export function mapSevInvoice(i: SevInvoice, positions: SevDocumentPos[]): SevMa
   const taxes = taxesFromPositions(
     positions.map((p) => {
       const a = positionAmounts(p);
-      return { taxRate: p.taxRate, net: sign(a.net), tax: sign(a.tax) };
+      return { rate: lexToBasisPoints(sevNumber(p.taxRate)), net: positionSign(a.net), tax: positionSign(a.tax) };
     }),
     net,
     tax,
@@ -232,7 +262,7 @@ export function mapSevInvoice(i: SevInvoice, positions: SevDocumentPos[]): SevMa
       fileIds: [],
       remark: i.customerInternalNote?.trim() ?? "",
     },
-    payment: payments(status, gross, i.paidAmount, i.payDate, date),
+    payment: payments(status, gross, i.paidAmount, i.payDate),
   };
 }
 
@@ -242,13 +272,14 @@ export function isSevCreditNoteImportable(c: SevCreditNote): boolean {
 
 export function mapSevCreditNote(c: SevCreditNote, positions: SevDocumentPos[]): SevMappedVoucher {
   const id = String(c.id);
+  const positionSign = creditPositionSign(positions);
   const tax = neg(Math.abs(cents(c.sumTax)));
   const gross = neg(Math.abs(cents(c.sumGross)));
   const net = gross - tax;
   const taxes = taxesFromPositions(
     positions.map((p) => {
       const a = positionAmounts(p);
-      return { taxRate: p.taxRate, net: neg(Math.abs(a.net)), tax: neg(Math.abs(a.tax)) };
+      return { rate: lexToBasisPoints(sevNumber(p.taxRate)), net: positionSign(a.net), tax: positionSign(a.tax) };
     }),
     net,
     tax,
@@ -278,7 +309,7 @@ export function mapSevCreditNote(c: SevCreditNote, positions: SevDocumentPos[]):
       fileIds: [],
       remark: c.customerInternalNote?.trim() ?? "",
     },
-    payment: payments(status, gross, c.paidAmount, c.payDate, date),
+    payment: payments(status, gross, c.paidAmount, c.payDate),
   };
 }
 
@@ -291,12 +322,13 @@ export function isSevVoucherImportable(v: SevVoucher): boolean {
 }
 
 /**
- * Beleg aus der Buchhaltung. creditDebit C ist eine Einnahme, D eine Ausgabe. Negative Summen
- * sind Gutschriften und bleiben negativ, wie beim Lexoffice-Import.
+ * Beleg aus der Buchhaltung. creditDebit D ist eine Einnahme, C eine Ausgabe: Die OpenAPI nennt nur „credit (C) or
+ * debit (D)“, echte Antworten tragen bei C Aufwandskonten, bei D Erlöse und Erstattungen (#472). Negative Summen sind
+ * Gutschriften und bleiben negativ, wie beim Lexoffice-Import.
  */
 export function mapSevVoucher(v: SevVoucher, positions: SevVoucherPos[]): SevMappedVoucher {
   const id = String(v.id);
-  const income = (v.creditDebit ?? "D").toUpperCase() === "C";
+  const income = (v.creditDebit ?? "C").toUpperCase() === "D";
   const tax = cents(v.sumTax);
   const gross = cents(v.sumGross);
   const net = gross - tax;
@@ -313,7 +345,7 @@ export function mapSevVoucher(v: SevVoucher, positions: SevVoucherPos[]): SevMap
     };
   });
   const taxes = taxesFromPositions(
-    categories.map((c) => ({ taxRate: c.rate / 100, net: c.net, tax: c.tax })),
+    categories.map((c) => ({ rate: c.rate, net: c.net, tax: c.tax })),
     net,
     tax,
   );
@@ -335,7 +367,7 @@ export function mapSevVoucher(v: SevVoucher, positions: SevVoucherPos[]): SevMap
       serviceTo: lexDate(v.deliveryDateUntil) ?? serviceFrom,
       status: statusName(status, String(v.status ?? "")),
       contactLexofficeId: refId(v.supplier),
-      contactName: v.supplierName?.trim() ?? "",
+      contactName: v.supplierName?.trim() || v.supplierNameAtSave?.trim() || "",
       currency: v.currency?.trim() || "EUR",
       net,
       tax,
@@ -345,6 +377,6 @@ export function mapSevVoucher(v: SevVoucher, positions: SevVoucherPos[]): SevMap
       fileIds: documentId ? [documentId] : [],
       remark: "",
     },
-    payment: payments(status, gross, v.paidAmount, v.payDate, date),
+    payment: payments(status, gross, v.paidAmount, v.payDate),
   };
 }

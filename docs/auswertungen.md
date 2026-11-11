@@ -1,12 +1,21 @@
+---
+title: "Auswertungen: EÜR, offene Posten und Jahresexport"
+description: >-
+  Einnahmen-Überschuss-Rechnung, Einnahmen und Ausgaben je Monat, offene Posten und das
+  Jahresarchiv als ZIP mit DATEV-Export für die Steuerberatung.
+---
+
 # Auswertungen und Jahresexport
 
 Die Seite „Auswertungen“ zeigt dir die Einnahmen-Überschuss-Rechnung (EÜR) eines Jahres, Einnahmen und Ausgaben je Monat und die offenen Posten. Unter „Einstellungen“ lädst du das Jahresarchiv als ZIP für die Aufbewahrung herunter. Als Anlage EÜR an das Finanzamt geht die EÜR unter [Jahreserklärungen](jahreserklaerung.md).
+
+Eine GmbH oder UG bilanziert (§ 238 HGB, § 8 Abs. 1 KStG) und macht keine EÜR. Bei ihr zeigt die Seite Einnahmen und Ausgaben je Monat nach Zahlung, den Überschuss nach Zahlung und die offenen Posten, aber keine EÜR-Tabelle und kein „EÜR als CSV“; den Gewinn zeigt der [Jahresabschluss](buchhaltung.md#jahresabschluss-gmbh-und-ug).
 
 <img src="screenshot-auswertungen.png" alt="Seite Auswertungen mit Kennzahlen, Säulendiagramm der Einnahmen und Ausgaben je Monat und der EÜR-Tabelle" width="900">
 
 ## Überblick
 
-Oben wählst du das Jahr (Vor- und Folgejahr per Pfeil, dazu alle Jahre mit Bankumsätzen, festgeschriebenen Rechnungen oder gebuchten Belegen). Darunter stehen vier Kennzahlen:
+Oben wählst du das Jahr: ‹ und › blättern ins Vor- und Folgejahr, dazwischen stehen das laufende Jahr und alle Jahre mit Bankumsätzen, festgeschriebenen Rechnungen oder gebuchten Belegen, jedes einmal. Darunter stehen vier Kennzahlen:
 
 | Kennzahl | Bedeutung |
 | --- | --- |
@@ -19,19 +28,28 @@ Oben wählst du das Jahr (Vor- und Folgejahr per Pfeil, dazu alle Jahre mit Bank
 
 Haben rechnet die EÜR nach § 4 Abs. 3 EStG: Es zählt, wann Geld fließt, nicht wann eine Rechnung geschrieben oder ein Beleg gebucht wurde. Die Berechnung steht in `packages/core/src/euer.ts`, die Daten sammelt `apps/web/src/server/modules/auswertungen/reports.ts`.
 
+**Ab dem Stichjahr aus dem Journal.** Im Einzelunternehmen rechnet Haben die EÜR ab dem Stichjahr ([Wie die Kennzahlen entstehen](umsatzsteuer.md#wie-die-kennzahlen-entstehen)) wie DATEV aus den Buchungen; in GmbH und UG, die bilanzieren, bleibt die Übersicht nach Zahlung aus Rechnungen, Belegen und Zahlungen, sonst zählten Abschlussbuchungen wie Rückstellungen als Ausgabe: Eine Buchung ohne Forderung oder Verbindlichkeit (Bank, Kasse, privat bezahlt, Pauschale) zählt mit ihrem Datum nach ihren Konten; eine Rechnung bzw. ein Beleg auf Ziel zählt mit jeder Zahlung anteilig, gerundet wie die Zahlung. AfA und Privatnutzung kommen aus dem Journal, sobald das Jahr gebucht ist, vorher aus dem Anlagenverzeichnis. Für aus Lexoffice übernommene Rechnungen und Belege verteilt Haben die Zahlung auf die Zeilen, die es für Rechnung bzw. Beleg gebucht hätte. Was unten steht, gilt in beiden Fällen; die Rechnung aus Rechnungen, Belegen und Zahlungen bleibt die Gegenprobe im [Abgleich](buchhaltung.md#abgleich-von-journal-umsatzsteuer-und-eür).
+
 ### Was zählt
 
 | Quelle | Datum | EÜR-Position |
 | --- | --- | --- |
 | Zahlungseingang, im Bankabgleich einer Rechnung zugeordnet | Buchungstag des Umsatzes | Einnahmen netto (steuerpflichtig oder steuerfrei) und vereinnahmte Umsatzsteuer |
-| Zahlung, im Bankabgleich einem Beleg zugeordnet | Buchungstag des Umsatzes | Ausgabe in der Kategorie des Belegs und gezahlte Vorsteuer; ohne Vorsteuerabzug (Kleinunternehmer) der Bruttobetrag als Ausgabe |
-| Gebuchter Beleg, privat bezahlt | Belegdatum | wie oben |
+| Zahlung, im Bankabgleich einem Beleg zugeordnet | Buchungstag des Umsatzes | Ausgabe in der Kategorie des Belegs und gezahlte Vorsteuer; ohne Vorsteuerabzug (Kleinunternehmer) der Bruttobetrag als Ausgabe. Ein [aufgeteilter Beleg](belege.md#auf-mehrere-kategorien-aufteilen) zählt anteilig je Zeile in deren Kategorie |
+| Gebuchter Beleg, privat oder bar aus der [Kasse](kasse.md) bezahlt | Belegdatum; ein Storno fließt am Datum der Gegenbuchung zurück | wie oben |
+| Bareinnahme auf eine Rechnung im [Kassenbuch](kasse.md) | Datum der Bareinnahme | wie ein Zahlungseingang |
 | Bankumsatz „Umsatzsteuer an das Finanzamt“, Ausgang | Buchungstag | An das Finanzamt gezahlte Umsatzsteuer |
 | Bankumsatz „Umsatzsteuer an das Finanzamt“, Eingang | Buchungstag | Vom Finanzamt erstattete Umsatzsteuer |
+| Bankumsatz „Sondervorauszahlung (Dauerfristverlängerung)“ | Buchungstag | wie „Umsatzsteuer an das Finanzamt“ |
 | Bankumsatz „Kontoführung und Bankgebühren“ | Buchungstag | Ausgabe „Kontoführung und Gebühren“ |
-| Bankumsatz „Mahngebühren und Verzugszinsen“ | Buchungstag | Umsatzsteuerfreie und nicht steuerbare Betriebseinnahmen |
+| Bankumsatz „Mahngebühren und Verzugszinsen“ oder „Zinserträge“ | Buchungstag | Umsatzsteuerfreie und nicht steuerbare Betriebseinnahmen |
+| Bankumsatz „Steuerzahlung oder Erstattung“ | Buchungstag | je nach Steuerart und Teil: Umsatzsteuer früherer Jahre als gezahlte bzw. erstattete Umsatzsteuer, Zinsen und Zuschläge als „Zinsen und Zuschläge zu betrieblichen Steuern“, Erstattungszinsen als Einnahme; Gewerbesteuer nur nachrichtlich, private Steuern gar nicht ([Steuerzahlungen](bank.md#steuerzahlungen)) |
+| Bankumsatz „Einnahme oder Ausgabe (Kategorie, Steuersatz)“ | Buchungstag | Einnahme netto (als Kleinunternehmer ohne Steuer) und vereinnahmte Umsatzsteuer; Ausgabe brutto in der Kategorie, ohne Vorsteuer ([Auf eine Kategorie buchen](bank.md#auf-eine-kategorie-buchen)) |
+| Bankumsatz „Darlehen“ | Buchungstag | Zinsen und Gebühren als „Schuldzinsen zur Finanzierung von Anlagevermögen“ bzw. „Übrige Schuldzinsen“; Auszahlung und Tilgung zählen nicht ([Darlehen](bank.md#darlehen)) |
+| Bankumsatz „Lohn/Gehalt an Mitarbeiter“, „Lohnsteuer an das Finanzamt“ oder „SV-Beiträge an Krankenkasse oder Minijob-Zentrale“ | Buchungstag | Löhne und Gehälter einschließlich Lohnsteuer und Sozialversicherung; eine Rückzahlung mindert sie ([Lohn](lohn.md#buchung)) |
 | Kursdifferenz beim Ausgleich einer Rechnung oder eines Belegs in Fremdwährung | Buchungstag | Erträge bzw. Aufwendungen aus Kursdifferenzen; die Rechnung bzw. der Beleg zählt dafür in voller Höhe ([Bankabgleich](bank.md#kursdifferenz-bei-fremdwährung)). In der Anlage EÜR: nicht steuerbare Einnahmen bzw. übrige Ausgaben |
 | Beleg mit Kategorie „Anlagegut“, bezahlt | Buchungstag bzw. Belegdatum | nur die Vorsteuer; der Kaufpreis wirkt über die AfA |
+| [Pauschale](pauschalen.md) | Datum der Pauschale | Ausgabe je Pauschale (Homeoffice, Fahrten, Verpflegung) |
 | Anlagenverzeichnis | Jahr laut Abschreibungsplan | AfA, Sofortabschreibung GWG, Auflösung Sammelposten, Restbuchwert bei Abgang ([Anlagen und AfA](anlagen.md)) |
 
 Bei Teilzahlungen teilt Haben die Zahlung im Verhältnis der Rechnung bzw. des Belegs auf Netto und Steuer je Steuersatz auf. Hebst du eine Zuordnung im Bankabgleich auf, hebt die Gegenzeile die ursprüngliche Zahlung in der EÜR genau auf.
@@ -49,9 +67,9 @@ Wie in der Anlage EÜR ist die vereinnahmte Umsatzsteuer eine Betriebseinnahme. 
 
 Die Tabelle „Einnahmen-Überschuss-Rechnung“ zeigt:
 
-- **Betriebseinnahmen:** Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer (nur, wenn es solche gibt), Umsatzsteuerpflichtige Betriebseinnahmen (netto), Umsatzsteuerfreie und nicht steuerbare Betriebseinnahmen, Private Kfz-Nutzung, Vereinnahmte Umsatzsteuer, Umsatzsteuer auf unentgeltliche Wertabgaben (beide nur bei privat genutzten Firmenwagen), Vom Finanzamt erstattete Umsatzsteuer. Belege mit Privatanteil zählen nur mit dem betrieblichen Teil
-- **Betriebsausgaben:** eine Zeile je Belegkategorie mit Betrag (Software, Hosting, Telefon …), die Abschreibungen aus dem Anlagenverzeichnis (nur, wenn es welche gibt), Gezahlte Vorsteuerbeträge, An das Finanzamt gezahlte Umsatzsteuer
-- **Gewinn bzw. Verlust**
+- **Betriebseinnahmen:** Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer (nur, wenn es solche gibt), Umsatzsteuerpflichtige Betriebseinnahmen (netto), Umsatzsteuerfreie und nicht steuerbare Betriebseinnahmen, Private Kfz-Nutzung, Erträge aus Kursdifferenzen (nur, wenn es welche gibt), Vereinnahmte Umsatzsteuer, Umsatzsteuer auf unentgeltliche Wertabgaben (beide nur bei privat genutzten Firmenwagen), Vom Finanzamt erstattete Umsatzsteuer. Belege mit Privatanteil zählen nur mit dem betrieblichen Teil
+- **Betriebsausgaben:** Löhne und Gehälter einschließlich Lohnsteuer und Sozialversicherung, eine Zeile je Belegkategorie mit Betrag (Software, Hosting, Telefon …; bei der Bewirtung nur der abziehbare Teil von 70 %), je Pauschale, die Abschreibungen aus dem Anlagenverzeichnis, Aufwendungen aus Kursdifferenzen, Zinsen und Zuschläge zu betrieblichen Steuern, Schuldzinsen zur Finanzierung von Anlagevermögen, Übrige Schuldzinsen (diese jeweils nur, wenn es welche gibt), Gezahlte Vorsteuerbeträge, An das Finanzamt gezahlte Umsatzsteuer
+- **Gewinn bzw. Verlust**, darunter nachrichtlich die nicht abziehbare Gewerbesteuer samt Nebenleistungen und Hinterziehungszinsen, wenn es welche gibt
 
 Zahlungen auf Kleinunternehmer-Rechnungen (§ 19 UStG) stehen in der eigenen Zeile für Kleinunternehmer. Rechnungen mit Reverse Charge, ins Drittland oder steuerfrei nach § 4 UStG zählen wie Umsätze zu 0 % als umsatzsteuerfrei und nicht steuerbar. Die Steuer auf Belegen, die ohne Vorsteuerabzug gebucht sind, ist Teil der Ausgabe und erscheint nicht unter den Vorsteuerbeträgen.
 
@@ -59,16 +77,19 @@ Belege ohne gültige Kategorie landen unter „Sonstiger Aufwand“. Welche Kate
 
 ## Einnahmen und Ausgaben je Monat
 
-Das Säulendiagramm zeigt je Monat die Einnahmen und Ausgaben netto nach Zahlungsdatum, also ohne Umsatzsteuer, Vorsteuer und Zahlungen an oder vom Finanzamt. Bankgebühren zählen zu den Ausgaben. Fährst du mit der Maus über einen Monat oder springst per Tab-Taste hinein, siehst du die Werte. Unter „Als Tabelle anzeigen“ stehen dieselben Zahlen mit Überschuss je Monat und Jahressumme.
+Das Säulendiagramm zeigt je Monat die Einnahmen und Ausgaben netto nach Zahlungsdatum, also ohne Umsatzsteuer, Vorsteuer, Umsatzsteuerzahlungen an oder vom Finanzamt und nicht abziehbare Steuern. Bankgebühren zählen zu den Ausgaben. Fährst du mit der Maus über einen Monat oder springst per Tab-Taste hinein, siehst du die Werte. Unter „Als Tabelle anzeigen“ stehen dieselben Zahlen mit Überschuss je Monat und Jahressumme.
 
 ## Offene Posten
 
-Die beiden Tabellen am Ende zeigen den Stand von heute, unabhängig vom gewählten Jahr. Sortiert wird nach Fälligkeit.
+Die drei Tabellen am Ende zeigen den Stand von heute, unabhängig vom gewählten Jahr. Sortiert wird nach Fälligkeit.
 
 - **Offene Forderungen:** festgeschriebene Rechnungen und Rechnungskorrekturen, die nicht storniert sind, mit Betrag abzüglich zugeordneter Zahlungen. Eine Korrektur erscheint mit negativem offenem Betrag, ebenso eine Stornorechnung, solange die Zahlung auf die stornierte Rechnung noch nicht erstattet ist. Offen heißt hier dasselbe wie in der Rechnungsliste und im Bankabgleich.
 - **Offene Verbindlichkeiten:** gebuchte Belege mit Zahlung „Bank“, abzüglich zugeordneter Zahlungen. Ohne Fälligkeitsdatum gilt das Belegdatum.
+- **Umsatzsteuer gegenüber dem Finanzamt:** Zahllast (positiv) und Erstattung (negativ) jeder abgegebenen Voranmeldung, abzüglich der im Bankabgleich zugeordneten Zahlungen; eine berichtigte Anmeldung als eigene Zeile über die Differenz. Die Nummer führt zur Voranmeldung. Siehe [Zahlung an das Finanzamt](umsatzsteuer.md#zahlung-an-das-finanzamt).
 
-Der Status zeigt, wie viele Tage ein Posten überfällig ist oder in wie vielen Tagen er fällig wird. Nummer bzw. Rechnungsnummer führen zur Rechnung oder zum Beleg.
+Der Status zeigt, wie viele Tage ein Posten überfällig ist oder in wie vielen Tagen er fällig wird. Nummer bzw. Rechnungsnummer führen zur Rechnung oder zum Beleg. Eine Erstattung des Finanzamts ist nie überfällig; sie steht als „Erstattung erwartet“.
+
+Beide Summen stehen auch als Kacheln in der **Übersicht**, mit Anzahl und überfälligen Posten; bei den Verbindlichkeiten ohne Überfälliges das nächste Fälligkeitsdatum. Ein Klick auf die Kachel führt zur jeweiligen Tabelle hier.
 
 ## EÜR als CSV
 
@@ -78,10 +99,10 @@ Der Status zeigt, wie viele Tage ein Posten überfällig ist oder in wie vielen 
 
 Die Auswertung ist eine Vorschau und ersetzt nicht die Anlage EÜR. Bekannte Lücken:
 
-- Haben gibt keine Zeilennummern der Anlage EÜR aus. Du überträgst die Positionen selbst oder gibst die CSV an deine Steuerberatung.
-- Anlagevermögen und Abschreibungen (AfA) bildet Haben nicht ab. Die Kategorie „Hardware“ ist für geringwertige Wirtschaftsgüter bis 800 € netto gedacht und zählt voll im Jahr der Zahlung. Teurere Anschaffungen musst du außerhalb von Haben abschreiben.
+- Die Auswertung nennt keine Zeilennummern der Anlage EÜR. Die Anlage selbst ordnet Haben den Zeilen zu und sendet sie über ELSTER ([Jahreserklärungen](jahreserklaerung.md)).
+- Abschreibungen rechnet Haben linear, degressiv mit Wechsel zur linearen, als Staffel für Elektrofahrzeuge (§ 7 Abs. 2a EStG), als Sofortabschreibung geringwertiger Wirtschaftsgüter und als Sammelposten ([Anlagen und AfA](anlagen.md)); Sonderabschreibungen nach § 7g EStG und der Investitionsabzugsbetrag fehlen.
 - Umsätze zu 0 %, Reverse Charge, Drittland und steuerfreie Umsätze landen gemeinsam unter „Umsatzsteuerfreie und nicht steuerbare Betriebseinnahmen“, ohne weitere Unterscheidung.
-- Private Kfz-Nutzung, Arbeitszimmer, Bewirtungsanteile und ähnliche Korrekturen kennt Haben nicht.
+- Private Kfz-Nutzung rechnet Haben nur nach der 1-%-Regel ([Anlagen](anlagen.md)), ein Fahrtenbuch fehlt. Das häusliche Arbeitszimmer als Mittelpunkt kennt Haben nicht, die Homeoffice-Pauschale schon ([Pauschalen](pauschalen.md)).
 
 > [!NOTE]
 > Lass die EÜR vor der Abgabe von deiner Steuerberatung prüfen, besonders im ersten Jahr mit Haben und wenn du Altbestand aus Lexoffice übernommen hast.
@@ -92,10 +113,34 @@ Unter **Einstellungen › Export › DATEV-Export** lädst du die Buchungen eine
 
 - **Format:** EXTF, Formatkategorie 21, Version 13, Windows-1252.
 - **Kopfdaten:** Berater- und Mandantennummer (von der Kanzlei), Wirtschaftsjahr ist das Kalenderjahr, Sachkontenlänge 4, Kontenrahmen SKR03 bzw. SKR04 wie in Haben.
-- **Buchungssätze:** Jede Buchung aus dem Journal wird in Buchungssätze „Konto an Gegenkonto“ zerlegt. Die Summe je Konto ist danach genau die aus der [Saldenliste](buchhaltung.md#die-seite-konten).
-- **Umsatzsteuer:** Haben bucht die Steuer als eigene Zeile, bei Ist-Versteuerung zuerst auf „Umsatzsteuer nicht fällig“. Damit DATEV sie nicht ein zweites Mal aus den Erlösen herausrechnet, tragen Buchungen auf Automatikkonten (SKR03 8400 und 8300, SKR04 4400 und 4300) den BU-Schlüssel 40 (Aufhebung der Automatik).
+- **Buchungssätze:** Jede Buchung aus dem Journal wird in Buchungssätze „Konto an Gegenkonto“ zerlegt. Die Summe je Konto ist danach genau die aus der [Saldenliste](buchhaltung.md#die-seite-konten); mit Personenkonten steht die Summe von Forderungen bzw. Verbindlichkeiten auf den Debitoren bzw. Kreditoren.
+- **Umsatzsteuer:** Haben bucht die Steuer als eigene Zeile, bei Ist-Versteuerung zuerst auf „Umsatzsteuer nicht fällig“. Damit DATEV sie nicht ein zweites Mal aus den Erlösen herausrechnet, tragen Buchungen auf Automatikkonten (SKR03 8400 und 8300, SKR04 4400 und 4300, dazu die Sachentnahme SKR03 8910 und 8915, SKR04 4620 und 4610, früher auch 4630, und die private Kfz-Nutzung mit Umsatzsteuer SKR03 8921, SKR04 4645) den BU-Schlüssel 40 (Aufhebung der Automatik). Die Kfz-Nutzung ohne Umsatzsteuer (SKR03 8924, SKR04 4639) ist ein Konto ohne Automatik und bleibt ohne Schlüssel (DATEV-Kontenrahmen SKR03 und SKR04, gültig für 2026).
 - **Belegfeld 1:** die Rechnungsnummer bzw. die Belegnummer des Lieferanten; **Buchungstext:** wie im Journal, auf 60 Zeichen gekürzt.
 - **Festschreibung:** gesetzt, wie in Haben.
+- **Personenkonten:** auf Wunsch statt der Sammelkonten, siehe unten.
+
+### Personenkonten
+
+Haben bucht offene Posten im Journal auf die Sammelkonten „Forderungen aus Lieferungen und Leistungen“ (SKR03 1400, SKR04 1200) und „Verbindlichkeiten aus Lieferungen und Leistungen“ (SKR03 1600, SKR04 3300). Viele Kanzleien führen dagegen je Kunde einen Debitor und je Lieferant einen Kreditor. Mit **DATEV-Personenkonten** unter **Einstellungen › Export › DATEV-Export** setzt der Export diese Nummern ein; das Journal, die Saldenliste und alle Auswertungen in Haben bleiben bei den Sammelkonten.
+
+- **Nummern:** am Kontakt, Felder **DATEV-Debitor** und **DATEV-Kreditor** ([Kontakte](rechnungen.md#kontakte)), oder aus dem [CSV-Import](csv-import.md#kontakte).
+- **Welches Konto:** Entscheidend ist die Herkunft, nicht das Vorzeichen. Eine Rechnung und alles dazu (Zahlung, Teilzahlung, Rückzahlung, Skonto, Forderungsausfall, Storno, Korrektur, Bareinnahme) geht auf den Debitor des Kunden der Rechnung; ein Beleg und seine Zahlungen, Erstattungen und Skonti auf den Kreditor des Lieferanten, den der Beleg aus den Kontakten trägt. Eine Zeile wird ersetzt, nicht ergänzt: Die Summe der Debitoren ist der Saldo von 1400 bzw. 1200 in der Saldenliste, die der Kreditoren der von 1600 bzw. 3300. Forderungen und Verbindlichkeiten desselben Kontakts verrechnet Haben nicht.
+- **Ab einem Jahr:** Der Schalter gilt ab dem Beginn des gewählten Jahres; davor bleibt der Stapel bei den Sammelkonten. Hat ein betroffenes Jahr bis heute schon Buchungen, speichert Haben die Änderung (auch das Abschalten) nur mit einem Häkchen: Ein Stapel, den die Kanzlei schon hat, sähe danach anders aus. Die Änderung steht im Änderungsprotokoll.
+- **Fehlende Nummern vergibt Haben:** Braucht ein Kontakt für den Stapel einen Debitor bzw. Kreditor und hat keinen, vergibt der Export die nächste Nummer nach der höchsten bisher vergebenen (am Ende des Bereichs die erste nie vergebene) und trägt sie am Kontakt ein, mit Eintrag im Änderungsprotokoll. Nummern, die schon einmal an einem Kontakt standen, auch an einem archivierten oder später geänderten, vergibt Haben nicht noch einmal. Gleichzeitige Exporte warten aufeinander, so bekommt keine Nummer zwei Kontakte. Kontakte ohne offenen Posten im Jahr bekommen keine Nummer.
+- **Fehlt der Kontakt, kein Stapel:** Hat ein Beleg keinen Lieferanten aus den Kontakten, lehnt der Export ab und nennt die Vorgänge, statt diese Zeilen still auf das Sammelkonto zu buchen. Einen neuen Kontakt aus abweichenden Schreibweisen legt Haben nicht an. Trag den Lieferanten deshalb schon beim Erfassen aus den Kontakten ein (Feld **Aus den Kontakten** im Beleg).
+- **Gebuchter Beleg ohne Lieferanten:** Ein gebuchter Beleg ist fest, der Lieferant lässt sich nicht nachtragen. So löst du die Ablehnung:
+  1. Ist der Beleg schon einer Zahlung zugeordnet, die Zuordnung im [Bankabgleich](bank.md) aufheben.
+  2. Den Beleg öffnen, den die Meldung nennt, und mit **Beleg stornieren** aufheben ([Stornieren und neu erfassen](belege.md#stornieren-und-neu-erfassen)).
+  3. **Neu erfassen**, im neuen Entwurf den Lieferanten unter **Aus den Kontakten** wählen und buchen.
+  4. Die Zahlung im Bankabgleich dem neuen Beleg zuordnen.
+
+  Buchung und Storno bleiben auf dem Sammelkonto und heben sich dort auf; der neue Beleg geht auf den Kreditor. Das gilt auch, wenn der Storno im Folgejahr steht, weil der Zeitraum des Belegs schon gemeldet war: Dann trägt das Sammelkonto den Betrag ins neue Jahr, und der Storno gleicht ihn dort aus. Liegt der alte Beleg in einem Jahr vor dem Schalter, betrifft er den Export nicht.
+- **Eröffnung:** Eröffnungsbuchungen mit Restsalden aus der Vorgänger-Buchhaltung, etwa die [Eröffnung aus einem DATEV-Stapel](lexoffice.md#eröffnung-aus-dem-datev-stapel-gmbh-und-ug), haben keine Rechnung und keinen Beleg. Sie bleiben auf den Sammelkonten Forderungen bzw. Verbindlichkeiten und sperren den Export nicht. Dort bleiben auch die [übernommenen offenen Posten](lexoffice.md#schritt-3-offene-posten-übernehmen), die schon in der Eröffnung stehen und deshalb keine eigene Buchung haben, mit ihren Zahlungen: Sonst stünde der Kunde nach der Zahlung im Minus, und auf dem Sammelkonto bliebe der Posten offen. Übernommene Posten mit eigener Buchung gegen 9000 gehen wie alle anderen auf den Debitor bzw. Kreditor.
+- **Fest ab dem ersten Export:** Welche Nummer ein Export geschrieben hat, merkt sich Haben je Kontakt und Rolle. Ab dann lässt sich die Nummer am Kontakt nicht mehr ändern oder entfernen, damit spätere Stapel dasselbe Konto tragen wie frühere; der Name darf sich ändern.
+- **Wer exportieren darf:** Neue Nummern vergeben und festschreiben darf nur der Inhaber. Der [Zugang der Steuerberatung](steuerberatung.md) lädt den Stapel, solange alle Nummern darin schon festgeschrieben sind, und ändert dabei nichts. Braucht der Stapel eine neue oder noch fehlende Nummer, lehnt der Export für die Steuerberatung ab („Der erste Export mit neuen Personenkonten muss vom Inhaber kommen …“) und nennt die Kontakte; lade ihn dann einmal selbst herunter.
+- **Kopfzeile:** Sachkontenlänge 4, die Personenkonten sind fünfstellig. Die Bereiche, Debitoren 10000 bis 69999 und Kreditoren 70000 bis 99999, stehen im [DATEV-Kontenrahmen SKR 03](https://www.datev.de/content/dam/markenassets/themen-und-produktgruppen/zielgruppen/mandant/unternehmer/branche/bau/11174%20SKR03%20BilrUg.pdf) bzw. [SKR 04](https://www.datev.de/content/dam/markenassets/themen-und-produktgruppen/zielgruppen/mandant/unternehmer/branche/bau/11175%20SKR04%20BilrUg.pdf) 2026, jeweils S. 36.
+
+Namen und Anschriften der Debitoren und Kreditoren schreibt der Buchungsstapel nicht; gib der Kanzlei dafür die Kontaktliste (`stammdaten/kontakte.csv` im [Jahresarchiv](#jahresexport)) oder stimm ab, wie sie die Stammdaten anlegt.
 
 Stimm die Übergabe einmal mit der Kanzlei ab: manche Kanzleien buchen lieber brutto mit Steuerschlüssel. Die Belege selbst stehen im Jahresarchiv.
 
@@ -112,17 +157,20 @@ Zugeordnet wird nach Datum: Rechnungen nach Rechnungsdatum, Belege nach Belegdat
 | Pfad | Inhalt |
 | --- | --- |
 | `LIESMICH.txt` | Firma, Steuernummer, Zeitraum, Erstellungszeitpunkt, Haben-Version, Erklärung aller Ordner, Prüfanleitung und Hinweise zur Aufbewahrung |
-| `angebote/` | Nur wenn vorhanden: festgeschriebene Angebote als PDF, `angebote.csv` mit Antwort des Kunden, Rechnung und SHA-256 |
-| `rechnungen/` | Festgeschriebene Rechnungen, Stornos und Korrekturen als PDF und E-Rechnungs-XML (bei ZUGFeRD steckt das XML zusätzlich im PDF); `rechnungen.csv` mit Beträgen (in Euro; bei Fremdwährung mit Währung und Kurs), Format, Zeitpunkt der Festschreibung und SHA-256. Entwürfe fehlen. |
-| `belege/` | Alle Belege des Jahres als Originaldatei, Name `Datum_Lieferant_Kurz-ID`; `belege.csv` mit Beträgen je Steuersatz (in Euro; bei Fremdwährung mit Kurs und Bruttobetrag laut Beleg), Kategorie, Zahlung, Status, Quelle der Auslesung, SHA-256 und ursprünglichem Dateinamen |
-| `anlagen/anlagenverzeichnis.csv` | Anlagenverzeichnis des Jahres je Anlage: Anschaffung, Buchwert am Jahresanfang, Zugang, AfA, Abgang, Buchwert am Jahresende, ob die AfA gebucht ist |
-| `buchungen/journal.csv` | Journal, eine Zeile je Buchungszeile mit Konto, Kontoname, Soll, Haben und Steuerschlüssel; Gegenbuchungen verweisen auf die Ursprungsbuchung |
-| `bank/<IBAN>/umsaetze.csv` | Importierte Umsätze je Konto mit zugeordnetem und offenem Betrag |
+| `angebote/` | Nur wenn vorhanden: festgeschriebene Angebote als PDF, `angebote.csv` mit Antwort des Kunden, Rechnung und SHA-256; ihre [Anhänge](angebote.md#anhänge) unter `angebote/anhaenge/` (Name: Nummer_Dateiname) mit `anhaenge.csv` (Angebot, ursprünglicher Dateiname, Größe, SHA-256) |
+| `rechnungen/` | Festgeschriebene Rechnungen, Stornos und Korrekturen als PDF und E-Rechnungs-XML (bei ZUGFeRD steckt das XML zusätzlich im PDF); `rechnungen.csv` mit Beträgen (in Euro; bei Fremdwährung mit Währung und Kurs), Format, Zeitpunkt der Festschreibung und SHA-256. Entwürfe fehlen. Nur wenn vorhanden: [zusätzliche Anhänge](rechnungen.md#zusätzliche-anhänge) unter `rechnungen/anhaenge/` (Name: Nummer_Dateiname) mit `anhaenge.csv` (Rechnung, ursprünglicher Dateiname, Größe, SHA-256). |
+| `belege/` | Alle Belege des Jahres als Originaldatei, Name `Datum_Lieferant_Kurz-ID`; `belege.csv` mit Beträgen je Steuersatz (in Euro; bei Fremdwährung mit Kurs und Bruttobetrag laut Beleg), Kategorie, Zahlung, Status, Storno (Datum und Grund), Quelle der Auslesung, SHA-256 und ursprünglichem Dateinamen |
+| `anlagen/anlagenverzeichnis.csv` | Anlagenverzeichnis des Jahres je Anlage: Anschaffung, Abschreibung mit Nutzungsdauer, degressivem Satz, Jahr des Wechsels zur linearen AfA und Erinnerungswert (Verzeichnis nach § 7a Abs. 8 EStG), Buchwert am Jahresanfang, Zugang, AfA, Abgang, Buchwert am Jahresende, ob die AfA gebucht ist |
+| `pauschalen/pauschalen.csv` | Nur wenn vorhanden: Pauschalen ohne Beleg mit ihren Angaben als Eigenbeleg; Stornos als Gegenzeile |
+| `kasse/kassenbuch.csv` | Nur wenn vorhanden: Kassenbuch mit fortlaufender Nummer, Anfangsbestand und Bestand nach jeder Zeile, bei Bareinnahmen die Rechnungsnummer |
+| `buchungen/journal.csv` | Journal, eine Zeile je Buchungszeile mit Konto, Kontoname, Soll, Haben, Steuerschlüssel und, bei Ist-Versteuerung an der Zahlung, der Bemessungsgrundlage; Gegenbuchungen verweisen auf die Ursprungsbuchung |
+| `bank/<IBAN>/umsaetze.csv` | Importierte Umsätze je Konto mit zugeordnetem und offenem Betrag und ob der Umsatz verrechnet ist |
 | `bank/zuordnungen.csv` | Zuordnungen zu Rechnungen, Belegen und Buchungen ohne Beleg; aufgehobene als Gegenzeile |
-| `bank/ausbuchungen.csv` | Nur wenn vorhanden: ausgebuchte Reste (Skonto gewährt und erhalten, Forderungsausfall); aufgehobene als Gegenzeile |
+| `bank/verrechnungen.csv` | Nur wenn vorhanden: miteinander verrechnete gegenläufige Umsätze mit Notiz, ohne Buchung ([Bank](bank.md#gegenläufige-umsätze-verrechnen)); aufgehobene als Gegenzeile |
+| `bank/ausbuchungen.csv` | Nur wenn vorhanden: ausgebuchte Reste (Skonto gewährt und erhalten, Forderungsausfall); aufgehobene als Gegenzeile; bei Skonto zu einer Bareinnahme die Nummer im Kassenbuch |
 | `bank/importe.csv` | Importierte Auszugsdateien mit SHA-256, Zeitraum und Salden (die Dateien selbst speichert der Bankimport nicht) |
-| `umsatzsteuer/<JJJJ-MM>/` | Je Monat die Voranmeldung als `anmeldung.json` (bei mehreren, etwa berichtigten, `anmeldung-1.json`, `anmeldung-2.json` …), `übermittlungen.csv` und je Prüfung oder Übermittlung das ERiC-Protokoll (PDF) sowie das gesendete und empfangene XML |
-| `lexoffice/` | Nur bei übernommenem Altbestand, siehe unten |
+| `umsatzsteuer/<JJJJ-MM>/` | Je Monat die Voranmeldung als `anmeldung.json` (bei mehreren, etwa berichtigten, `anmeldung-1.json`, `anmeldung-2.json` …), `übermittlungen.csv` und je Prüfung oder Übermittlung das ERiC-Protokoll (PDF) sowie das gesendete und empfangene XML; bei einer [Abgabe außerhalb von Haben](umsatzsteuer.md#abgabe-außerhalb-von-haben-vermerken) das Übermittlungsprotokoll des Vermerks (PDF) |
+| `lexoffice/` | Nur bei übernommenem Altbestand aus Lexware Office oder sevDesk, siehe unten |
 | `stammdaten/` | `kontakte.csv` (aktueller Stand), `kontakt-versionen.csv` (alle Versionen), `bankkonten.csv`, `firma.json` |
 | `protokoll/audit.csv` | Änderungsprotokoll des Jahres mit altem und neuem Wert als JSON, in der Reihenfolge der Hash-Kette mit Ketten-Nr., Vorgänger-Hash und Hash |
 | `protokoll/pruefwert.txt` | Prüfwert (Kopf der Hash-Kette) beim Erstellen des Archivs und am Ende des Jahres, zum Aufbewahren außerhalb des Servers |
@@ -137,8 +185,9 @@ Der Ordner `lexoffice/` enthält, falls du aus Lexoffice umgezogen bist (siehe [
 | --- | --- |
 | `lexoffice/belege/` | Original-PDFs, E-Rechnungs-XML und Anhänge der Lexoffice-Belege des Jahres |
 | `lexoffice/belege.csv` | Je Beleg Art, Richtung, Nummer, Kontakt, Beträge, Status, Zahlungsdatum, Steuersätze und Kategorien als JSON, Dateien mit SHA-256 und Lexoffice-ID |
+| `lexoffice/zahlungen.csv` | Einzelzahlungen zu sevDesk-Vorgängen nach Zahlungsdatum: Belegnummer, Betrag, Konto, Umsatz- und Zuordnungs-ID der Quelle |
 | `lexoffice/datev-buchungen.csv` | Die Zeilen des DATEV-Buchungsstapels mit Datei und Zeilennummer im Original |
-| `lexoffice/originale/<Art>/` | Die unveränderten Originalexporte des Jahres: `datev`, `idea`, `elster`, `kontoauszug`, `sonstiges` |
+| `lexoffice/originale/<Art>/` | Die unveränderten Originalexporte des Jahres: `datev`, `idea`, `elster`, `kontoauszug`, `storebericht` (Finanzberichte von Google Play und App Store), `sonstiges` |
 
 PDF-, XML- und Bilddateien sind byte-genau die gespeicherten Originale. Fehlt eine Belegdatei im Speicher oder passt ihr Inhalt nicht mehr zum Hash, bricht der Export nicht ab: Die Zeile in `belege.csv` trägt dann „FEHLT“, und `FEHLER.txt` nennt den Beleg.
 

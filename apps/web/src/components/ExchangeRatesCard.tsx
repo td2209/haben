@@ -1,18 +1,14 @@
-import { formatExchangeRate, formatRateMonth } from "@haben/core";
+import { currentYear, formatExchangeRate, formatRateMonth } from "@haben/core";
 import { useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, type FormEvent } from "react";
 import { formatDateTime } from "../lib/format.ts";
 import { useAction } from "../lib/use-action.ts";
 import { NoticeBanner } from "./NoticeBanner.tsx";
-import {
-  deleteExchangeRateFn,
-  importExchangeRatesFn,
-  refreshExchangeRatesFn,
-  saveExchangeRateFn,
-  type getExchangeRates,
-} from "../server/functions/company.ts";
+import { deleteExchangeRateFn, importExchangeRatesFn, refreshExchangeRatesFn, saveExchangeRateFn, type getExchangeRates } from "../server/functions/company.ts";
 import { ScrollTable } from "./ScrollTable.tsx";
+import { Field } from "./Field.tsx";
+import { FilePicker } from "./FilePicker.tsx";
 
 type Data = Awaited<ReturnType<typeof getExchangeRates>>;
 
@@ -36,7 +32,9 @@ export function ExchangeRatesCard({ data }: { data: Data }) {
   const remove = useServerFn(deleteExchangeRateFn);
   const upload = useServerFn(importExchangeRatesFn);
   const { busy, notice, setNotice, run } = useAction();
-  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [year, setYear] = useState(String(currentYear()));
+  // Ein neuer key leert das Dateifeld samt angezeigtem Namen nach dem Hochladen
+  const [uploads, setUploads] = useState(0);
 
   const summary = (r: { added: number; changed: number; applied: number }) =>
     `${plural(r.added, "Kurs", "Kurse")} neu, ${r.changed} geändert. ${r.applied > 0 ? `${plural(r.applied, "Beleg oder Entwurf", "Belege und Entwürfe")} in Euro umgerechnet.` : ""}`;
@@ -51,7 +49,10 @@ export function ExchangeRatesCard({ data }: { data: Data }) {
       });
       form.reset();
       await router.invalidate();
-      setNotice({ tone: "ok", text: `Kurs gespeichert.${applied > 0 ? ` ${plural(applied, "Beleg oder Entwurf", "Belege und Entwürfe")} in Euro umgerechnet.` : ""}` });
+      setNotice({
+        tone: "ok",
+        text: `Kurs gespeichert.${applied > 0 ? ` ${plural(applied, "Beleg oder Entwurf", "Belege und Entwürfe")} in Euro umgerechnet.` : ""}`,
+      });
     });
   }
 
@@ -59,9 +60,9 @@ export function ExchangeRatesCard({ data }: { data: Data }) {
     <section className="card" aria-labelledby="rates-heading">
       <h2 id="rates-heading">Umsatzsteuer-Umrechnungskurse</h2>
       <p className="small muted" style={{ margin: 0, maxWidth: 760 }}>
-        Beträge in Fremdwährung rechnet Haben mit dem Umsatzsteuer-Umrechnungskurs des Monats in Euro um (§ 16 Abs. 6 UStG). Das BMF veröffentlicht die
-        Kurse am ersten Arbeitstag des Folgemonats; Haben ruft sie dann von selbst ab, sobald du Fremdwährung nutzt. Belege, die noch auf den Kurs warten,
-        werden danach umgerechnet. Gebuchte Belege und festgeschriebene Rechnungen behalten ihren Kurs.
+        Beträge in Fremdwährung rechnet Haben mit dem Umsatzsteuer-Umrechnungskurs des Monats in Euro um (§ 16 Abs. 6 UStG). Das BMF veröffentlicht die Kurse am
+        ersten Arbeitstag des Folgemonats; Haben ruft sie dann von selbst ab, sobald du Fremdwährung nutzt. Belege, die noch auf den Kurs warten, werden danach
+        umgerechnet. Gebuchte Belege und festgeschriebene Rechnungen behalten ihren Kurs.
       </p>
       <div className="actions">
         <button
@@ -86,22 +87,17 @@ export function ExchangeRatesCard({ data }: { data: Data }) {
           Kurs von Hand
         </h3>
         <p className="small muted" style={{ margin: 0, maxWidth: 760 }}>
-          Für einen Monat, den das BMF noch nicht veröffentlicht hat (vorläufig), oder eine Währung, die dort fehlt. Veröffentlicht das BMF den Monat
-          später, ersetzt der amtliche Kurs deinen.
+          Für einen Monat, den das BMF noch nicht veröffentlicht hat (vorläufig), oder eine Währung, die dort fehlt. Veröffentlicht das BMF den Monat später,
+          ersetzt der amtliche Kurs deinen.
         </p>
         <div className="form-row cols-3">
-          <label className="field">
-            Währung
-            <input name="currency" required maxLength={3} placeholder="USD" className="mono" style={{ textTransform: "uppercase" }} />
-          </label>
-          <label className="field">
-            Monat
-            <input name="month" type="month" required />
-          </label>
-          <label className="field">
-            1 EUR = …
-            <input name="rate" required inputMode="decimal" placeholder="1,0812" className="mono" />
-          </label>
+          <Field label="Währung">
+            {(control) => (
+              <input {...control} name="currency" required maxLength={3} placeholder="USD" className="mono" style={{ textTransform: "uppercase" }} />
+            )}
+          </Field>
+          <Field label="Monat">{(control) => <input {...control} name="month" type="month" required />}</Field>
+          <Field label="1 EUR = …">{(control) => <input {...control} name="rate" required inputMode="decimal" placeholder="1,0812" className="mono" />}</Field>
         </div>
         <div className="actions">
           <button type="submit" className="btn" disabled={busy}>
@@ -117,29 +113,29 @@ export function ExchangeRatesCard({ data }: { data: Data }) {
           hochladen.
         </p>
         <div className="form-row cols-3">
-          <label className="field">
-            Jahr der Datei
-            <input inputMode="numeric" value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))} />
-          </label>
-          <label className="field">
-            Datei
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              disabled={busy}
-              onChange={(e) => {
-                const input = e.currentTarget;
-                const file = input.files?.[0];
-                if (!file) return;
-                void run(async () => {
-                  const result = await upload({ data: { year: Number(year), text: await readText(file) } });
-                  input.value = "";
-                  await router.invalidate();
-                  setNotice({ tone: "ok", text: `${plural(result.fetched, "Kurs", "Kurse")} gelesen: ${summary(result)}` });
-                });
-              }}
-            />
-          </label>
+          <Field label="Jahr der Datei">
+            {(control) => <input {...control} inputMode="numeric" value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))} />}
+          </Field>
+          <Field label="Datei">
+            {(control) => (
+              <FilePicker
+                key={uploads}
+                {...control}
+                accept=".csv,text/csv"
+                disabled={busy}
+                onChange={(e) => {
+                  const file = e.currentTarget.files?.[0];
+                  if (!file) return;
+                  void run(async () => {
+                    const result = await upload({ data: { year: Number(year), text: await readText(file) } });
+                    setUploads((n) => n + 1);
+                    await router.invalidate();
+                    setNotice({ tone: "ok", text: `${plural(result.fetched, "Kurs", "Kurse")} gelesen: ${summary(result)}` });
+                  });
+                }}
+              />
+            )}
+          </Field>
         </div>
       </div>
 

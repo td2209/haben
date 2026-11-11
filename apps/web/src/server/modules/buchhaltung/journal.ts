@@ -3,8 +3,12 @@ import {
   ACCOUNTS,
   ASSET_ACCOUNT_NAMES,
   EXPENSE_CATEGORIES,
+  LOHN_KONTO_NAMEN,
   PAUSCHALE_KONTEN,
   PRIVATE_USE_ACCOUNT_NAMES,
+  SACHENTNAHME_KONTO_NAMEN,
+  STEUER_KONTO_NAMEN,
+  DARLEHEN_KONTO_NAMEN,
   type Kontenrahmen,
 } from "@haben/core";
 import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
@@ -18,12 +22,17 @@ const EXTRA_NAMES: Record<Kontenrahmen, Record<string, string>> = {
     [ACCOUNTS.SKR03.verbindlichkeiten]: "Verbindlichkeiten aus Lieferungen und Leistungen",
     [ACCOUNTS.SKR03.privateinlagen]: "Privateinlagen",
     [ACCOUNTS.SKR03.privatentnahmen]: "Privatentnahmen",
+    [ACCOUNTS.SKR03.spenden]: "Zuwendungen, Spenden",
     [ACCOUNTS.SKR03.geldtransit]: "Geldtransit",
     [ACCOUNTS.SKR03.ustVorauszahlung]: "Umsatzsteuer-Vorauszahlungen",
     ...Object.fromEntries(Object.values(EXPENSE_CATEGORIES).map((c) => [c.SKR03, c.label])),
     ...ASSET_ACCOUNT_NAMES.SKR03,
     ...PRIVATE_USE_ACCOUNT_NAMES.SKR03,
+    ...SACHENTNAHME_KONTO_NAMEN.SKR03,
     ...Object.fromEntries(Object.values(PAUSCHALE_KONTEN).map((k) => [k.SKR03.konto, k.SKR03.name])),
+    ...LOHN_KONTO_NAMEN.SKR03,
+    ...STEUER_KONTO_NAMEN.SKR03,
+    ...DARLEHEN_KONTO_NAMEN.SKR03,
   },
   SKR04: {
     [ACCOUNTS.SKR04.vorsteuer[1900]]: "Vorsteuer 19 %",
@@ -32,17 +41,27 @@ const EXTRA_NAMES: Record<Kontenrahmen, Record<string, string>> = {
     [ACCOUNTS.SKR04.verbindlichkeiten]: "Verbindlichkeiten aus Lieferungen und Leistungen",
     [ACCOUNTS.SKR04.privateinlagen]: "Privateinlagen",
     [ACCOUNTS.SKR04.privatentnahmen]: "Privatentnahmen",
+    [ACCOUNTS.SKR04.spenden]: "Zuwendungen, Spenden",
     [ACCOUNTS.SKR04.geldtransit]: "Geldtransit",
     [ACCOUNTS.SKR04.ustVorauszahlung]: "Umsatzsteuer-Vorauszahlungen",
     ...Object.fromEntries(Object.values(EXPENSE_CATEGORIES).map((c) => [c.SKR04, c.label])),
     ...ASSET_ACCOUNT_NAMES.SKR04,
     ...PRIVATE_USE_ACCOUNT_NAMES.SKR04,
+    ...SACHENTNAHME_KONTO_NAMEN.SKR04,
     ...Object.fromEntries(Object.values(PAUSCHALE_KONTEN).map((k) => [k.SKR04.konto, k.SKR04.name])),
+    ...LOHN_KONTO_NAMEN.SKR04,
+    ...STEUER_KONTO_NAMEN.SKR04,
+    ...DARLEHEN_KONTO_NAMEN.SKR04,
   },
 };
 
 export function accountName(kontenrahmen: Kontenrahmen, account: string): string {
   return ACCOUNT_NAMES[kontenrahmen][account] ?? EXTRA_NAMES[kontenrahmen][account] ?? "";
+}
+
+/** Alle Konten mit Namen, die Haben kennt, z. B. als Hilfe beim Erfassen einer manuellen Buchung */
+export function knownAccounts(kontenrahmen: Kontenrahmen): Record<string, string> {
+  return { ...EXTRA_NAMES[kontenrahmen], ...ACCOUNT_NAMES[kontenrahmen] };
 }
 
 /** Buchungen eines Monats mit ihren Zeilen, nur lesend */
@@ -58,9 +77,30 @@ export async function loadJournal(year: number, month: number) {
     ? await db
         .select()
         .from(schema.journalLines)
-        .where(inArray(schema.journalLines.entryId, entries.map((e) => e.id)))
+        .where(
+          inArray(
+            schema.journalLines.entryId,
+            entries.map((e) => e.id),
+          ),
+        )
         .orderBy(asc(schema.journalLines.credit), asc(schema.journalLines.account))
     : [];
+  // Stornierte Buchungen: Gegenbuchungen dürfen in einem anderen Monat stehen
+  const reversedIds = entries.length
+    ? new Set(
+        (
+          await db
+            .select({ id: schema.journalEntries.reversesId })
+            .from(schema.journalEntries)
+            .where(
+              inArray(
+                schema.journalEntries.reversesId,
+                entries.map((e) => e.id),
+              ),
+            )
+        ).map((r) => r.id),
+      )
+    : new Set<string | null>();
   return entries.map((entry) => ({
     id: entry.id,
     date: entry.date,
@@ -68,9 +108,8 @@ export async function loadJournal(year: number, month: number) {
     sourceType: entry.sourceType,
     sourceId: entry.sourceId,
     reversal: entry.reversesId !== null,
-    lines: lines
-      .filter((l) => l.entryId === entry.id)
-      .map((l) => ({ ...l, name: accountName(entry.kontenrahmen, l.account) })),
+    reversed: reversedIds.has(entry.id),
+    lines: lines.filter((l) => l.entryId === entry.id).map((l) => ({ ...l, name: accountName(entry.kontenrahmen, l.account) })),
   }));
 }
 

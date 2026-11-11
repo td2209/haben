@@ -1,10 +1,11 @@
 /*
  * Buchhaltung: Hauptbuch (ledger.post ist der einzige Schreiber des Journals), Kontennamen, Anlagenverzeichnis mit AfA
- * und Pauschalen ohne Beleg.
+ * Pauschalen ohne Beleg, manuelle Buchungen, Jahresabschluss mit Restlaufzeiten und Bilanz zur Hinterlegung (GmbH, UG).
  *
  * Öffentliche Schnittstelle des Moduls: Andere Module, Server Functions und Routen importieren nur von hier
- * (Lint-Regel haben/modulgrenzen, eslint/modulgrenzen.js).
+ * (Modulgrenzen, scripts/modulgrenzen/regel.ts).
  */
+export { AbschlussError, closeYear, jahresabschluss, reportIssues as abschlussHinweise, type AbschlussHinweis } from "./abschluss.ts";
 export {
   assetInputSchema,
   assetUpdateSchema,
@@ -20,6 +21,37 @@ export {
   updateAsset,
   withdrawalsForEuer,
 } from "./assets.ts";
-export { accountName, loadJournal, transitBalance } from "./journal.ts";
+export { assetImportStichtagProblem, insertImportedAssets, planAssetImport } from "./asset-import.ts";
+export { HinterlegungError, hinterlegungAngabenSchema, hinterlegungPdf, hinterlegungStand, type HinterlegungStand } from "./hinterlegung.ts";
+export {
+  bilanzVermerkeFuer,
+  ebilanzDavon,
+  RestlaufzeitError,
+  restlaufzeitenAnsicht,
+  restlaufzeitenSchema,
+  saveRestlaufzeiten,
+  type RestlaufzeitBlock,
+  type RestlaufzeitenAnsicht,
+} from "./restlaufzeiten.ts";
+export { accountName, knownAccounts, loadJournal, transitBalance } from "./journal.ts";
 export { kontenblatt, ledgerPeriodSchema, ledgerRange, openBooks, post, saldenliste } from "./ledger.ts";
+export {
+  activeOpenings,
+  firstEntryBefore,
+  lockOpenings,
+  openingAfter,
+  openingCash,
+  stapelOpeningCovering,
+  takeoverBalances,
+  type Eroeffnung,
+} from "./eroeffnung.ts";
+export {
+  createManualEntry,
+  ManualEntryError,
+  manualEntrySchema,
+  reverseManualEntry,
+  type CashReversalCheck,
+  type ManualEntryInput,
+} from "./manual.ts";
+export { periodReported, vatPeriodsOf } from "./gemeldet.ts";
 export { createPauschale, listPauschalen, pauschaleInputSchema, reversePauschale } from "./pauschalen.ts";

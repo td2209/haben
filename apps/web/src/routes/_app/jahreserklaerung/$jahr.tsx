@@ -1,18 +1,21 @@
-import { formatDecimal, formatEuro, parseEuro } from "@haben/core";
+import { RECHTSFORMEN, formatDecimal, formatEuro, isKapitalgesellschaft, parseEuro } from "@haben/core";
 import { Link, createFileRoute, notFound, useNavigate, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { AnlageNFields, parseArbeitnehmer, toArbeitnehmerDraft } from "../../../components/AnlageN.tsx";
 import { ElsterSubmit } from "../../../components/ElsterSubmit.tsx";
+import { GewstSection, KapgAngaben, KapgGemeinsameHinweise, KstSection } from "../../../components/KapgErklaerungen.tsx";
+import { MeinElsterWerte } from "../../../components/MeinElsterWerte.tsx";
 import { Icon } from "../../../components/Icon.tsx";
 import { NoticeBanner } from "../../../components/NoticeBanner.tsx";
 import { VastBelege } from "../../../components/VastBelege.tsx";
 import { ELSTER_KIND_LABEL, elsterNotice } from "../../../lib/elster.ts";
 import { formatDate, formatDateTime } from "../../../lib/format.ts";
 import { useAction } from "../../../lib/use-action.ts";
-import { getAnnualReturns, saveIncomeTaxInputs, submitAnnualReturn } from "../../../server/functions/annual.ts";
+import { getAnnualReturns, getMeinElsterWerte, saveIncomeTaxInputs, submitAnnualReturn } from "../../../server/functions/annual.ts";
 import styles from "../../../styles/auswertungen.css?url";
 import { ScrollTable } from "../../../components/ScrollTable.tsx";
+import { Field } from "../../../components/Field.tsx";
 
 export const Route = createFileRoute("/_app/jahreserklaerung/$jahr")({
   loader: ({ params }) => {
@@ -27,7 +30,13 @@ export const Route = createFileRoute("/_app/jahreserklaerung/$jahr")({
 type Data = Awaited<ReturnType<typeof getAnnualReturns>>;
 type Form = "ust" | "euer" | "est";
 type Issue = Data["ust"]["issues"][number];
-const FORM_LABEL = { ust: "Umsatzsteuererklärung", euer: "Anlage EÜR", est: "Einkommensteuererklärung" } as const;
+const FORM_LABEL = {
+  ust: "Umsatzsteuererklärung",
+  euer: "Anlage EÜR",
+  est: "Einkommensteuererklärung",
+  kst: "Körperschaftsteuererklärung",
+  gewst: "Gewerbesteuererklärung",
+} as const;
 const LINK_LABEL = {
   "/einstellungen": "Zu den Einstellungen",
   "/anlagen": "Zu den Anlagen",
@@ -39,7 +48,8 @@ const LINK_LABEL = {
 function AnnualPage() {
   const data = Route.useLoaderData();
   const navigate = useNavigate();
-  const selectId = useId();
+  // GmbH und UG: Körperschaftsteuer statt Einkommensteuer, Bilanz statt EÜR; hier bleibt die Umsatzsteuer
+  const gesellschaft = isKapitalgesellschaft(data.rechtsform);
 
   return (
     <>
@@ -48,16 +58,17 @@ function AnnualPage() {
           <div className="eyebrow">Jahreserklärung</div>
           <h1>Steuerjahr {data.year}</h1>
         </div>
-        <label className="field" htmlFor={selectId}>
-          Jahr
-          <select id={selectId} value={data.year} onChange={(e) => navigate({ to: "/jahreserklaerung/$jahr", params: { jahr: e.target.value } })}>
-            {(data.years.includes(data.year) ? data.years : [data.year, ...data.years]).map((y) => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Field label="Jahr">
+          {(control) => (
+            <select {...control} value={data.year} onChange={(e) => navigate({ to: "/jahreserklaerung/$jahr", params: { jahr: e.target.value } })}>
+              {(data.years.includes(data.year) ? data.years : [data.year, ...data.years]).map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
       </div>
 
       {data.mode === "simuliert" && (
@@ -67,26 +78,43 @@ function AnnualPage() {
         </div>
       )}
 
-      <p className="muted small" style={{ margin: 0, maxWidth: 760 }}>
-        Umsatzsteuererklärung und Anlage EÜR rechnet Haben aus den Buchungen. Für die Einkommensteuer kommt der Gewinn aus der EÜR;
-        Arbeitslohn, Vorsorge, Sonderausgaben, Kinder und Kapitalerträge trägst du ein.
-      </p>
+      {gesellschaft ? (
+        <p className="muted small" style={{ margin: 0, maxWidth: 760 }}>
+          Umsatzsteuer-, Körperschaftsteuer- und Gewerbesteuererklärung rechnet Haben aus den Buchungen und dem <Link to="/abschluss">Jahresabschluss</Link>.
+          Anlage EÜR und Einkommensteuer gibt es für {RECHTSFORMEN[data.rechtsform]} nicht.
+        </p>
+      ) : (
+        <p className="muted small" style={{ margin: 0, maxWidth: 760 }}>
+          Umsatzsteuererklärung und Anlage EÜR rechnet Haben aus den Buchungen. Für die Einkommensteuer kommt der Gewinn aus der EÜR; Arbeitslohn, Vorsorge,
+          Sonderausgaben, Kinder und Kapitalerträge trägst du ein.
+        </p>
+      )}
 
       <nav className="jump-nav" aria-label="Abschnitte der Jahreserklärung">
         <a href="#ust">Umsatzsteuer</a>
-        <a href="#euer">Anlage EÜR</a>
-        <a href="#est">Einkommensteuer</a>
-        <a href="#vast">Belege von ELSTER</a>
+        {!gesellschaft && <a href="#euer">Anlage EÜR</a>}
+        {!gesellschaft && <a href="#est">Einkommensteuer</a>}
+        {gesellschaft && <a href="#kst">Körperschaftsteuer</a>}
+        {gesellschaft && <a href="#gewst">Gewerbesteuer</a>}
+        {gesellschaft && <a href="#kapg-angaben">Angaben</a>}
+        {!gesellschaft && <a href="#vast">Belege von ELSTER</a>}
         <a href="#verlauf">Verlauf</a>
       </nav>
 
       <div className="stack" style={{ gap: 24 }}>
         <UstSection data={data} />
-        <EuerSection data={data} />
-        <EstSection key={data.year} data={data} />
-        <div id="vast" className="jump-target">
-          <VastBelege key={`vast-${data.year}`} data={data} />
-        </div>
+        {!gesellschaft && <EuerSection data={data} />}
+        {!gesellschaft && <EstSection key={data.year} data={data} />}
+        {data.kapg && <KapgGemeinsameHinweise data={data} />}
+        {data.kapg && <KstSection data={data} />}
+        {data.kapg && <GewstSection data={data} />}
+        {data.kapg && <KapgAngaben key={`kapg-${data.year}`} data={data} />}
+        {/* Die vorausgefüllte Steuererklärung gibt es nur für die Einkommensteuer einer Person */}
+        {!gesellschaft && (
+          <div id="vast" className="jump-target">
+            <VastBelege key={`vast-${data.year}`} data={data} />
+          </div>
+        )}
         <History data={data} />
       </div>
     </>
@@ -124,7 +152,11 @@ function Row({ label, kz, value, extra, total, text }: { label: string; kz?: str
           {extra}
         </td>
       )}
-      <td className={text ? undefined : "num"} style={text ? { textAlign: "right" } : undefined} data-label={extra !== undefined ? "Steuer" : text ? undefined : "Betrag"}>
+      <td
+        className={text ? undefined : "num"}
+        style={text ? { textAlign: "right" } : undefined}
+        data-label={extra !== undefined ? "Steuer" : text ? undefined : "Betrag"}
+      >
         {value}
       </td>
     </tr>
@@ -132,11 +164,7 @@ function Row({ label, kz, value, extra, total, text }: { label: string; kz?: str
 }
 
 function SentPill({ sent }: { sent: Data["ust"]["sent"] }) {
-  return sent ? (
-    <span className="pill pill-ok">Übermittelt {formatDate(sent.createdAt)}</span>
-  ) : (
-    <span className="pill">Noch nicht übermittelt</span>
-  );
+  return sent ? <span className="pill pill-ok">Übermittelt {formatDate(sent.createdAt)}</span> : <span className="pill">Noch nicht übermittelt</span>;
 }
 
 function UstSection({ data }: { data: Data }) {
@@ -156,8 +184,12 @@ function UstSection({ data }: { data: Data }) {
           <thead>
             <tr>
               <th scope="col">Zeile</th>
-              <th scope="col" className="num">Bemessungsgrundlage</th>
-              <th scope="col" className="num">Steuer</th>
+              <th scope="col" className="num">
+                Bemessungsgrundlage
+              </th>
+              <th scope="col" className="num">
+                Steuer
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -167,6 +199,16 @@ function UstSection({ data }: { data: Data }) {
             {ust.kz45 !== 0 && <Row label="Nicht steuerbare Umsätze (Drittland)" extra={formatEuro(ust.kz45)} value="–" />}
             {ust.kz48 !== 0 && <Row label="Steuerfreie Umsätze ohne Vorsteuerabzug" extra={formatEuro(ust.kz48)} value="–" />}
             {ust.reverseChargeTax !== 0 && <Row label="Steuer als Leistungsempfänger (§ 13b)" extra="" value={formatEuro(ust.reverseChargeTax)} />}
+            {ust.kz41 !== 0 && <Row label="Steuerfreie innergemeinschaftliche Lieferungen" extra={formatEuro(ust.kz41)} value="–" />}
+            {ust.kz43 !== 0 && <Row label="Steuerfreie Ausfuhrlieferungen" extra={formatEuro(ust.kz43)} value="–" />}
+            {ust.igErwerb19 !== 0 && <Row label="Innergemeinschaftliche Erwerbe zu 19 %" extra={formatEuro(ust.igErwerb19)} value="–" />}
+            {ust.igErwerb7 !== 0 && <Row label="Innergemeinschaftliche Erwerbe zu 7 %" extra={formatEuro(ust.igErwerb7)} value="–" />}
+            {ust.igErwerbVorsteuer !== 0 && (
+              <Row label="Vorsteuer aus innergemeinschaftlichem Erwerb" extra="" value={`−${formatEuro(ust.igErwerbVorsteuer)}`} />
+            )}
+            {ust.einfuhrumsatzsteuer !== 0 && (
+              <Row label="Entstandene Einfuhrumsatzsteuer (Kz 62)" extra="" value={`−${formatEuro(ust.einfuhrumsatzsteuer)}`} />
+            )}
             <Row label="Abziehbare Vorsteuer" extra="" value={`−${formatEuro(f.vorsteuer)}`} />
             <Row label={ust.steuer >= 0 ? "Umsatzsteuer" : "Überschuss"} extra="" value={formatEuro(ust.steuer)} total />
             <Row label="Vorauszahlungssoll (gesendete Voranmeldungen)" extra="" value={`−${formatEuro(f.vorauszahlungen)}`} />
@@ -174,8 +216,10 @@ function UstSection({ data }: { data: Data }) {
           </tbody>
         </table>
         <p className="small muted" style={{ margin: 0 }}>
-          Bemessungsgrundlagen in vollen Euro, die Steuer daraus wie in der Voranmeldung. {data.versteuerung === "ist" ? "Ist-Versteuerung" : "Soll-Versteuerung"}.
-          Die private Kfz-Nutzung ist in den Umsätzen zu 19 % enthalten.
+          Bemessungsgrundlagen in vollen Euro, die Steuer daraus wie in der Voranmeldung.{" "}
+          {data.versteuerung === "ist" ? "Ist-Versteuerung" : "Soll-Versteuerung"}.
+          {/* Privatnutzung als unentgeltliche Wertabgabe bucht Haben nur im Einzelunternehmen (docs/anlagen.md) */}
+          {!isKapitalgesellschaft(data.rechtsform) && " Die private Kfz-Nutzung ist in den Umsätzen zu 19 % enthalten."}
         </p>
       </div>
       <SubmitPanel form="ust" data={data} blocked={ust.issues.some((i) => i.tone === "fehler")} sent={Boolean(ust.sent)} />
@@ -199,7 +243,9 @@ function EuerSection({ data }: { data: Data }) {
           <thead>
             <tr>
               <th scope="col">Zeile und Feldkennung</th>
-              <th scope="col" className="num">Betrag</th>
+              <th scope="col" className="num">
+                Betrag
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -218,7 +264,7 @@ function EuerSection({ data }: { data: Data }) {
           </tbody>
         </ScrollTable>
         {euer.anlagen.length > 0 && (
-          <div className="stack" style={{ gap: 6 }}>
+          <div className="stack" style={{ gap: 8 }}>
             <div className="section-label">Anlagenverzeichnis (Anlage AVEÜR)</div>
             <div style={{ overflowX: "auto" }}>
               <ScrollTable className="report-table">
@@ -241,7 +287,9 @@ function EuerSection({ data }: { data: Data }) {
                           {formatDate(a.anschaffung)} · {formatEuro(a.anschaffungskosten)}
                         </div>
                       </td>
-                      <td className="num small muted">{a.gruppe === "kfz" ? "Kfz" : a.gruppe === "buero" ? "Büro" : a.gruppe === "sammelposten" ? "Sammelposten" : "Andere"}</td>
+                      <td className="num small muted">
+                        {a.gruppe === "kfz" ? "Kfz" : a.gruppe === "buero" ? "Büro" : a.gruppe === "sammelposten" ? "Sammelposten" : "Andere"}
+                      </td>
                       <td className="num mono">{formatEuro(a.buchwertBeginn)}</td>
                       <td className="num mono">{formatEuro(a.afa)}</td>
                       <td className="num mono">{a.abgang ? formatEuro(a.abgang) : "–"}</td>
@@ -252,8 +300,8 @@ function EuerSection({ data }: { data: Data }) {
               </ScrollTable>
             </div>
             <p className="small muted" style={{ margin: 0 }}>
-              Anlagen, die im Jahr angeschafft wurden, stehen mit den Anschaffungskosten im Buchwert zu Beginn. Geringwertige
-              Wirtschaftsgüter gehören nicht ins Verzeichnis.
+              Anlagen, die im Jahr angeschafft wurden, stehen mit den Anschaffungskosten im Buchwert zu Beginn. Geringwertige Wirtschaftsgüter gehören nicht ins
+              Verzeichnis.
             </p>
           </div>
         )}
@@ -272,11 +320,9 @@ const centsText = (cents: number | undefined) => (cents ? formatDecimal(cents) :
 /** Ein Betragsfeld; leer heißt 0 */
 function Amount({ name, label, value, hint }: { name: string; label: string; value: number | undefined; hint?: string }) {
   return (
-    <label className="field">
-      {label}
-      <input name={name} inputMode="decimal" defaultValue={centsText(value)} placeholder="0,00" />
-      {hint && <span className="small muted">{hint}</span>}
-    </label>
+    <Field label={label} hint={hint && hint}>
+      {(control) => <input {...control} name={name} inputMode="decimal" defaultValue={centsText(value)} placeholder="0,00" />}
+    </Field>
   );
 }
 
@@ -450,7 +496,7 @@ function EstSection({ data }: { data: Data }) {
           const total = v("a") + (est.zusammen ? v("b") : 0) + (a.vorsorge.sonstige ?? 0);
           return (
             <Block title="Vorsorgeaufwand" summary={sumText(total)} open={total > 0}>
-              <h4 className="est-sub">{est.zusammen ? est.person.a ?? "Person A" : "Beiträge"}</h4>
+              <h4 className="est-sub">{est.zusammen ? (est.person.a ?? "Person A") : "Beiträge"}</h4>
               {vorsorgeFields("a", a.vorsorge.a)}
               {est.zusammen && (
                 <>
@@ -470,12 +516,17 @@ function EstSection({ data }: { data: Data }) {
           summary={sumText(sumOf(a.sonderausgaben.kirchensteuerGezahlt, a.sonderausgaben.spenden, a.krankheitskosten))}
           open={sumOf(a.sonderausgaben.kirchensteuerGezahlt, a.sonderausgaben.kirchensteuerErstattet, a.sonderausgaben.spenden, a.krankheitskosten) > 0}
         >
-        <div className="form-grid">
-          <Amount name="kistGezahlt" label="Gezahlte Kirchensteuer" value={a.sonderausgaben.kirchensteuerGezahlt} hint="ohne Kirchensteuer auf Kapitalerträge" />
-          <Amount name="kistErstattet" label="Erstattete Kirchensteuer" value={a.sonderausgaben.kirchensteuerErstattet} />
-          <Amount name="spenden" label="Spenden und Mitgliedsbeiträge" value={a.sonderausgaben.spenden} hint="an steuerbegünstigte Empfänger im Inland" />
-          <Amount name="krankheitskosten" label="Krankheitskosten" value={a.krankheitskosten} hint="selbst getragen, nach Erstattungen" />
-        </div>
+          <div className="form-grid">
+            <Amount
+              name="kistGezahlt"
+              label="Gezahlte Kirchensteuer"
+              value={a.sonderausgaben.kirchensteuerGezahlt}
+              hint="ohne Kirchensteuer auf Kapitalerträge"
+            />
+            <Amount name="kistErstattet" label="Erstattete Kirchensteuer" value={a.sonderausgaben.kirchensteuerErstattet} />
+            <Amount name="spenden" label="Spenden und Mitgliedsbeiträge" value={a.sonderausgaben.spenden} hint="an steuerbegünstigte Empfänger im Inland" />
+            <Amount name="krankheitskosten" label="Krankheitskosten" value={a.krankheitskosten} hint="selbst getragen, nach Erstattungen" />
+          </div>
         </Block>
 
         <Block
@@ -483,40 +534,55 @@ function EstSection({ data }: { data: Data }) {
           summary={sumText(sumOf(a.haushaltsnah.minijobs, a.haushaltsnah.dienstleistungen, a.haushaltsnah.handwerker))}
           open={sumOf(a.haushaltsnah.minijobs, a.haushaltsnah.dienstleistungen, a.haushaltsnah.handwerker) > 0}
         >
-        <div className="form-grid">
-          <Amount name="minijobs" label="Minijobs im Haushalt" value={a.haushaltsnah.minijobs} />
-          <Amount name="dienstleistungen" label="Haushaltsnahe Dienstleistungen" value={a.haushaltsnah.dienstleistungen} hint="z. B. Reinigung, Gartenpflege" />
-          <Amount name="handwerker" label="Handwerkerleistungen" value={a.haushaltsnah.handwerker} hint="nur Arbeits-, Maschinen- und Fahrtkosten" />
-        </div>
+          <div className="form-grid">
+            <Amount name="minijobs" label="Minijobs im Haushalt" value={a.haushaltsnah.minijobs} />
+            <Amount
+              name="dienstleistungen"
+              label="Haushaltsnahe Dienstleistungen"
+              value={a.haushaltsnah.dienstleistungen}
+              hint="z. B. Reinigung, Gartenpflege"
+            />
+            <Amount name="handwerker" label="Handwerkerleistungen" value={a.haushaltsnah.handwerker} hint="nur Arbeits-, Maschinen- und Fahrtkosten" />
+          </div>
         </Block>
 
-        <Block title="Kinder" summary={kinder.length === 0 ? "keine" : `${kinder.length} ${kinder.length === 1 ? "Kind" : "Kinder"}`} open={a.kinder.length > 0}>
+        <Block
+          title="Kinder"
+          summary={kinder.length === 0 ? "keine" : `${kinder.length} ${kinder.length === 1 ? "Kind" : "Kinder"}`}
+          open={a.kinder.length > 0}
+        >
           {kinder.map((k, index) => (
             <div key={k.key} className="form-grid" role="group" aria-label={`Kind ${index + 1}`}>
-              <label className="field">
-                Vorname
-                <input value={k.vorname} onChange={(e) => updateKind(k.key, { vorname: e.target.value })} required />
-              </label>
-              <label className="field">
-                Geburtsdatum
-                <input type="date" value={k.geburtsdatum} onChange={(e) => updateKind(k.key, { geburtsdatum: e.target.value })} required />
-              </label>
-              <label className="field">
-                Steuer-ID
-                <input inputMode="numeric" value={k.idnr ?? ""} onChange={(e) => updateKind(k.key, { idnr: e.target.value })} />
-              </label>
-              <label className="field">
-                Familienkasse
-                <input required value={k.familienkasse ?? ""} onChange={(e) => updateKind(k.key, { familienkasse: e.target.value })} />
-              </label>
-              <label className="field">
-                Abweichender Nachname
-                <input value={k.name ?? ""} onChange={(e) => updateKind(k.key, { name: e.target.value })} />
-              </label>
-              <label className="field">
-                Kinderbetreuungskosten (€)
-                <input inputMode="decimal" value={k.kinderbetreuung} onChange={(e) => updateKind(k.key, { kinderbetreuung: e.target.value })} placeholder="0,00" />
-              </label>
+              <Field label="Vorname">
+                {(control) => <input {...control} value={k.vorname} onChange={(e) => updateKind(k.key, { vorname: e.target.value })} required />}
+              </Field>
+              <Field label="Geburtsdatum">
+                {(control) => (
+                  <input {...control} type="date" value={k.geburtsdatum} onChange={(e) => updateKind(k.key, { geburtsdatum: e.target.value })} required />
+                )}
+              </Field>
+              <Field label="Steuer-ID">
+                {(control) => <input {...control} inputMode="numeric" value={k.idnr ?? ""} onChange={(e) => updateKind(k.key, { idnr: e.target.value })} />}
+              </Field>
+              <Field label="Familienkasse">
+                {(control) => (
+                  <input {...control} required value={k.familienkasse ?? ""} onChange={(e) => updateKind(k.key, { familienkasse: e.target.value })} />
+                )}
+              </Field>
+              <Field label="Abweichender Nachname">
+                {(control) => <input {...control} value={k.name ?? ""} onChange={(e) => updateKind(k.key, { name: e.target.value })} />}
+              </Field>
+              <Field label="Kinderbetreuungskosten (€)">
+                {(control) => (
+                  <input
+                    {...control}
+                    inputMode="decimal"
+                    value={k.kinderbetreuung}
+                    onChange={(e) => updateKind(k.key, { kinderbetreuung: e.target.value })}
+                    placeholder="0,00"
+                  />
+                )}
+              </Field>
               <div className="actions" style={{ gridColumn: "1 / -1" }}>
                 <button type="button" className="btn btn-danger" onClick={() => setKinder((list) => list.filter((x) => x.key !== k.key))}>
                   Kind entfernen
@@ -528,7 +594,9 @@ function EstSection({ data }: { data: Data }) {
             <button
               type="button"
               className="btn"
-              onClick={() => setKinder((list) => [...list, { key: Math.max(-1, ...list.map((x) => x.key)) + 1, vorname: "", geburtsdatum: "", kinderbetreuung: "" }])}
+              onClick={() =>
+                setKinder((list) => [...list, { key: Math.max(-1, ...list.map((x) => x.key)) + 1, vorname: "", geburtsdatum: "", kinderbetreuung: "" }])
+              }
             >
               + Kind hinzufügen
             </button>
@@ -538,21 +606,24 @@ function EstSection({ data }: { data: Data }) {
         <Block
           title="Kapitalerträge (Anlage KAP)"
           summary={sumText(sumOf(a.kap?.ertraegeMitSteuerabzug, a.kap?.ertraegeOhneSteuerabzugInland, a.kap?.ertraegeAusland))}
-          open={sumOf(a.kap?.ertraegeMitSteuerabzug, a.kap?.ertraegeOhneSteuerabzugInland, a.kap?.ertraegeAusland, a.kap?.kapitalertragsteuer) > 0 || Boolean(a.kap?.guenstigerpruefung)}
+          open={
+            sumOf(a.kap?.ertraegeMitSteuerabzug, a.kap?.ertraegeOhneSteuerabzugInland, a.kap?.ertraegeAusland, a.kap?.kapitalertragsteuer) > 0 ||
+            Boolean(a.kap?.guenstigerpruefung)
+          }
         >
-        <div className="form-grid">
-          <Amount name="kapMit" label="Erträge mit Steuerabzug" value={a.kap?.ertraegeMitSteuerabzug} hint="laut Steuerbescheinigung der Bank" />
-          <Amount name="kapSpb" label="Davon genutzter Sparer-Pauschbetrag" value={a.kap?.sparerPauschbetrag} />
-          <Amount name="kapOhneInl" label="Inländische Erträge ohne Steuerabzug" value={a.kap?.ertraegeOhneSteuerabzugInland} />
-          <Amount name="kapAusl" label="Ausländische Erträge" value={a.kap?.ertraegeAusland} />
-          <Amount name="kapESt" label="Einbehaltene Kapitalertragsteuer" value={a.kap?.kapitalertragsteuer} />
-          <Amount name="kapSoli" label="Solidaritätszuschlag" value={a.kap?.soli} />
-          <Amount name="kapKiSt" label="Kirchensteuer zur Kapitalertragsteuer" value={a.kap?.kirchensteuer} />
-          <label className="checkbox" style={{ alignSelf: "end" }}>
-            <input type="checkbox" name="guenstigerpruefung" defaultChecked={a.kap?.guenstigerpruefung ?? false} />
-            Günstigerprüfung beantragen
-          </label>
-        </div>
+          <div className="form-grid">
+            <Amount name="kapMit" label="Erträge mit Steuerabzug" value={a.kap?.ertraegeMitSteuerabzug} hint="laut Steuerbescheinigung der Bank" />
+            <Amount name="kapSpb" label="Davon genutzter Sparer-Pauschbetrag" value={a.kap?.sparerPauschbetrag} />
+            <Amount name="kapOhneInl" label="Inländische Erträge ohne Steuerabzug" value={a.kap?.ertraegeOhneSteuerabzugInland} />
+            <Amount name="kapAusl" label="Ausländische Erträge" value={a.kap?.ertraegeAusland} />
+            <Amount name="kapESt" label="Einbehaltene Kapitalertragsteuer" value={a.kap?.kapitalertragsteuer} />
+            <Amount name="kapSoli" label="Solidaritätszuschlag" value={a.kap?.soli} />
+            <Amount name="kapKiSt" label="Kirchensteuer zur Kapitalertragsteuer" value={a.kap?.kirchensteuer} />
+            <label className="checkbox" style={{ alignSelf: "end" }}>
+              <input type="checkbox" name="guenstigerpruefung" defaultChecked={a.kap?.guenstigerpruefung ?? false} />
+              Günstigerprüfung beantragen
+            </label>
+          </div>
         </Block>
 
         {/* Speichern bleibt am unteren Rand sichtbar, solange das Formular im Bild ist */}
@@ -566,8 +637,7 @@ function EstSection({ data }: { data: Data }) {
           </div>
         </div>
         <p className="small muted" style={{ margin: 0 }}>
-          Beträge in Euro; ELSTER bekommt volle Euro, nur die Steuern auf Kapitalerträge mit Cent. Übermittelt werden die gespeicherten
-          Angaben.
+          Beträge in Euro; ELSTER bekommt volle Euro, nur die Steuern auf Kapitalerträge mit Cent. Übermittelt werden die gespeicherten Angaben.
         </p>
       </form>
       <SubmitPanel form="est" data={data} blocked={blocked} sent={Boolean(est.sent)} />
@@ -578,27 +648,38 @@ function EstSection({ data }: { data: Data }) {
 function SubmitPanel({ form, data, blocked, sent }: { form: Form; data: Data; blocked: boolean; sent: boolean }) {
   const router = useRouter();
   const submit = useServerFn(submitAnnualReturn);
+  const loadWerte = useServerFn(getMeinElsterWerte);
   const { busy, notice, setNotice, run } = useAction();
 
   return (
-    <ElsterSubmit
-      setup={data}
-      title={`${FORM_LABEL[form]} übermitteln`}
-      className="card sticky-panel"
-      ready={!blocked}
-      busy={busy}
-      notice={notice}
-      lockedHint={sent ? "Schon übermittelt. Eine Berichtigung geht über das ELSTER-Portal." : undefined}
-      confirmText={`Die ${FORM_LABEL[form]} ${data.year} geht verbindlich an das Finanzamt. Noch einmal klicken zum Senden.`}
-      footer="Erst mit „Nur prüfen“ oder einer Testübermittlung prüft ERiC die Daten gegen die Vorgaben des Jahres. Die PIN wird nicht gespeichert."
-      onSubmit={(kind, pin) =>
-        run(async () => {
-          const result = await submit({ data: { form, year: data.year, kind, pin } });
-          setNotice(elsterNotice(kind, result, "Übermittelt."));
-          await router.invalidate();
-        })
-      }
-    />
+    <div className="stack sticky-panel">
+      <ElsterSubmit
+        setup={data}
+        title={`${FORM_LABEL[form]} übermitteln`}
+        className="card"
+        ready={!blocked}
+        busy={busy}
+        notice={notice}
+        lockedHint={sent ? "Schon übermittelt. Eine Berichtigung geht über das ELSTER-Portal." : undefined}
+        confirmTitle={`${FORM_LABEL[form]} ${data.year} verbindlich senden?`}
+        confirmFacts={[
+          { label: form === "euer" ? "Meldung" : "Steuerart", value: FORM_LABEL[form] },
+          { label: "Zeitraum", value: String(data.year) },
+        ]}
+        confirmText={`Die ${FORM_LABEL[form]} ${data.year} geht verbindlich an das Finanzamt.`}
+        footer="Erst mit „Nur prüfen“ oder einer Testübermittlung prüft ERiC die Daten gegen die Vorgaben des Jahres. Die PIN wird nicht gespeichert."
+        onSubmit={(kind, pin) =>
+          run(async () => {
+            const result = await submit({ data: { form, year: data.year, kind, pin } });
+            setNotice(elsterNotice(kind, result, "Übermittelt."));
+            await router.invalidate();
+          })
+        }
+      />
+      {!data.herstellerIdConfigured && !sent && (
+        <MeinElsterWerte load={() => loadWerte({ data: { form, year: data.year } })} label={`${FORM_LABEL[form]} ${data.year}`} blocked={blocked} />
+      )}
+    </div>
   );
 }
 

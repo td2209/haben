@@ -12,9 +12,13 @@ import {
   type CarDrive,
   type CarPrivateUse,
   type PrivateUseRate,
+  usesUsefulLife,
+  allowsMemoValue,
 } from "@haben/core";
 import { useState, type FormEvent } from "react";
 import { parseUsefulLifeMonths } from "../lib/format.ts";
+import { AssetMethodOptions, parseRatePercent, ratePercentText } from "./AssetMethodOptions.tsx";
+import { Field } from "./Field.tsx";
 
 export interface AssetFormValues {
   name: string;
@@ -23,6 +27,10 @@ export interface AssetFormValues {
   acquisitionDate: string;
   cost: number;
   usefulLifeMonths: number | null;
+  /** Nur degressiv: Basispunkte, null = Höchstsatz */
+  degressiveRate: number | null;
+  linearFromYear: number | null;
+  memoValue: boolean;
   openingDate: string;
   openingBookValue: number;
   disposalDate: string | null;
@@ -34,13 +42,17 @@ const RATE_LABELS: Record<PrivateUseRate, string> = { 100: "1 %", 50: "0,5 %", 2
 
 /**
  * Formular für eine Anlage. `locked` sperrt die Berechnungsgrundlagen (gebucht oder aus einem Beleg),
- * `lifeEditable` erlaubt trotzdem die Nutzungsdauer (Beleg-Anlage vor der ersten AfA).
+ * `lifeEditable` erlaubt trotzdem Nutzungsdauer, Abschreibung und ihre Angaben (Beleg-Anlage vor der ersten AfA),
+ * `switchEditable` den Wechsel von der degressiven zur linearen AfA (auch nach der ersten Buchung).
  */
 export function AssetForm({
   initial,
   locked,
   lifeEditable,
+  switchEditable,
   privateUseLocked,
+  privateUseAvailable,
+  elektroOffered,
   showOpening,
   submitLabel,
   busy,
@@ -49,8 +61,13 @@ export function AssetForm({
   initial: AssetFormValues;
   locked: boolean;
   lifeEditable: boolean;
+  switchEditable: boolean;
   /** Privatnutzung gesperrt (schon gebucht) */
   privateUseLocked: boolean;
+  /** Privatnutzung als Entnahme gibt es nur im Einzelunternehmen; in GmbH und UG ist sie Arbeitslohn */
+  privateUseAvailable: boolean;
+  /** AfA nach § 7 Abs. 2a EStG nur im Einzelunternehmen (elektroAvailable in @haben/core) */
+  elektroOffered: boolean;
   showOpening: boolean;
   submitLabel: string;
   busy: boolean;
@@ -62,6 +79,9 @@ export function AssetForm({
   const [acquisitionDate, setAcquisitionDate] = useState(initial.acquisitionDate);
   const [cost, setCost] = useState(initial.cost ? formatDecimal(initial.cost) : "");
   const [years, setYears] = useState(initial.usefulLifeMonths ? String(initial.usefulLifeMonths / 12) : "");
+  const [rateText, setRateText] = useState(ratePercentText(initial.degressiveRate));
+  const [linearFrom, setLinearFrom] = useState(initial.linearFromYear ? String(initial.linearFromYear) : "");
+  const [memoValue, setMemoValue] = useState(initial.memoValue);
   const [openingDate, setOpeningDate] = useState(initial.openingDate);
   const [openingBookValue, setOpeningBookValue] = useState(initial.openingDate ? formatDecimal(initial.openingBookValue) : "");
   const [disposalDate, setDisposalDate] = useState(initial.disposalDate ?? "");
@@ -76,7 +96,12 @@ export function AssetForm({
   const parsedCost = parseEuro(cost);
   const parsedOpening = parseEuro(openingBookValue);
   const lifeMonths = parseUsefulLifeMonths(years);
-  const lifeValid = method !== "linear" || lifeMonths !== null;
+  const lifeValid = !usesUsefulLife(method) || lifeMonths !== null;
+  const parsedRate = parseRatePercent(rateText);
+  const parsedLinearFrom = /^\d{4}$/.test(linearFrom.trim()) ? Number(linearFrom.trim()) : linearFrom.trim() ? Number.NaN : null;
+  const degressiveValid = method !== "degressiv" || (!Number.isNaN(parsedRate) && !Number.isNaN(parsedLinearFrom));
+  // Bei einer Beleg-Anlage vor der ersten AfA bleibt das Anlagekonto: nur Methoden ohne eigenes Konto
+  const methodLocked = locked && !lifeEditable;
   const parsedListPrice = parseEuro(listPrice);
   const privateUseValid = kind !== "kfz" || !privateUsed || (parsedListPrice !== null && parsedListPrice > 0);
   // Satz folgt Antrieb, Listenpreis und Anschaffungsdatum, bis er von Hand gewählt wurde (ohne Datum: 1 %)
@@ -92,6 +117,7 @@ export function AssetForm({
     parsedCost !== null &&
     parsedCost > 0 &&
     lifeValid &&
+    degressiveValid &&
     (!showOpening || (Boolean(openingDate) && parsedOpening !== null && parsedOpening >= 0));
 
   function chooseKind(value: AssetKind) {
@@ -99,7 +125,9 @@ export function AssetForm({
     // Vorschlag laut AfA-Tabelle
     const suggestion = ASSET_KINDS[value];
     setMethod(suggestion.method);
-    if (suggestion.usefulLifeYears && suggestion.method === "linear") setYears(String(suggestion.usefulLifeYears));
+    // Ohne Vorschlag (sonstige Ausstattung, sonstige Transportmittel) bleibt keine Nutzungsdauer der vorigen Art stehen,
+    // etwa die sechs Jahre für Pkw; sie kommt aus der AfA-Tabelle des einzelnen Wirtschaftsguts (#312)
+    if (suggestion.method === "linear") setYears(suggestion.usefulLifeYears ? String(suggestion.usefulLifeYears) : "");
   }
 
   function submit(event: FormEvent) {
@@ -111,7 +139,11 @@ export function AssetForm({
       method,
       acquisitionDate,
       cost: parsedCost!,
-      usefulLifeMonths: method === "linear" ? lifeMonths : null,
+      usefulLifeMonths: usesUsefulLife(method) ? lifeMonths : null,
+      degressiveRate: method === "degressiv" ? parsedRate : null,
+      linearFromYear: method === "degressiv" ? parsedLinearFrom : null,
+      // Ein ausgeblendetes Häkchen (GWG, Sammelposten, Computer) geht nicht mit
+      memoValue: allowsMemoValue(method) && memoValue,
       openingDate,
       openingBookValue: parsedOpening ?? 0,
       disposalDate: disposalDate || null,
@@ -124,86 +156,123 @@ export function AssetForm({
     <form className="stack plain-sections" onSubmit={submit}>
       <section className="form-section" aria-labelledby="asset-basics">
         <h3 id="asset-basics">Anlage</h3>
-        <label className="field">
-          Bezeichnung
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={200} placeholder="z. B. VW Passat, Kennzeichen R-AB 123" />
-        </label>
+        <Field label="Bezeichnung">
+          {(control) => (
+            <input
+              {...control}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              maxLength={200}
+              placeholder="z. B. VW Passat, Kennzeichen R-AB 123"
+            />
+          )}
+        </Field>
         <div className="form-row cols-2">
-          <label className="field">
-            Art
-            <select value={kind} onChange={(e) => chooseKind(e.target.value as AssetKind)} disabled={locked}>
-              {Object.entries(ASSET_KINDS).map(([value, k]) => (
-                <option key={value} value={value}>
-                  {k.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            Anschaffungsdatum
-            <input type="date" value={acquisitionDate} onChange={(e) => setAcquisitionDate(e.target.value)} disabled={locked} required />
-          </label>
+          <Field label="Art">
+            {(control) => (
+              <select {...control} value={kind} onChange={(e) => chooseKind(e.target.value as AssetKind)} disabled={locked}>
+                {Object.entries(ASSET_KINDS).map(([value, k]) => (
+                  <option key={value} value={value}>
+                    {k.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Anschaffungsdatum">
+            {(control) => (
+              <input {...control} type="date" value={acquisitionDate} onChange={(e) => setAcquisitionDate(e.target.value)} disabled={locked} required />
+            )}
+          </Field>
         </div>
-        <label className="field">
-          Anschaffungskosten netto (€)
-          <input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} disabled={locked} aria-invalid={parsedCost === null} />
-        </label>
+        <Field label="Anschaffungskosten netto (€)">
+          {(control) => (
+            <input
+              {...control}
+              inputMode="decimal"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+              disabled={locked}
+              aria-invalid={parsedCost === null}
+            />
+          )}
+        </Field>
       </section>
 
       <section className="form-section" aria-labelledby="asset-depreciation">
         <h3 id="asset-depreciation">Abschreibung</h3>
         <div className="form-row cols-2">
-          <label className="field">
-            Abschreibung
-            <select value={method} onChange={(e) => setMethod(e.target.value as AssetMethod)} disabled={locked}>
-              {Object.entries(ASSET_METHODS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {method === "linear" && (
-            <label className="field">
-              Nutzungsdauer in Jahren
-              <input
-                inputMode="decimal"
-                value={years}
-                onChange={(e) => setYears(e.target.value)}
-                disabled={locked && !lifeEditable}
-                aria-invalid={!lifeValid}
-                aria-describedby="life-hint"
-              />
-            </label>
+          <Field label="Abschreibung">
+            {(control) => (
+              <select {...control} value={method} onChange={(e) => setMethod(e.target.value as AssetMethod)} disabled={methodLocked}>
+                {Object.entries(ASSET_METHODS)
+                  .filter(([value]) => value === method || methodChoices(kind, locked, elektroOffered).includes(value as AssetMethod))
+                  .map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </Field>
+          {usesUsefulLife(method) && (
+            <Field label="Nutzungsdauer in Jahren" describedBy="life-hint">
+              {(control) => (
+                <input
+                  {...control}
+                  inputMode="decimal"
+                  value={years}
+                  onChange={(e) => setYears(e.target.value)}
+                  disabled={locked && !lifeEditable}
+                  aria-invalid={!lifeValid}
+                />
+              )}
+            </Field>
           )}
         </div>
-        {method === "linear" && (
+        {usesUsefulLife(method) && (
           <p id="life-hint" className="field-hint">
             Laut AfA-Tabelle z. B. Pkw 6, Büromöbel 13 Jahre.
           </p>
         )}
+        <AssetMethodOptions
+          method={method}
+          acquisitionDate={acquisitionDate}
+          lifeMonths={lifeMonths}
+          rate={rateText}
+          onRate={setRateText}
+          linearFrom={linearFrom}
+          onLinearFrom={setLinearFrom}
+          memo={memoValue}
+          onMemo={setMemoValue}
+          locked={methodLocked}
+          switchEditable={switchEditable}
+        />
         {showOpening && (
           <>
             <div className="form-row cols-2">
-              <label className="field">
-                Übernahmestichtag
-                <input type="date" value={openingDate} onChange={(e) => setOpeningDate(e.target.value)} disabled={locked} required aria-describedby="opening-hint" />
-              </label>
-              <label className="field">
-                Restbuchwert zum Stichtag (€)
-                <input
-                  inputMode="decimal"
-                  value={openingBookValue}
-                  onChange={(e) => setOpeningBookValue(e.target.value)}
-                  disabled={locked}
-                  aria-invalid={parsedOpening === null}
-                  aria-describedby="opening-hint"
-                />
-              </label>
+              <Field label="Übernahmestichtag" describedBy="opening-hint">
+                {(control) => (
+                  <input {...control} type="date" value={openingDate} onChange={(e) => setOpeningDate(e.target.value)} disabled={locked} required />
+                )}
+              </Field>
+              <Field label="Restbuchwert zum Stichtag (€)" describedBy="opening-hint">
+                {(control) => (
+                  <input
+                    {...control}
+                    inputMode="decimal"
+                    value={openingBookValue}
+                    onChange={(e) => setOpeningBookValue(e.target.value)}
+                    disabled={locked}
+                    aria-invalid={parsedOpening === null}
+                  />
+                )}
+              </Field>
             </div>
             <p id="opening-hint" className="field-hint">
-              Aus dem Anlagenverzeichnis der bisherigen Buchhaltung, z. B. Buchwert zum 31.12. des Vorjahres und Stichtag 01.01. Haben
-              schreibt ab dem Stichtag über die restliche Nutzungsdauer ab.
+              Aus dem Anlagenverzeichnis der bisherigen Buchhaltung, z. B. Buchwert zum 31.12. des Vorjahres und Stichtag 01.01. Haben schreibt ab dem Stichtag
+              über die restliche Nutzungsdauer ab.
             </p>
           </>
         )}
@@ -212,10 +281,9 @@ export function AssetForm({
       <section className="form-section" aria-labelledby="asset-disposal">
         <h3 id="asset-disposal">Abgang</h3>
         <div className="form-row cols-2">
-          <label className="field">
-            Abgang (Verkauf, Entnahme, Verschrottung)
-            <input type="date" value={disposalDate} onChange={(e) => setDisposalDate(e.target.value)} aria-describedby="disposal-hint" />
-          </label>
+          <Field label="Abgang (Verkauf, Entnahme, Verschrottung)" describedBy="disposal-hint">
+            {(control) => <input {...control} type="date" value={disposalDate} onChange={(e) => setDisposalDate(e.target.value)} />}
+          </Field>
         </div>
         <p id="disposal-hint" className="field-hint">
           Bis zum Abgangsmonat wird abgeschrieben, der Rest geht als Restbuchwert in die Ausgaben. Einen Verkauf stellst du als Rechnung.
@@ -223,7 +291,7 @@ export function AssetForm({
       </section>
 
       <div className="form-grid">
-        {kind === "kfz" && (
+        {kind === "kfz" && privateUseAvailable && (
           <fieldset className="stack" style={{ gridColumn: "1 / -1", border: 0, padding: 0, margin: 0, gap: 12 }} disabled={privateUseLocked}>
             <label className="checkbox">
               <input type="checkbox" checked={privateUsed} onChange={(e) => setPrivateUsed(e.target.checked)} />
@@ -231,46 +299,50 @@ export function AssetForm({
             </label>
             {privateUsed && (
               <div className="form-grid">
-                <label className="field">
-                  Bruttolistenpreis (€)
-                  <input
-                    inputMode="decimal"
-                    value={listPrice}
-                    onChange={(e) => setListPrice(e.target.value)}
-                    aria-invalid={parsedListPrice === null}
-                    aria-describedby="list-price-hint"
-                  />
-                  <span id="list-price-hint" className="small">
-                    Inländischer Listenpreis bei Erstzulassung inklusive Sonderausstattung und Umsatzsteuer, nicht der Kaufpreis.
-                  </span>
-                </label>
-                <label className="field">
-                  Antrieb
-                  <select value={drive} onChange={(e) => setDrive(e.target.value as CarDrive)}>
-                    {Object.entries(CAR_DRIVES).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  Satz je Monat
-                  <select
-                    value={effectiveRate}
-                    onChange={(e) => {
-                      setRate(Number(e.target.value) as PrivateUseRate);
-                      setRateTouched(true);
-                    }}
-                  >
-                    {([100, 50, 25] as const).map((r) => (
-                      <option key={r} value={r}>
-                        {RATE_LABELS[r]}
-                        {r === suggestion ? " (Vorschlag)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <Field
+                  label="Bruttolistenpreis (€)"
+                  hint="Inländischer Listenpreis bei Erstzulassung inklusive Sonderausstattung und Umsatzsteuer, nicht der Kaufpreis."
+                >
+                  {(control) => (
+                    <input
+                      {...control}
+                      inputMode="decimal"
+                      value={listPrice}
+                      onChange={(e) => setListPrice(e.target.value)}
+                      aria-invalid={parsedListPrice === null}
+                    />
+                  )}
+                </Field>
+                <Field label="Antrieb">
+                  {(control) => (
+                    <select {...control} value={drive} onChange={(e) => setDrive(e.target.value as CarDrive)}>
+                      {Object.entries(CAR_DRIVES).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+                <Field label="Satz je Monat">
+                  {(control) => (
+                    <select
+                      {...control}
+                      value={effectiveRate}
+                      onChange={(e) => {
+                        setRate(Number(e.target.value) as PrivateUseRate);
+                        setRateTouched(true);
+                      }}
+                    >
+                      {([100, 50, 25] as const).map((r) => (
+                        <option key={r} value={r}>
+                          {RATE_LABELS[r]}
+                          {r === suggestion ? " (Vorschlag)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
                 <label className="checkbox" style={{ alignSelf: "end" }}>
                   <input type="checkbox" checked={vat} onChange={(e) => setVat(e.target.checked)} />
                   Umsatzsteuer auf die Privatnutzung
@@ -279,8 +351,8 @@ export function AssetForm({
                   <p className="small muted" style={{ gridColumn: "1 / -1", margin: 0 }}>
                     Je Monat {formatEuro(monthly.withdrawal)} Entnahme
                     {monthly.vat ? `, Umsatzsteuer ${formatEuro(monthly.vat)} auf ${formatEuro(monthly.vatBase)} (1 % des Listenpreises abzüglich 20 %)` : ""}.
-                    Die Umsatzsteuer kommt in die Voranmeldung, gebucht wird mit der AfA zum Jahresende. Ohne Vorsteuerabzug beim Kauf oder als
-                    Kleinunternehmer fällt keine Umsatzsteuer an.
+                    Die Umsatzsteuer kommt in die Voranmeldung, gebucht wird mit der AfA zum Jahresende. Ohne Vorsteuerabzug beim Kauf oder als Kleinunternehmer
+                    fällt keine Umsatzsteuer an.
                   </p>
                 )}
               </div>
@@ -291,10 +363,9 @@ export function AssetForm({
 
       <section className="form-section" aria-labelledby="asset-note">
         <h3 id="asset-note">Notiz</h3>
-        <label className="field">
-          <span className="visually-hidden">Notiz</span>
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} />
-        </label>
+        <Field label="Notiz" hideLabel>
+          {(control) => <textarea {...control} value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} />}
+        </Field>
       </section>
       <div className="actions">
         <button type="submit" className="btn btn-primary" disabled={busy || !valid}>
@@ -303,4 +374,13 @@ export function AssetForm({
       </div>
     </form>
   );
+}
+
+/**
+ * Wählbare Methoden: Elektro nur bei Fahrzeugen im Einzelunternehmen; bei einer Beleg-Anlage (`fromDocument`) nur
+ * Methoden auf dem Anlagekonto der Art, GWG und Sammelposten legt die Belegbuchung mit eigenem Konto fest.
+ */
+function methodChoices(kind: AssetKind, fromDocument: boolean, elektroOffered: boolean): AssetMethod[] {
+  const all = Object.keys(ASSET_METHODS) as AssetMethod[];
+  return all.filter((m) => (m !== "elektro" || (kind === "kfz" && elektroOffered)) && (!fromDocument || (m !== "gwg" && m !== "sammelposten")));
 }

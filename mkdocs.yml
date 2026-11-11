@@ -1,12 +1,13 @@
-# Dokumentation als Website: https://firsttris.github.io/haben/
-# Quelle ist docs/, gebaut mit MkDocs Material (.github/workflows/docs.yml).
-# Lokal: pip install -r requirements-docs.txt && mkdocs serve
+# Dokumentation als Website: https://haben.app/
+# Quelle ist docs/, gebaut mit Zensical (.github/workflows/docs.yml), dem Nachfolger von
+# MkDocs Material; es liest diese Datei unverändert (https://zensical.org/docs/setup/basics/).
+# Lokal: pip install -r requirements-docs.txt && zensical serve
 site_name: Haben
 site_description: >-
-  Haben, die Open-Source-Buchhaltung für Freiberufler, Selbstständige und Kleinunternehmer,
-  selbst gehostet: E-Rechnung (ZUGFeRD, XRechnung), Bankabgleich, EÜR,
+  Haben, die Open-Source-Buchhaltung für Freiberufler, Selbstständige, Kleinunternehmer, GmbH und UG,
+  selbst gehostet: E-Rechnung (ZUGFeRD, XRechnung), Bankabgleich, EÜR oder Bilanz mit E-Bilanz,
   Umsatzsteuer-Voranmeldung und Jahreserklärungen per ELSTER. Alternative zu Lexware Office und sevDesk.
-site_url: https://firsttris.github.io/haben/
+site_url: https://haben.app/
 repo_url: https://github.com/firsttris/haben
 repo_name: firsttris/haben
 edit_uri: edit/main/docs/
@@ -22,12 +23,14 @@ exclude_docs: |
   banner.svg
 
 nav:
-  - Übersicht: README.md
+  - Start: index.md
+  - Übersicht: ueberblick.md
   - Betrieb:
       - Betrieb und Installation: installation.md
       - Erste Schritte: einrichtung.md
   - Im Alltag:
       - Rechnungen und E-Rechnung: rechnungen.md
+      - Eigene Belegvorlagen: belegvorlagen.md
       - Angebote: angebote.md
       - Belege: belege.md
       - Pauschalen: pauschalen.md
@@ -38,20 +41,34 @@ nav:
       - Finanzamt: finanzamt.md
       - Fristen: fristen.md
       - Jahreserklärungen: jahreserklaerung.md
+      - GmbH und UG: gmbh.md
+      - Lohn: lohn.md
+      - Abgabe an ELSTER: elster-abgabe.md
+      - Mein ELSTER mit Erweiterung: elster-mit-erweiterung.md
+      - Mein ELSTER mit KI-Assistent: elster-mit-assistent.md
       - Auswertungen und Jahresexport: auswertungen.md
       - Umzug aus Lexoffice: lexoffice.md
       - Umzug aus sevDesk: sevdesk.md
+      - Umzug aus BuchhaltungsButler: buchhaltungsbutler.md
+      - Umzug aus Accountable: accountable.md
+      - CSV-Import: csv-import.md
+      - Belegimport: belegimport.md
       - KI-Assistenten (MCP): ki-assistenten.md
-      - Mein ELSTER mit KI-Assistent: elster-mit-assistent.md
+      - REST-API: api.md
+      - Eigene Seiten: eigene-seiten.md
+      - Zugang für die Steuerberatung: steuerberatung.md
       - Barrierefreiheit und Tastatur: barrierefreiheit.md
   - Hintergrund:
       - Buchhaltung in Haben: buchhaltung.md
       - Architektur: architektur.md
       - Entwicklung: entwicklung.md
       - Roadmap: roadmap.md
+      - Lohn (Plan): lohn-plan.md
 
 theme:
   name: material
+  # Vorschaubild beim Teilen eines Links (overrides/main.html)
+  custom_dir: overrides
   language: de
   logo: assets/icon.svg
   favicon: assets/favicon.png
@@ -90,17 +107,26 @@ theme:
 
 extra_css:
   - assets/stylesheets/extra.css
+  - assets/stylesheets/startseite.css
 
 plugins:
-  - search:
-      lang: de
-  - git-revision-date-localized:
-      type: date
-      locale: de
-      fallback_to_build_date: true
+  # Zensical setzt viele MkDocs-Plugins selbst um, git-revision-date-localized (Änderungsdatum
+  # unter der Seite) noch nicht: dort „Planned“, nicht gelistete Plugins ignoriert es stillschweigend
+  # (https://zensical.org/docs/compatibility/mkdocs/plugins/). Das Datum schreibt bis dahin die
+  # eigene Erweiterung unter markdown_extensions. Die Suche ist eingebaut; ihre Sprache kommt aus
+  # theme.language, `lang` hier würde ignoriert.
+  - search
 
 markdown_extensions:
+  # Änderungsdatum aus git unter jeder Seite (scripts/doku-aenderungsdatum, über requirements-docs.txt)
+  - haben_doku_aenderungsdatum
   - admonition
+  # Hinweise im Stil von GitHub (> [!NOTE]) als Kasten, auf GitHub wie auf der Website
+  # (https://zensical.org/docs/authoring/admonitions/#github-callouts); ohne das stand „[!NOTE]“ als Text im Zitat
+  - pymdownx.quotes:
+      callouts: true
+  # Deutsche Titel der Kästen statt „Note“, „Important“ (scripts/doku-hinweise, über requirements-docs.txt)
+  - haben_doku_hinweise
   - attr_list
   - md_in_html
   - tables

@@ -1,4 +1,4 @@
-import { computeInvoice, type InvoiceLineInput, type PriceMode, type TaxTreatment } from "@haben/core";
+import { computeInvoice, negateDiscount, type Discount, type InvoiceLineInput, type PriceMode, type TaxTreatment } from "@haben/core";
 import type { Buyer, InvoiceDocument, InvoiceFormat, InvoiceKind, Seller } from "./types.ts";
 
 // Beispielbelege für Tests und KoSIT-Prüfung
@@ -16,6 +16,19 @@ export const sampleSeller: Seller = {
   iban: "DE89370400440532013000",
   bic: "COBADEFFXXX",
   bank: "Commerzbank",
+};
+
+/** GmbH mit den Pflichtangaben nach § 35a GmbHG */
+export const gmbhSeller: Seller = {
+  ...sampleSeller,
+  name: "Mustermann Software GmbH",
+  kontoinhaber: "Mustermann Software GmbH",
+  legalInfo: {
+    seat: "Berlin",
+    registerCourt: "Amtsgericht Charlottenburg",
+    registerNumber: "HRB 123456 B",
+    managingDirectors: ["Erika Mustermann", "Max Mustermann"],
+  },
 };
 
 export const sampleBuyer: Buyer = {
@@ -42,7 +55,10 @@ interface SampleOptions {
   format?: InvoiceFormat;
   number?: string;
   buyer?: Buyer;
-  lines?: InvoiceLineInput[];
+  lines?: (InvoiceLineInput & { discount?: Discount; deductionOf?: string })[];
+  /** Gesamtrabatt; bei Storno und Korrektur mit umgekehrtem Vorzeichen übernommen */
+  discount?: Discount;
+  intro?: string;
   note?: string;
   taxTreatment?: TaxTreatment;
   exemptionReason?: string;
@@ -57,9 +73,10 @@ export function sampleDocument(options: SampleOptions = {}): InvoiceDocument {
       { description: "Softwareentwicklung September", quantity: 152000, unit: "Std.", unitPrice: 9500, taxRate: 1900 },
       { description: "Reisekosten Hamburg", quantity: 1000, unit: "Psch.", unitPrice: 18990, taxRate: 1900 },
     ]
-  ).map((line) => ({ ...line, unitPrice: sign * line.unitPrice }));
+  ).map((line) => ({ ...line, unitPrice: sign * line.unitPrice, discount: sign < 0 ? negateDiscount(line.discount) : (line.discount ?? null) }));
   const priceMode = options.priceMode ?? "netto";
-  const { totals, lineNets } = computeInvoice(inputs, priceMode);
+  const discount = (sign < 0 ? negateDiscount(options.discount) : options.discount) ?? null;
+  const { totals, lineNets } = computeInvoice(inputs, priceMode, discount);
   return {
     kind,
     format: options.format ?? "zugferd",
@@ -80,9 +97,13 @@ export function sampleDocument(options: SampleOptions = {}): InvoiceDocument {
       unitPrice: line.unitPrice,
       taxRate: line.taxRate,
       net: lineNets[index]!,
+      ...(line.discount ? { discount: line.discount } : {}),
+      ...(line.deductionOf ? { deductionOf: line.deductionOf } : {}),
     })),
     totals,
+    ...(discount ? { discount } : {}),
     corrects: kind === "rechnung" ? undefined : { number: "2026-034", issueDate: "2026-09-30" },
+    ...(options.intro ? { intro: options.intro } : {}),
     note: options.note,
     ...(options.taxTreatment ? { taxTreatment: options.taxTreatment } : {}),
     ...(options.exemptionReason ? { exemptionReason: options.exemptionReason } : {}),
@@ -104,9 +125,14 @@ export const grossPriceLines: InvoiceLineInput[] = [
   { description: "Anfahrt", quantity: 23500, unit: "km", unitPrice: 42, taxRate: 1900 },
 ];
 
-export const zeroRateLines: InvoiceLineInput[] = [
-  { description: "Beratung Oktober", quantity: 10000, unit: "Std.", unitPrice: 12000, taxRate: 0 },
+/** Positionsrabatt in Prozent und als Betrag, gemischte Sätze; mit Gesamtrabatt geprüft in kosit-check.ts */
+export const discountLines: (InvoiceLineInput & { discount?: Discount })[] = [
+  { description: "Softwareentwicklung September", quantity: 152000, unit: "Std.", unitPrice: 9500, taxRate: 1900, discount: { kind: "prozent", value: 1000 } },
+  { description: "Wartungspauschale", quantity: 1000, unit: "Psch.", unitPrice: 49900, taxRate: 1900, discount: { kind: "betrag", value: 4900 } },
+  { description: "Fachbuch Steuerrecht", quantity: 3000, unit: "Stk.", unitPrice: 4990, taxRate: 700 },
 ];
+
+export const zeroRateLines: InvoiceLineInput[] = [{ description: "Beratung Oktober", quantity: 10000, unit: "Std.", unitPrice: 12000, taxRate: 0 }];
 
 /** Unternehmen in Österreich (Reverse Charge) */
 export const euBuyer: Buyer = {

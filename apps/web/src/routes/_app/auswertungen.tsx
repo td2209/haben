@@ -1,4 +1,4 @@
-import { MONTHS, formatEuro, type EuerLine } from "@haben/core";
+import { currentYear, MONTHS, formatEuro, isKapitalgesellschaft, type EuerLine } from "@haben/core";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { z } from "zod/mini";
@@ -8,37 +8,46 @@ import type { OpenPosition } from "../../server/modules/auswertungen/index.ts";
 import { getReports } from "../../server/functions/reports.ts";
 import styles from "../../styles/auswertungen.css?url";
 import { ScrollTable } from "../../components/ScrollTable.tsx";
+import { ERSTES_JAHR, LETZTES_JAHR } from "../../lib/jahre.ts";
 
 export const Route = createFileRoute("/_app/auswertungen")({
-  validateSearch: z.object({ jahr: z.optional(z.int().check(z.minimum(2000), z.maximum(2100))) }),
+  validateSearch: z.object({ jahr: z.optional(z.int().check(z.minimum(ERSTES_JAHR), z.maximum(LETZTES_JAHR))) }),
   loaderDeps: ({ search }) => search,
-  loader: ({ deps }) => getReports({ data: { year: deps.jahr ?? new Date().getFullYear() } }),
+  loader: ({ deps }) => getReports({ data: { year: deps.jahr ?? currentYear() } }),
   head: () => ({ meta: [{ title: "Auswertungen · Haben" }], links: [{ rel: "stylesheet", href: styles }] }),
   component: ReportsPage,
 });
+
+type Data = Awaited<ReturnType<typeof getReports>>;
 
 const MONTHS_SHORT = MONTHS.map((m) => m.slice(0, 3));
 
 function ReportsPage() {
   const { euer, open, years, today, versteuerung } = Route.useLoaderData();
+  // GmbH und UG bilanzieren (§ 238 HGB): Die Zahlen nach Zahlung sind dort keine EÜR, den Gewinn zeigt der Jahresabschluss
+  const { rechtsform, user } = Route.useRouteContext();
+  const gesellschaft = isKapitalgesellschaft(rechtsform);
   const year = euer.year;
   const netIn = euer.monthly.einnahmen.reduce((s, v) => s + v, 0);
   const netOut = euer.monthly.ausgaben.reduce((s, v) => s + v, 0);
   const overdueCount = open.receivables.filter((r) => r.daysOverdue > 0).length;
-  const yearOptions = [...new Set([...years, year, new Date().getFullYear()])].sort((a, b) => b - a);
+  const yearOptions = [...new Set([...years, year, currentYear()])].sort((a, b) => b - a);
 
   return (
     <>
       <div className="page-head">
         <div>
-          <div className="eyebrow">Einnahmen-Überschuss-Rechnung · Zufluss und Abfluss</div>
+          <div className="eyebrow">{gesellschaft ? "Zufluss und Abfluss" : "Einnahmen-Überschuss-Rechnung · Zufluss und Abfluss"}</div>
           <h1>Auswertungen {year}</h1>
         </div>
         <div className="actions">
+          {/* Die Pfeile tragen keine Zahl: Vor- und Folgejahr stehen oft schon in der Liste (aria-label nennt das Jahr) */}
           <nav className="year-switch" aria-label="Jahr wählen">
-            <Link to="/auswertungen" search={{ jahr: year - 1 }} className="chip" aria-label={`Vorjahr ${year - 1}`}>
-              ‹ {year - 1}
-            </Link>
+            {year > ERSTES_JAHR && (
+              <Link to="/auswertungen" search={{ jahr: year - 1 }} className="chip" aria-label={`Vorjahr ${year - 1}`} title={`Vorjahr ${year - 1}`}>
+                ‹
+              </Link>
+            )}
             {yearOptions.map((y) => (
               <Link
                 key={y}
@@ -50,13 +59,17 @@ function ReportsPage() {
                 {y}
               </Link>
             ))}
-            <Link to="/auswertungen" search={{ jahr: year + 1 }} className="chip" aria-label={`Folgejahr ${year + 1}`}>
-              {year + 1} ›
-            </Link>
+            {year < LETZTES_JAHR && (
+              <Link to="/auswertungen" search={{ jahr: year + 1 }} className="chip" aria-label={`Folgejahr ${year + 1}`} title={`Folgejahr ${year + 1}`}>
+                ›
+              </Link>
+            )}
           </nav>
-          <a className="btn btn-primary" href={`/api/auswertungen/${year}`} download>
-            EÜR als CSV
-          </a>
+          {!gesellschaft && (
+            <a className="btn btn-primary" href={`/api/auswertungen/${year}`} download>
+              EÜR als CSV
+            </a>
+          )}
         </div>
       </div>
 
@@ -72,9 +85,17 @@ function ReportsPage() {
           <div className="small muted">brutto mit Vorsteuer und USt {formatEuro(euer.totalAusgaben)}</div>
         </div>
         <div className="card">
-          <div className="kpi-label">{euer.gewinn >= 0 ? "Gewinn" : "Verlust"} {year}</div>
+          <div className="kpi-label">
+            {gesellschaft ? (euer.gewinn >= 0 ? "Überschuss nach Zahlung" : "Fehlbetrag nach Zahlung") : euer.gewinn >= 0 ? "Gewinn" : "Verlust"} {year}
+          </div>
           <div className="kpi-value">{formatEuro(euer.gewinn)}</div>
-          <div className="small muted">Einnahmen minus Ausgaben laut EÜR</div>
+          <div className="small muted">
+            {gesellschaft ? (
+              <>Einnahmen minus Ausgaben; den Gewinn zeigt der {user.role === "inhaber" ? <Link to="/abschluss">Jahresabschluss</Link> : "Jahresabschluss"}</>
+            ) : (
+              "Einnahmen minus Ausgaben laut EÜR"
+            )}
+          </div>
         </div>
         <div className="card">
           <div className="kpi-label">Offene Forderungen</div>
@@ -113,9 +134,15 @@ function ReportsPage() {
             <thead>
               <tr>
                 <th scope="col">Monat</th>
-                <th scope="col" className="num">Einnahmen</th>
-                <th scope="col" className="num">Ausgaben</th>
-                <th scope="col" className="num">Überschuss</th>
+                <th scope="col" className="num">
+                  Einnahmen
+                </th>
+                <th scope="col" className="num">
+                  Ausgaben
+                </th>
+                <th scope="col" className="num">
+                  Überschuss
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -140,32 +167,7 @@ function ReportsPage() {
         </details>
       </section>
 
-      <section className="card" aria-labelledby="euer-heading">
-        <div>
-          <h2 id="euer-heading">Einnahmen-Überschuss-Rechnung {year}</h2>
-          <p className="small muted" style={{ margin: "4px 0 0" }}>
-            Bruttomethode wie in der Anlage EÜR: vereinnahmte Umsatzsteuer ist Einnahme, gezahlte Vorsteuer und die
-            Umsatzsteuer an das Finanzamt sind Ausgaben ({versteuerung === "ist" ? "Ist" : "Soll"}-Versteuerung ändert daran nichts).
-          </p>
-        </div>
-        <ScrollTable className="report-table euer-table">
-          <caption className="visually-hidden">Einnahmen-Überschuss-Rechnung {year}</caption>
-          <thead>
-            <tr>
-              <th scope="col">Position</th>
-              <th scope="col" className="num">Betrag</th>
-            </tr>
-          </thead>
-          <EuerSection title="Betriebseinnahmen" lines={euer.einnahmen} total={euer.totalEinnahmen} />
-          <EuerSection title="Betriebsausgaben" lines={euer.ausgaben} total={euer.totalAusgaben} />
-          <tbody>
-            <tr className="euer-result">
-              <th scope="row">{euer.gewinn >= 0 ? "Gewinn" : "Verlust"}</th>
-              <td className="num">{formatEuro(euer.gewinn)}</td>
-            </tr>
-          </tbody>
-        </ScrollTable>
-      </section>
+      {!gesellschaft && <EuerCard euer={euer} versteuerung={versteuerung} />}
 
       <OpenTable
         id="receivables"
@@ -187,7 +189,60 @@ function ReportsPage() {
         overdue={open.payablesOverdue}
         kind="document"
       />
+      <OpenTable
+        id="umsatzsteuer"
+        title="Umsatzsteuer gegenüber dem Finanzamt"
+        empty="Keine offene Zahllast oder Erstattung aus abgegebenen Voranmeldungen."
+        partyLabel="Gegenüber"
+        items={open.vat}
+        total={open.vatTotal}
+        overdue={open.vatOverdue}
+        kind="ustva"
+      />
     </>
+  );
+}
+
+/** Die EÜR des Jahres nach § 4 Abs. 3 EStG, nur im Einzelunternehmen */
+function EuerCard({ euer, versteuerung }: { euer: Data["euer"]; versteuerung: Data["versteuerung"] }) {
+  const year = euer.year;
+  return (
+    <section className="card" aria-labelledby="euer-heading">
+      <div>
+        <h2 id="euer-heading">Einnahmen-Überschuss-Rechnung {year}</h2>
+        <p className="small muted" style={{ margin: "4px 0 0" }}>
+          Bruttomethode wie in der Anlage EÜR: vereinnahmte Umsatzsteuer ist Einnahme, gezahlte Vorsteuer und die Umsatzsteuer an das Finanzamt sind Ausgaben (
+          {versteuerung === "ist" ? "Ist" : "Soll"}-Versteuerung ändert daran nichts).
+        </p>
+      </div>
+      <ScrollTable className="report-table euer-table">
+        <caption className="visually-hidden">Einnahmen-Überschuss-Rechnung {year}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Position</th>
+            <th scope="col" className="num">
+              Betrag
+            </th>
+          </tr>
+        </thead>
+        <EuerSection title="Betriebseinnahmen" lines={euer.einnahmen} total={euer.totalEinnahmen} />
+        <EuerSection title="Betriebsausgaben" lines={euer.ausgaben} total={euer.totalAusgaben} />
+        <tbody>
+          <tr className="euer-result">
+            <th scope="row">{euer.gewinn >= 0 ? "Gewinn" : "Verlust"}</th>
+            <td className="num">{formatEuro(euer.gewinn)}</td>
+          </tr>
+          {euer.gewerbesteuerNichtAbziehbar !== 0 && (
+            <tr>
+              <th scope="row" className="muted">
+                Nachrichtlich: Gewerbesteuer und Nebenleistungen darauf, Hinterziehungszinsen; keine Betriebsausgaben (§ 4 Abs. 5b, Abs. 5 Satz 1 Nr. 8a EStG)
+              </th>
+              <td className="num muted">{formatEuro(euer.gewerbesteuerNichtAbziehbar)}</td>
+            </tr>
+          )}
+        </tbody>
+      </ScrollTable>
+    </section>
   );
 }
 
@@ -224,24 +279,27 @@ function OpenTable(props: {
   items: OpenPosition[];
   total: number;
   overdue: number;
-  kind: "invoice" | "document";
+  kind: "invoice" | "document" | "ustva";
 }) {
   const { id, title, items, kind } = props;
   return (
-    <section className="card" aria-labelledby={`${id}-heading`}>
+    <section id={id} className="card" aria-labelledby={`${id}-heading`}>
       <div className="chart-head">
         <h2 id={`${id}-heading`}>{title}</h2>
         <div className="small muted">
           Summe <span className="mono">{formatEuro(props.total)}</span>
           {props.overdue !== 0 && (
             <>
-              {" "}· davon überfällig <span className="mono">{formatEuro(props.overdue)}</span>
+              {" "}
+              · davon überfällig <span className="mono">{formatEuro(props.overdue)}</span>
             </>
           )}
         </div>
       </div>
       {items.length === 0 ? (
-        <p className="muted" style={{ margin: 0 }}>{props.empty}</p>
+        <p className="muted" style={{ margin: 0 }}>
+          {props.empty}
+        </p>
       ) : (
         <div className="table-scroll">
           <ScrollTable className="report-table open-table">
@@ -252,8 +310,12 @@ function OpenTable(props: {
                 <th scope="col">{props.partyLabel}</th>
                 <th scope="col">Datum</th>
                 <th scope="col">Fällig</th>
-                <th scope="col" className="num">Betrag</th>
-                <th scope="col" className="num">Offen</th>
+                <th scope="col" className="num">
+                  Betrag
+                </th>
+                <th scope="col" className="num">
+                  Offen
+                </th>
                 <th scope="col">Status</th>
               </tr>
             </thead>
@@ -265,20 +327,24 @@ function OpenTable(props: {
                       <Link to="/rechnungen/$id" params={{ id: item.id }}>
                         {item.number}
                       </Link>
+                    ) : kind === "ustva" ? (
+                      <Link to="/umsatzsteuer/$zeitraum" params={{ zeitraum: item.id }}>
+                        {item.number}
+                      </Link>
                     ) : (
                       <Link to="/belege/$id" params={{ id: item.id }}>
                         {item.number}
                       </Link>
                     )}
                   </th>
-                  <td className="ellipsis" title={item.party}>{item.party}</td>
+                  <td className="ellipsis" title={item.party}>
+                    {item.party}
+                  </td>
                   <td>{formatDate(item.date)}</td>
                   <td>{formatDate(item.dueDate)}</td>
                   <td className="num">{formatEuro(item.gross)}</td>
                   <td className="num">{formatEuro(item.open)}</td>
-                  <td>
-                    <DueStatus days={item.daysOverdue} />
-                  </td>
+                  <td>{kind === "ustva" && item.open < 0 ? <span className="pill">Erstattung erwartet</span> : <DueStatus days={item.daysOverdue} />}</td>
                 </tr>
               ))}
             </tbody>
@@ -332,23 +398,19 @@ function MonthlyChart({ year, einnahmen, ausgaben }: { year: number; einnahmen: 
 
   return (
     <div className="chart" ref={chartRef} onPointerLeave={() => setActive(null)}>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        role="group"
-        aria-label={`Säulendiagramm: Einnahmen und Ausgaben je Monat ${year}, netto in Euro`}
-      >
+      <svg viewBox={`0 0 ${W} ${H}`} role="group" aria-label={`Säulendiagramm: Einnahmen und Ausgaben je Monat ${year}, netto in Euro`}>
         <g aria-hidden="true">
           {ticks.map((t) => (
             <g key={t}>
               <line x1={M.left} x2={W - M.right} y1={y(t)} y2={y(t)} className={t === 0 ? "axis-base" : "grid"} />
-              <text x={M.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="tick">
+              <text x={M.left - 8} y={y(t)} dy="0.32em" style={{ textAnchor: "end" }} className="tick">
                 {euroAxis.format(t / 100)} €
               </text>
             </g>
           ))}
           {MONTHS_SHORT.map((m, i) =>
             i % labelEvery === 0 ? (
-              <text key={m} x={M.left + slot * i + slot / 2} y={H - 8} textAnchor="middle" className="tick">
+              <text key={m} x={M.left + slot * i + slot / 2} y={H - 8} style={{ textAnchor: "middle" }} className="tick">
                 {m}
               </text>
             ) : null,

@@ -1,47 +1,127 @@
-import { BUNDESLAENDER, EXPENSE_CATEGORY_KEYS, toElsterSteuernummer, SteuernummerError, type Versteuerung } from "@haben/core";
+import {
+  BASE_RATE_LIMITS,
+  kleinunternehmerAm,
+  type KleinunternehmerStand,
+  BUNDESLAENDER,
+  EXPENSE_CATEGORY_KEYS,
+  glaeubigerIdProblem,
+  normalizeGlaeubigerId,
+  RECHTSFORM_KEYS,
+  isKapitalgesellschaft,
+  legalInfo,
+  legalInfoGaps,
+  skontoProblem,
+  skontoStufenSchema,
+  toElsterSteuernummer,
+  SteuernummerError,
+  type Versteuerung,
+} from "@haben/core";
 import { and, desc, eq, gte, lt, lte, min } from "drizzle-orm";
+import { legalLine } from "@haben/einvoice";
 import { z } from "zod";
 import { listArticles } from "./articles.ts";
+import { listTextBlocks } from "./text-blocks.ts";
 import { listContacts } from "./contacts.ts";
 import { withActor } from "../../db/actor.ts";
 import { db, schema, type Db, type Tx } from "../../db/index.ts";
+import { loadDesign } from "./letterhead.ts";
+import { backgroundInfo } from "./background.ts";
 import { logoInfo } from "./logo.ts";
+import { mandateOptions } from "./sepa-mandate.ts";
 import { today } from "../../today.ts";
 
-export const companySchema = z.object({
-  name: z.string().trim().max(200),
-  strasse: z.string().trim().max(200),
-  plz: z.string().trim().regex(/^(\d{5})?$/, "PLZ hat fünf Ziffern"),
-  ort: z.string().trim().max(100),
-  email: z.union([z.literal(""), z.string().trim().pipe(z.email("Keine gültige E-Mail-Adresse").max(320))]),
-  steuernummer: z.string().trim().max(20),
-  ustId: z.union([z.literal(""), z.string().trim().regex(/^DE\d{9}$/, "USt-IdNr. hat die Form DE123456789")]),
-  finanzamt: z.string().trim().max(200),
-  bundesland: z.enum(Object.keys(BUNDESLAENDER) as [keyof typeof BUNDESLAENDER, ...(keyof typeof BUNDESLAENDER)[]]).nullable(),
-  versteuerung: z.enum(["ist", "soll"]),
-  telefon: z.string().trim().max(40),
-  bank: z.string().trim().max(100),
-  iban: z.union([z.literal(""), z.string().trim().regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, "IBAN ohne Leerzeichen")]),
-  bic: z.union([z.literal(""), z.string().trim().regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/, "BIC hat 8 oder 11 Zeichen")]),
-  kontenrahmen: z.enum(["SKR03", "SKR04"]),
-  paymentTermDays: z.number().int().min(0).max(120),
-  defaultFormat: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
-  kleinunternehmer: z.boolean(),
-  /** Anlage EÜR: Gewerbebetrieb oder selbständige (freiberufliche) Arbeit und Art des Betriebs */
-  einkunftsart: z.enum(["gewerbe", "selbstaendig"]).nullable().default(null),
-  taetigkeit: z.string().trim().max(100).default(""),
-  /** Vorgabe für den Privatanteil je Belegkategorie in Prozent */
-  /** Tageskurs statt der monatlichen USt-Umrechnungskurse, wenn das Finanzamt es gestattet hat */
-  tageskurs: z.boolean().default(false),
-  privateShares: z.partialRecord(z.enum(EXPENSE_CATEGORY_KEYS), z.number().int().min(0).max(100)).default({}),
-  dunning: z
-    .object({
-      baseRate: z.number().int().min(-1_000).max(2_000).nullable(),
-      fees: z.object({ "1": z.number().int().min(0).max(100_000), "2": z.number().int().min(0).max(100_000), "3": z.number().int().min(0).max(100_000) }),
-      deadlineDays: z.number().int().min(1).max(60),
-    })
-    .default({ baseRate: null, fees: { "1": 0, "2": 0, "3": 0 }, deadlineDays: 10 }),
-});
+export const companySchema = z
+  .object({
+    name: z.string().trim().max(200),
+    strasse: z.string().trim().max(200),
+    plz: z
+      .string()
+      .trim()
+      .regex(/^(\d{5})?$/, "PLZ hat fünf Ziffern"),
+    ort: z.string().trim().max(100),
+    email: z.union([z.literal(""), z.string().trim().pipe(z.email("Keine gültige E-Mail-Adresse").max(320))]),
+    steuernummer: z.string().trim().max(20),
+    ustId: z.union([
+      z.literal(""),
+      z
+        .string()
+        .trim()
+        .regex(/^DE\d{9}$/, "USt-IdNr. hat die Form DE123456789"),
+    ]),
+    finanzamt: z.string().trim().max(200),
+    bundesland: z.enum(Object.keys(BUNDESLAENDER) as [keyof typeof BUNDESLAENDER, ...(keyof typeof BUNDESLAENDER)[]]).nullable(),
+    versteuerung: z.enum(["ist", "soll"]),
+    telefon: z.string().trim().max(40),
+    bank: z.string().trim().max(100),
+    iban: z.union([
+      z.literal(""),
+      z
+        .string()
+        .trim()
+        .regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, "IBAN ohne Leerzeichen"),
+    ]),
+    bic: z.union([
+      z.literal(""),
+      z
+        .string()
+        .trim()
+        .regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/, "BIC hat 8 oder 11 Zeichen"),
+    ]),
+    /** GiroCode erlaubt 70 Zeichen für den Namen (EPC069-12) */
+    kontoinhaber: z.string().trim().max(70).default(""),
+    /** Gläubiger-ID für SEPA-Lastschriften (#445); leer = keine, fehlt = leer wie vor #445 */
+    glaeubigerId: z
+      .string()
+      .default("")
+      .transform(normalizeGlaeubigerId)
+      .superRefine((id, ctx) => {
+        const problem = id === "" ? null : glaeubigerIdProblem(id);
+        if (problem) ctx.addIssue({ code: "custom", message: problem });
+      }),
+    kontenrahmen: z.enum(["SKR03", "SKR04"]),
+    /** Ohne Vorgabe: Ein fehlendes Feld darf eine GmbH nicht still zum Einzelunternehmen machen */
+    rechtsform: z.enum(RECHTSFORM_KEYS),
+    /** GmbH und UG: Angaben zum Handelsregister für den Jahresabschluss (§ 264 Abs. 1a HGB) */
+    sitz: z.string().trim().max(100).default(""),
+    registergericht: z.string().trim().max(100).default(""),
+    registernummer: z.string().trim().max(40).default(""),
+    /** GmbH und UG: Pflichtangaben auf Geschäftsbriefen (§ 35a Abs. 1 GmbHG); Geschäftsführer einer je Zeile */
+    geschaeftsfuehrer: z.string().trim().max(1000).default(""),
+    aufsichtsratVorsitz: z.string().trim().max(200).default(""),
+    paymentTermDays: z.number().int().min(0).max(120),
+    /** Vorgabe für das Skonto neuer Rechnungen; fehlt = unverändert */
+    skonto: z.optional(skontoStufenSchema),
+    defaultFormat: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
+    /** Vorgabe für die Einleitung neuer Rechnungen und Angebote; so lang wie das Feld im Beleg */
+    invoiceIntro: z.string().trim().max(2000).default(""),
+    quoteIntro: z.string().trim().max(2000).default(""),
+    kleinunternehmer: z.boolean(),
+    /** Anlage EÜR: Gewerbebetrieb oder selbständige (freiberufliche) Arbeit und Art des Betriebs */
+    einkunftsart: z.enum(["gewerbe", "selbstaendig"]).nullable().default(null),
+    taetigkeit: z.string().trim().max(100).default(""),
+    /** Vorgabe für den Privatanteil je Belegkategorie in Prozent */
+    /** Tageskurs statt der monatlichen USt-Umrechnungskurse, wenn das Finanzamt es gestattet hat */
+    tageskurs: z.boolean().default(false),
+    privateShares: z.partialRecord(z.enum(EXPENSE_CATEGORY_KEYS), z.number().int().min(0).max(100)).default({}),
+    dunning: z
+      .object({
+        baseRate: z.number().int().min(BASE_RATE_LIMITS.min).max(BASE_RATE_LIMITS.max).nullable(),
+        fees: z.object({ "1": z.number().int().min(0).max(100_000), "2": z.number().int().min(0).max(100_000), "3": z.number().int().min(0).max(100_000) }),
+        deadlineDays: z.number().int().min(1).max(60),
+        /** Basiszinssatz zum 1. Januar und 1. Juli bei der Bundesbank abrufen (opt-in); fehlt = unverändert */
+        autoBaseRate: z.boolean().optional(),
+      })
+      .default({ baseRate: null, fees: { "1": 0, "2": 0, "3": 0 }, deadlineDays: 10 }),
+  })
+  // Eine Kapitalgesellschaft hat kein Privat: privat Genutztes ist dort Arbeitslohn oder verdeckte Gewinnausschüttung
+  .refine((c) => !isKapitalgesellschaft(c.rechtsform) || Object.values(c.privateShares).every((share) => !share), {
+    message: "Privatanteile gibt es nur im Einzelunternehmen",
+    path: ["privateShares"],
+  })
+  .superRefine((c, ctx) => {
+    const problem = c.skonto ? skontoProblem(c.skonto, c.paymentTermDays) : null;
+    if (problem) ctx.addIssue({ code: "custom", message: problem, path: ["skonto"] });
+  });
 
 export type CompanyInput = z.infer<typeof companySchema>;
 export type Company = typeof schema.company.$inferSelect;
@@ -82,6 +162,23 @@ export async function versteuerungForYear(year: number, q: Db | Tx = db): Promis
 }
 
 /**
+ * Ab welchem Jahr Voranmeldung und EÜR aus dem Journal rechnen (#542, docs/adr/journal-als-quelle.md): das eingestellte
+ * Stichjahr, sonst das Jahr der ersten Buchung, ohne Buchung das laufende Jahr. Bestehende Instanzen setzt die Migration
+ * 0192 auf das Jahr nach dem Update.
+ */
+export async function journalAbJahr(q: Db | Tx = db): Promise<number> {
+  const company = await loadCompany(q);
+  if (company.journalAb !== null) return company.journalAb;
+  const [first] = await q.select({ date: min(schema.journalEntries.date) }).from(schema.journalEntries);
+  return first?.date ? Number(first.date.slice(0, 4)) : Number(today(new Date()).slice(0, 4));
+}
+
+/** Stichjahr setzen (Vorziehen in den Einstellungen; prüft auswertungen/stichjahr.ts), in der Transaktion des Aufrufers */
+export async function setJournalAb(tx: Tx, year: number): Promise<void> {
+  await tx.update(schema.company).set({ journalAb: year, updatedAt: new Date() }).where(eq(schema.company.id, 1));
+}
+
+/**
  * Kleinunternehmer (§ 19 UStG) an einem Tag, nach dem Änderungsprotokoll der Firmendaten. Liefert eine Funktion
  * Datum (JJJJ-MM-TT, deutsche Zeit) → Status am Ende dieses Tages; vor dem ersten Eintrag gilt der erste bekannte
  * Stand. Einschalten geht nur, solange im Jahr nichts gebucht ist (settings-guard.ts), ausschalten jederzeit.
@@ -89,22 +186,23 @@ export async function versteuerungForYear(year: number, q: Db | Tx = db): Promis
  * Für alles, was frühere Zeiträume betrifft: Wer zum Jahreswechsel auf Kleinunternehmer umstellt, schuldet die
  * Voranmeldung für Dezember und die Umsatzsteuererklärung des Vorjahres trotzdem.
  */
-export async function kleinunternehmerHistory(): Promise<(date: string) => boolean> {
-  const rows = await db
+export async function kleinunternehmerHistory(q: Db | Tx = db): Promise<(date: string) => boolean> {
+  const stand = await kleinunternehmerStand(q);
+  return (date) => kleinunternehmerAm(stand, date);
+}
+
+/** Die Änderungen aus dem Protokoll als Daten, etwa für Formulare, die den Stand an einem gewählten Tag brauchen */
+export async function kleinunternehmerStand(q: Db | Tx = db): Promise<KleinunternehmerStand> {
+  const rows = await q
     .select({ at: schema.auditLog.at, newValue: schema.auditLog.newValue })
     .from(schema.auditLog)
     .where(eq(schema.auditLog.tableName, "company"))
     .orderBy(schema.auditLog.seq);
-  const changes = rows.flatMap((r) => {
+  const aenderungen = rows.flatMap((r) => {
     const value = (r.newValue as { kleinunternehmer?: unknown } | null)?.kleinunternehmer;
     return typeof value === "boolean" ? [{ date: today(r.at), value }] : [];
   });
-  const current = (await loadCompany()).kleinunternehmer;
-  return (date) => {
-    const last = changes.filter((c) => c.date <= date).at(-1);
-    // Vor dem ersten Eintrag gilt der erste bekannte Stand (Anlegen der Firmendaten), ohne Protokoll der aktuelle
-    return last ? last.value : (changes[0]?.value ?? current);
-  };
+  return { aenderungen, aktuell: (await loadCompany(q)).kleinunternehmer };
 }
 
 /** Letzter Tag eines Monats, JJJJ-MM-TT */
@@ -113,8 +211,8 @@ export function lastDayOfMonth(year: number, month: number): string {
 }
 
 /** Kleinunternehmer in einem Voranmeldungszeitraum: Stand am Monatsende */
-export async function kleinunternehmerForMonth(year: number, month: number): Promise<boolean> {
-  return (await kleinunternehmerHistory())(lastDayOfMonth(year, month));
+export async function kleinunternehmerForMonth(year: number, month: number, q: Db | Tx = db): Promise<boolean> {
+  return (await kleinunternehmerHistory(q))(lastDayOfMonth(year, month));
 }
 
 /** Kleinunternehmer am Ende eines Jahres: dann für das ganze Jahr (einschalten geht nur vor der ersten Buchung) */
@@ -124,31 +222,65 @@ export async function kleinunternehmerForYear(year: number): Promise<boolean> {
 
 /** Gemeinsame Daten für den Rechnungs- und den Angebotseditor, mit der letzten vergebenen Nummer je Jahr */
 export async function editorContext(kind: "rechnung" | "angebot") {
-  const [company, counters, contacts, articles, logo] = await Promise.all([
+  const [company, counters, contacts, articles, textBlocks, logo, background, design, mandates] = await Promise.all([
     loadCompany(),
     kind === "rechnung" ? db.select().from(schema.invoiceNumberCounters) : db.select().from(schema.quoteNumberCounters),
     listContacts(),
     listArticles(),
+    listTextBlocks(),
     logoInfo(),
+    backgroundInfo(),
+    loadDesign(),
+    kind === "rechnung" ? mandateOptions(today()) : Promise.resolve([]),
   ]);
-  const { name, strasse, plz, ort, email, steuernummer, ustId, iban, bic, bank } = company;
+  const { name, strasse, plz, ort, email, telefon, steuernummer, ustId, iban, bic, bank, kontoinhaber } = company;
   return {
     contacts,
-    articles: articles.map(({ id, number, description, unit, unitPrice, taxRate, priceIncludesTax }) => ({
+    /** Gültige Lastschriftmandate je Kunde (#445), für die Zahlungsart der Rechnung */
+    mandates,
+    articles: articles.map(({ id, number, description, detail, unit, unitPrice, taxRate, priceIncludesTax }) => ({
       id,
       number,
       description,
+      detail,
       unit,
       unitPrice,
       taxRate,
       priceIncludesTax,
     })),
-    company: { name, strasse, plz, ort, email, steuernummer, ustId, iban, bic, bank, logo: logo?.sha256 ?? null },
+    textBlocks: textBlocks.map(({ id, name, kind, text, contactId }) => ({ id, name, kind, text, contactId })),
+    company: {
+      name,
+      strasse,
+      plz,
+      ort,
+      email,
+      telefon,
+      steuernummer,
+      ustId,
+      iban,
+      bic,
+      bank,
+      kontoinhaber,
+      logo: logo?.sha256 ?? null,
+      background: background?.sha256 ?? null,
+      accent: design.accent,
+      design,
+      legal: legalLine(legalInfo(company)),
+    },
     sellerIssues: sellerIssues(company),
+    letterIssues: letterIssues(company),
     bundesland: company.bundesland,
     kleinunternehmer: company.kleinunternehmer,
     tageskurs: company.tageskurs,
+    /** Skonto-Vorgabe für Kunden ohne eigenes */
+    companySkonto: company.skonto,
+    /** Vorlagen für den Zahlungsplan im Angebot */
+    planTemplates: company.paymentPlanTemplates,
+    numberFormat: kind === "rechnung" ? company.invoiceNumberFormat : company.quoteNumberFormat,
+    /** Letzte Nummer je Kreis: Jahr, 0 = durchlaufender Zähler */
     numberCounters: Object.fromEntries(counters.map((c) => [c.year, c.last])) as Record<number, number>,
+    numberRunning: kind === "rechnung" ? company.invoiceCounterRunning : company.quoteCounterRunning,
   };
 }
 
@@ -180,4 +312,14 @@ export function sellerIssues(company: Company): string[] {
   if (!company.email) issues.push("E-Mail-Adresse fehlt");
   if (!company.iban) issues.push("IBAN fehlt");
   return issues;
+}
+
+/**
+ * Was einer GmbH oder UG an Pflichtangaben für Geschäftsbriefe fehlt (§ 35a Abs. 1 GmbHG). Nur ein Hinweis, keine
+ * Sperre beim Festschreiben: Die Rechnung bleibt umsatzsteuerlich gültig (§ 14 Abs. 4 UStG verlangt die Angaben nicht),
+ * das Registergericht kann fehlende Angaben mit Zwangsgeld durchsetzen (§ 79 Abs. 1 GmbHG), und eine Vor-GmbH hat vor
+ * der Eintragung noch keine Registernummer, rechnet aber schon ab.
+ */
+export function letterIssues(company: Company): string[] {
+  return legalInfoGaps(company);
 }

@@ -6,6 +6,8 @@ import { useAction } from "../lib/use-action.ts";
 import { FilePicker } from "./FilePicker.tsx";
 import { NoticeBanner } from "./NoticeBanner.tsx";
 import { removeEnableBanking, saveEnableBanking, type getEnableBankingSettings } from "../server/functions/bank.ts";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { Field } from "./Field.tsx";
 
 type Data = Awaited<ReturnType<typeof getEnableBankingSettings>>;
 
@@ -19,6 +21,7 @@ export function EnableBankingCard({ data }: { data: Data }) {
   const remove = useServerFn(removeEnableBanking);
   const stored = data.source === "einstellungen";
   const [applicationId, setApplicationId] = useState(stored ? (data.applicationId ?? "") : "");
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const { busy, notice, run } = useAction();
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -53,17 +56,16 @@ export function EnableBankingCard({ data }: { data: Data }) {
         <a href="https://enablebanking.com" target="_blank" rel="noreferrer">
           Enable Banking
         </a>{" "}
-        holt Haben die Umsätze täglich selbst. Lege dort im Kontrollzentrum unter „API applications“ eine Anwendung an, trage als
-        Redirect URL <code>{data.callbackUrl}</code> ein und lass den Schlüssel im Browser erzeugen. Die heruntergeladene .pem-Datei lädst
-        du hier hoch; sie liegt verschlüsselt in der Datenbank.{" "}
+        holt Haben die Umsätze täglich selbst. Lege dort im Kontrollzentrum unter „API applications“ eine Anwendung an, trage als Redirect URL{" "}
+        <code>{data.callbackUrl}</code> ein und lass den Schlüssel im Browser erzeugen. Die heruntergeladene .pem-Datei lädst du hier hoch; sie liegt
+        verschlüsselt in der Datenbank.{" "}
         <a href="https://github.com/firsttris/haben/blob/main/docs/installation.md#kontoabruf-enable-banking" target="_blank" rel="noreferrer">
           Anleitung
         </a>
       </p>
       {data.source === "umgebung" && (
         <div className="banner banner-info" role="status">
-          Eingerichtet über die Umgebung (ENABLE_BANKING_APP_ID, Application ID {data.applicationId}). Was du hier speicherst, gilt
-          stattdessen.
+          Eingerichtet über die Umgebung (ENABLE_BANKING_APP_ID, Application ID {data.applicationId}). Was du hier speicherst, gilt stattdessen.
         </div>
       )}
       {stored && (
@@ -72,31 +74,35 @@ export function EnableBankingCard({ data }: { data: Data }) {
             <span style={{ fontWeight: 500 }}>Application ID {data.applicationId}</span>
             {data.updatedAt && <span className="small muted">gespeichert am {formatDateTime(data.updatedAt)}</span>}
           </div>
-          <button
-            type="button"
-            className="btn btn-danger"
-            disabled={busy}
-            onClick={() => {
-              if (!window.confirm("Zugang zu Enable Banking entfernen? Bestehende Verbindungen werden dann nicht mehr abgerufen.")) return;
+          <button type="button" className="btn btn-danger" disabled={busy} onClick={() => setConfirmingRemove(true)}>
+            Entfernen
+          </button>
+          <ConfirmDialog
+            open={confirmingRemove}
+            title="Zugang zu Enable Banking entfernen?"
+            confirmLabel="Entfernen"
+            danger
+            onConfirm={() =>
               void run(async () => {
                 await remove();
                 setApplicationId("");
                 await router.invalidate();
-              }, "Zugang entfernt.");
-            }}
+              }, "Zugang entfernt.")
+            }
+            onClose={() => setConfirmingRemove(false)}
           >
-            Entfernen
-          </button>
+            <p>Bestehende Verbindungen werden dann nicht mehr abgerufen.</p>
+          </ConfirmDialog>
         </div>
       )}
-      <label className="field">
-        {stored ? "Neuer Schlüssel (.pem, leer lassen zum Behalten)" : "Privater Schlüssel (.pem)"}
-        <FilePicker name="key" accept=".pem" required={!stored} />
-      </label>
-      <label className="field">
-        Application ID
-        <input value={applicationId} onChange={(e) => setApplicationId(e.target.value)} required autoComplete="off" spellCheck={false} />
-      </label>
+      <Field label={stored ? "Neuer Schlüssel (.pem, leer lassen zum Behalten)" : "Privater Schlüssel (.pem)"}>
+        {(control) => <FilePicker {...control} name="key" accept=".pem" required={!stored} />}
+      </Field>
+      <Field label="Application ID">
+        {(control) => (
+          <input {...control} value={applicationId} onChange={(e) => setApplicationId(e.target.value)} required autoComplete="off" spellCheck={false} />
+        )}
+      </Field>
       <div className="actions">
         <button type="submit" className="btn btn-primary" disabled={busy}>
           {busy ? "Prüfe …" : "Prüfen und speichern"}

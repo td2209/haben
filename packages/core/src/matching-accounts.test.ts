@@ -43,8 +43,16 @@ describe("suggestDirectBooking", () => {
     ).toEqual(["Erstattung des Finanzamts auf das Steuerkonto"]);
   });
 
+  it("Sondervorauszahlung des Finanzamts: eigenes Konto 1/11 (SKR03 1781, SKR04 3830), nicht die laufende Vorauszahlung", () => {
+    for (const purpose of ["Umsatzsteuer-Sondervorauszahlung 2026 StNr 244/123/45678", "USt-SVZ 2026", "USt 1/11 2026"]) {
+      expect(suggestDirectBooking(tx({ counterpartyName: "Finanzamt Regensburg", purpose }), tax, all)?.kind, purpose).toBe("sondervorauszahlung");
+    }
+  });
+
   it("Einkommensteuer oder unklarer Zweck auf dem Steuerkonto: kein Umsatzsteuer-Vorschlag", () => {
-    expect(suggestDirectBooking(tx({ counterpartyName: "Finanzamt Regensburg", purpose: "ESt-Vorauszahlung III/2026 StNr 244/123/45678" }), tax, all)).toBeNull();
+    expect(
+      suggestDirectBooking(tx({ counterpartyName: "Finanzamt Regensburg", purpose: "ESt-Vorauszahlung III/2026 StNr 244/123/45678" }), tax, all),
+    ).toBeNull();
     expect(suggestDirectBooking(tx({ counterpartyName: "Finanzamt Regensburg", purpose: "USt und ESt 2025" }), tax, all)).toBeNull();
     expect(suggestDirectBooking(tx({ counterpartyName: "Finanzamt Regensburg", purpose: "StNr 244/123/45678" }), tax, all)).toBeNull();
   });
@@ -75,8 +83,20 @@ describe("findTransferCounterpart", () => {
   });
 
   it("ohne Treffer mit IBAN eine Gegenbuchung ohne Gegen-IBAN, nie eine fremde Zahlung", () => {
-    expect(findTransferCounterpart({ bookingDate: "2026-10-01", amount: -60_000 }, source, candidates.filter((c) => c.id === "e" || c.id === "f"))?.id).toBe("f");
-    expect(findTransferCounterpart({ bookingDate: "2026-10-01", amount: -60_000 }, source, candidates.filter((c) => c.id === "e"))).toBeNull();
+    expect(
+      findTransferCounterpart(
+        { bookingDate: "2026-10-01", amount: -60_000 },
+        source,
+        candidates.filter((c) => c.id === "e" || c.id === "f"),
+      )?.id,
+    ).toBe("f");
+    expect(
+      findTransferCounterpart(
+        { bookingDate: "2026-10-01", amount: -60_000 },
+        source,
+        candidates.filter((c) => c.id === "e"),
+      ),
+    ).toBeNull();
   });
 
   it("nichts innerhalb von fünf Tagen: kein Treffer", () => {

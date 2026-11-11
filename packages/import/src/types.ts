@@ -6,12 +6,28 @@ export type StatementFormat =
   | "n26-csv"
   | "camt053"
   | "enablebanking"
+  /** Kontobewegungen aus dem Accountable-Export (Daten.xlsx, Sheet „Kontobewegungen“) */
+  | "accountable-xlsx"
   | "paypal-csv"
   | "stripe-csv"
-  | "shopify-payments-csv";
+  | "shopify-payments-csv"
+  | "ebay-csv"
+  | "etsy-csv"
+  | "googleplay-earnings"
+  | "appstore-finance"
+  | "store-payout";
 
 /** Exporte von Zahlungsdienstleistern: nur in ein Konto mit diesem Zweck importierbar */
-export const PSP_FORMATS: StatementFormat[] = ["paypal-csv", "stripe-csv", "shopify-payments-csv"];
+export const PSP_FORMATS: StatementFormat[] = [
+  "paypal-csv",
+  "stripe-csv",
+  "shopify-payments-csv",
+  "ebay-csv",
+  "etsy-csv",
+  "googleplay-earnings",
+  "appstore-finance",
+  "store-payout",
+];
 
 /** Ein Umsatz, wie er in der Datei steht. Eingänge positiv, Ausgänge negativ. */
 export interface ParsedTransaction {
@@ -27,6 +43,8 @@ export interface ParsedTransaction {
   type?: string;
   /** Referenz der Bank, falls vorhanden (CAMT AcctSvcrRef, EndToEndId) */
   bankReference?: string;
+  /** Kennung des Auftraggebers (CAMT Refs/EndToEndId), auch wenn bankReference die Referenz der Bank trägt */
+  endToEndId?: string;
   /** SEPA-Lastschrift: Gläubiger-ID und Mandatsreferenz, falls die Datei sie nennt */
   creditorId?: string;
   mandateReference?: string;

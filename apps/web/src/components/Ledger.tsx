@@ -28,8 +28,31 @@ export function SaldoBetrag({ kontenrahmen, account, saldo }: { kontenrahmen: Ko
 }
 
 /** Herkunft einer Journalbuchung */
-export const JOURNAL_SOURCE = { invoice: "Rechnung", document: "Beleg", allocation: "Bank", asset: "Anlage", pauschale: "Pauschale", kasse: "Kasse", ausbuchung: "Ausbuchung" } as const;
+export const JOURNAL_SOURCE = {
+  invoice: "Rechnung",
+  document: "Beleg",
+  allocation: "Bank",
+  asset: "Anlage",
+  pauschale: "Pauschale",
+  kasse: "Kasse",
+  ausbuchung: "Ausbuchung",
+  manuell: "Manuell",
+  eroeffnung: "Eröffnung",
+  ausschuettung: "Ausschüttung",
+  lohn: "Lohn",
+  import: "Import",
+} as const;
 export type JournalSource = keyof typeof JOURNAL_SOURCE;
+
+/** Herkünfte, die es nur in einer Rechtsform gibt: Pauschalen im Einzelunternehmen, die übrigen in GmbH und UG (docs/einrichtung.md) */
+const NUR_EINZELUNTERNEHMEN: readonly JournalSource[] = ["pauschale"];
+const NUR_KAPITALGESELLSCHAFT: readonly JournalSource[] = ["manuell", "eroeffnung", "ausschuettung"];
+
+/** Herkünfte für den Filter: ohne die der anderen Rechtsform, außer es gibt doch Buchungen damit */
+export function journalSourcesFor(gesellschaft: boolean, counts: Readonly<Record<string, number>>): JournalSource[] {
+  const fremd = gesellschaft ? NUR_EINZELUNTERNEHMEN : NUR_KAPITALGESELLSCHAFT;
+  return (Object.keys(JOURNAL_SOURCE) as JournalSource[]).filter((s) => !fremd.includes(s) || (counts[s] ?? 0) > 0);
+}
 
 /** Letzter Tag vor einem ausschließlichen Enddatum (YYYY-MM-DD) */
 export function lastDayBefore(iso: string): string {

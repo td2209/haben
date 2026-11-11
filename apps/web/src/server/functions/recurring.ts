@@ -1,6 +1,7 @@
+import { notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { loadCompany } from "../modules/stammdaten/index.ts";
+import { listTextBlocks, loadCompany } from "../modules/stammdaten/index.ts";
 import { listContacts } from "../modules/stammdaten/index.ts";
 import { authMiddleware } from "../middleware.ts";
 import {
@@ -14,12 +15,20 @@ import {
   updateRecurring,
 } from "../modules/rechnungen/index.ts";
 import { today } from "../today.ts";
-import { UserError } from "../errors.ts";
+import { detailId } from "./schemas.ts";
 
 async function formContext() {
-  const company = await loadCompany();
+  const [company, textBlocks] = await Promise.all([loadCompany(), listTextBlocks()]);
   return {
-    contacts: (await listContacts()).map((c) => ({ id: c.id, name: c.name, ort: c.ort, defaultFormat: c.defaultFormat, leitwegId: c.leitwegId })),
+    textBlocks: textBlocks.map(({ id, name, kind, text, contactId }) => ({ id, name, kind, text, contactId })),
+    contacts: (await listContacts()).map((c) => ({
+      id: c.id,
+      name: c.name,
+      ort: c.ort,
+      defaultFormat: c.defaultFormat,
+      leitwegId: c.leitwegId,
+      isCustomer: c.isCustomer,
+    })),
     defaults: { paymentTermDays: company.paymentTermDays, format: company.defaultFormat, kleinunternehmer: company.kleinunternehmer },
     today: today(),
   };
@@ -35,10 +44,10 @@ export const getRecurringForm = createServerFn({ method: "GET" })
 
 export const getRecurringDetail = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .validator(z.uuid())
+  .validator(detailId)
   .handler(async ({ data }) => {
     const result = await getRecurring(data);
-    if (!result) throw new UserError("Vorlage nicht gefunden.");
+    if (!result) throw notFound();
     // Vorschau der nächsten Rechnung mit ersetzten Platzhaltern
     return { ...result, preview: invoiceForDate(result.recurring, result.recurring.nextDate), ...(await formContext()) };
   });
@@ -47,9 +56,7 @@ export const saveRecurring = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.object({ id: z.uuid().nullable(), recurring: recurringInputSchema }))
   .handler(async ({ data, context }) => {
-    const saved = data.id
-      ? await updateRecurring(context.user.id, data.id, data.recurring)
-      : await createRecurring(context.user.id, data.recurring);
+    const saved = data.id ? await updateRecurring(context.user.id, data.id, data.recurring) : await createRecurring(context.user.id, data.recurring);
     return { id: saved.id };
   });
 

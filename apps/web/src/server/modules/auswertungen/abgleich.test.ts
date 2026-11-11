@@ -1,17 +1,41 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 function dkbCsv(rows: string[][]) {
   const header = `"Girokonto";"DE12 1203 0000 1234 5678 90"\n""\n`;
   const columns = `"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"\n`;
-  return new TextEncoder().encode(header + columns + rows.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n") + "\n");
+  return new TextEncoder().encode(`${header + columns + rows.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n")}\n`);
 }
 
-const eingang = (date: string, purpose: string, amount: string) =>
-  [date, date, "Gebucht", "Nordwerk", "Testfirma", purpose, "Eingang", "DE02100100100006820101", amount, "", "", ""];
-const ausgang = (date: string, name: string, amount: string) =>
-  [date, date, "Gebucht", "Testfirma", name, "Zahlung", "Ausgang", "DE02100100100006820101", amount, "", "", ""];
+const eingang = (date: string, purpose: string, amount: string) => [
+  date,
+  date,
+  "Gebucht",
+  "Nordwerk",
+  "Testfirma",
+  purpose,
+  "Eingang",
+  "DE02100100100006820101",
+  amount,
+  "",
+  "",
+  "",
+];
+const ausgang = (date: string, name: string, amount: string) => [
+  date,
+  date,
+  "Gebucht",
+  "Testfirma",
+  name,
+  "Zahlung",
+  "Ausgang",
+  "DE02100100100006820101",
+  amount,
+  "",
+  "",
+  "",
+];
 
 describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (Postgres)", () => {
   let abgleich: typeof import("./abgleich.ts");
@@ -43,24 +67,39 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
     await sql?.end();
   });
 
-  async function reset(versteuerung: "ist" | "soll") {
-    await sql`truncate asset_depreciations, assets, pauschalen, allocations, bank_transactions, bank_imports, bank_accounts,
+  async function reset(versteuerung: "ist" | "soll", kontenrahmen: "SKR03" | "SKR04" = "SKR03") {
+    await leeren(sql)`truncate asset_depreciations, assets, pauschalen, allocations, bank_transactions, bank_imports, bank_accounts,
       journal_lines, journal_entries, document_amounts, documents, invoice_lines, invoices, invoice_number_counters,
       contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, telefon, steuernummer, ust_id, bundesland, iban, versteuerung, kontenrahmen)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '+49 941 1', '198/113/10010',
-              'DE123456789', 'BY', 'DE89370400440532013000', ${versteuerung}, 'SKR03')`;
+              'DE123456789', 'BY', 'DE89370400440532013000', ${versteuerung}, ${kontenrahmen})`;
     contactId = (
       await contacts.createContact(actor, {
-        kundennummer: "", name: "Nordwerk Software GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-        email: "a@b.example", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+        kundennummer: "",
+        name: "Nordwerk Software GmbH",
+        strasse: "Hafenstraße 5",
+        plz: "20457",
+        ort: "Hamburg",
+        land: "DE",
+        email: "a@b.example",
+        ustId: "",
+        iban: "",
+        leitwegId: "",
+        defaultFormat: null,
       })
     ).id;
   }
 
   async function invoice(issueDate: string, lines: { net: number; rate: 1900 | 700 }[]) {
     const draft = await invoices.createDraft(actor, {
-      contactId, issueDate, serviceFrom: null, serviceTo: null, paymentTermDays: 14, format: "zugferd", note: "",
+      contactId,
+      issueDate,
+      serviceFrom: null,
+      serviceTo: null,
+      paymentTermDays: 14,
+      format: "zugferd",
+      note: "",
       lines: lines.map((l) => ({ description: "Leistung", quantity: 1000, unit: "Psch." as const, unitPrice: l.net, taxRate: l.rate })),
     });
     return invoices.finalizeInvoice(actor, draft.id);
@@ -75,9 +114,17 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
     const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, docSeq % 256, Math.floor(docSeq / 256), 7]);
     const { id } = await documents.uploadDocument(actor, { bytes, filename: `b${docSeq}.jpg` });
     await documents.updateDocument(actor, id, {
-      supplierName: "Lieferant", supplierUstId: "", invoiceNumber: `R${docSeq}`, documentDate: date, dueDate: null,
-      category: extra.category ?? "edv", payment: extra.payment ?? "bank", note: "", amounts,
-      privateShare: extra.privateShare ?? 0, reverseCharge: extra.reverseCharge ?? null,
+      supplierName: "Lieferant",
+      supplierUstId: "",
+      invoiceNumber: `R${docSeq}`,
+      documentDate: date,
+      dueDate: null,
+      category: extra.category ?? "edv",
+      payment: extra.payment ?? "bank",
+      note: "",
+      amounts,
+      privateShare: extra.privateShare ?? 0,
+      reverseCharge: extra.reverseCharge ?? null,
     });
     await documents.bookDocument(actor, id);
     return id;
@@ -85,23 +132,39 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
 
   async function transactions(rows: string[][]) {
     await bank.importStatement(actor, { bytes: dkbCsv(rows), filename: `${crypto.randomUUID()}.csv` }, null);
-    return sql<{ id: string; booking_date: string; amount: number }[]>`select id, booking_date::text, amount from bank_transactions order by booking_date, amount`;
+    return sql<
+      { id: string; booking_date: string; amount: number }[]
+    >`select id, booking_date::text, amount from bank_transactions order by booking_date, amount`;
   }
 
   /** Ein Jahr Betrieb über die echten Anwendungsfälle: Rechnungen, Teilzahlungen, Storno, Belege, Pauschalen, Finanzamt */
   async function geschaeftsjahr() {
-    const a = await invoice("2026-01-15", [{ net: 400_000, rate: 1900 }, { net: 100_000, rate: 700 }]);
+    const a = await invoice("2026-01-15", [
+      { net: 400_000, rate: 1900 },
+      { net: 100_000, rate: 700 },
+    ]);
     const b = await invoice("2026-02-10", [{ net: 33_333, rate: 1900 }]);
     const c = await invoice("2026-02-20", [{ net: 10_000, rate: 1900 }]);
     await invoices.cancelInvoice(actor, c.id, "2026-03-02");
 
     await bookedDocument("2026-01-20", [{ taxRate: 1900, net: 3_240, tax: 616 }]);
-    await bookedDocument("2026-02-05", [{ taxRate: 1900, net: 10_000, tax: 1_900 }, { taxRate: 700, net: 2_000, tax: 140 }], { payment: "privat" });
+    await bookedDocument(
+      "2026-02-05",
+      [
+        { taxRate: 1900, net: 10_000, tax: 1_900 },
+        { taxRate: 700, net: 2_000, tax: 140 },
+      ],
+      { payment: "privat" },
+    );
     // Handyvertrag mit 30 % Privatanteil, § 13b aus dem EU-Ausland
     await bookedDocument("2026-02-12", [{ taxRate: 1900, net: 5_001, tax: 950 }], { privateShare: 30, category: "telefon" });
     await bookedDocument("2026-03-03", [{ taxRate: 1900, net: 20_000, tax: 3_800 }], { reverseCharge: "eu", privateShare: 25 });
 
-    await pauschalen.createPauschale(actor, { art: "fahrt", date: "2026-02-14", description: "Kunde Hamburg", km: 123, fahrzeug: "pkw", hinUndZurueck: true }, "2026-03-31");
+    await pauschalen.createPauschale(
+      actor,
+      { art: "fahrt", date: "2026-02-14", description: "Kunde Hamburg", km: 123, fahrzeug: "pkw", hinUndZurueck: true },
+      "2026-03-31",
+    );
     await pauschalen.createPauschale(actor, { art: "homeoffice", month: "2026-01", tage: 9, description: "" }, "2026-03-31");
 
     const txs = await transactions([
@@ -136,7 +199,21 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
       // Der Abgleich hat wirklich etwas verglichen
       const feb = await abgleich.vatAbgleich({ year: 2026, month: 2 });
       expect(feb.zeilen.find((z) => z.posten.startsWith("Vorsteuer (Kz 66)"))!.quelle).toBe(1_900 + 140 + 665);
+      // Bemessungsgrundlagen aus Konto und Steuerschlüssel (#542): bei Soll verglichen, bei Ist erst mit der
+      // Bemessungsgrundlage an der Zahlung
+      const jan = await abgleich.vatAbgleich({ year: 2026, month: 1 });
+      const kz81 = jan.zeilen.find((z) => z.posten === "Bemessungsgrundlage 19 % (Kz 81)");
+      if (versteuerung === "soll") expect(kz81).toMatchObject({ journal: 400_000, quelle: 400_000 });
+      else expect(kz81).toBeUndefined();
+      // Bei Ist mit den Zahlungen im Februar, seit die Zahlungsbuchung die Bemessungsgrundlage trägt (#542 Schritt 4)
+      if (versteuerung === "ist") {
+        const febKz81 = feb.zeilen.find((z) => z.posten === "Bemessungsgrundlage 19 % (Kz 81)");
+        expect(febKz81!.journal).toBeGreaterThan(0);
+        expect(febKz81!.journal).toBe(febKz81!.quelle);
+      }
       const march = await abgleich.vatAbgleich({ year: 2026, month: 3 });
+      // § 13b mit Privatanteil: das Journal trennt den privaten Teil nicht, deshalb benannte Ausnahme
+      expect(march.zeilen.find((z) => z.posten.includes("(Kz 46)"))).toBeUndefined();
       expect(march.zeilen.find((z) => z.posten.startsWith("Umsatzsteuer § 13b"))!.journal).toBe(3_800);
       expect(march.zeilen.find((z) => z.posten.startsWith("Vorsteuer § 13b"))!.journal).toBe(2_850);
 
@@ -147,9 +224,7 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
 
       const all = await abgleich.abgleichAll("2026-03-31");
       expect(abgleich.abweichungen(all.zeilen)).toEqual([]);
-      expect(all.zeilen.filter((z) => z.bereich === "ustva").map((z) => z.zeitraum)).toEqual(
-        expect.arrayContaining(["2026-01", "2026-02", "2026-03"]),
-      );
+      expect(all.zeilen.filter((z) => z.bereich === "ustva").map((z) => z.zeitraum)).toEqual(expect.arrayContaining(["2026-01", "2026-02", "2026-03"]));
     }, 60_000);
   }
 
@@ -173,8 +248,14 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
     const [line] = await sql`select l.id, l.credit from journal_lines l join journal_entries e on e.id = l.entry_id
       where e.source_type = 'allocation' and e.date = '2026-02-01' and l.account = '1776' limit 1`;
     const found = await manipulated((tx) => tx`update journal_lines set credit = credit - 100 where id = ${line!.id}`);
-    expect(found).toEqual([expect.objectContaining({ bereich: "ustva", zeitraum: "2026-02", posten: "Umsatzsteuer 19 % (Kz 81)" })]);
-    expect(found[0]!.quelle - found[0]!.journal).toBe(100);
+    expect(found).toEqual([
+      expect.objectContaining({ bereich: "ustva", zeitraum: "2026-02", posten: "Umsatzsteuer 19 % (Kz 81)" }),
+      // Die EÜR aus dem Journal sieht es ebenfalls: Die Umbuchung der Steuer hebt sich nicht mehr auf (#542), auch im
+      // Gewinn nach der DATEV-Formel
+      expect.objectContaining({ bereich: "euer", zeitraum: "2026", posten: "EÜR: Vereinnahmte Umsatzsteuer" }),
+      expect.objectContaining({ bereich: "euer", zeitraum: "2026", posten: "EÜR: Gewinn nach der DATEV-Formel" }),
+    ]);
+    expect(found.map((z) => z.quelle - z.journal)).toEqual([100, 100, 100]);
     await bypass((tx) => tx`update journal_lines set credit = credit + 100 where id = ${line!.id}`);
 
     // Nebenbuch: Steuer eines gebuchten Belegs geändert
@@ -187,14 +268,124 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
     const [b] = await sql`select id from invoices where number <> ${a.number} and kind = 'rechnung' order by issue_date limit 1`;
     const [allocation] = await sql`select id from allocations where invoice_id = ${a.id} and amount = 100000`;
     const moved = await manipulated((tx) => tx`update allocations set invoice_id = ${b!.id} where id = ${allocation!.id}`);
-    expect(moved.map((z) => `${z.bereich} ${z.zeitraum} ${z.posten}`)).toEqual(["ustva 2026-02 Umsatzsteuer 19 % (Kz 81)", "ustva 2026-02 Umsatzsteuer 7 % (Kz 86)"]);
+    expect(moved.map((z) => `${z.bereich} ${z.zeitraum} ${z.posten}`)).toEqual([
+      "ustva 2026-02 Umsatzsteuer 19 % (Kz 81)",
+      "ustva 2026-02 Umsatzsteuer 7 % (Kz 86)",
+      // Seit die Zahlung ihre Bemessungsgrundlage trägt, fallen auch die Bemessungsgrundlagen bei Ist auf (#542)
+      "ustva 2026-02 Bemessungsgrundlage 19 % (Kz 81)",
+      "ustva 2026-02 Bemessungsgrundlage 7 % (Kz 86)",
+    ]);
 
     // Die Integritätsprüfung meldet es; Kette und Siegel sehen die Zuordnung ebenfalls (seit 0064 versiegelt)
     const report = await integrity.checkIntegrity("2026-03-31");
-    expect(report.abgleich.abweichungen).toHaveLength(2);
+    expect(report.abgleich.abweichungen).toHaveLength(4);
     // (Siegel früherer Tests in dieser Datenbank melden gelöschte Datensätze; hier zählt nur die Zuordnung)
     expect(report.problems).toContainEqual(expect.objectContaining({ tabelle: "allocations", zeile: allocation!.id, befund: "Inhalt passt nicht zum Siegel" }));
   }, 60_000);
+
+  it("Ist: ältere Zahlung ohne Bemessungsgrundlage im Journal, Kz 81 und 86 nicht verglichen, kein Fehlalarm (#542)", async () => {
+    await reset("ist");
+    await geschaeftsjahr();
+    // Wie eine Zahlung, die vor #542 Schritt 4 gebucht wurde: die Umbuchung der Umsatzsteuer ohne Bemessungsgrundlage
+    await sql.begin(async (tx) => {
+      await tx`set local session_replication_role = replica`;
+      await tx`update journal_lines set basis = null where entry_id in (
+        select e.id from journal_entries e where e.source_type = 'allocation' and e.date = '2026-02-01')`;
+    });
+    const feb = await abgleich.vatAbgleich({ year: 2026, month: 2 });
+    expect(abgleich.abweichungen(feb.zeilen)).toEqual([]);
+    expect(feb.zeilen.find((z) => z.posten.startsWith("Bemessungsgrundlage"))).toBeUndefined();
+    // Die Steuer wird weiter verglichen
+    expect(feb.zeilen.find((z) => z.posten === "Umsatzsteuer 19 % (Kz 81)")!.journal).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("findet eine falsche Bemessungsgrundlage über den Steuerschlüssel im Journal (Soll, #542)", async () => {
+    await reset("soll");
+    await geschaeftsjahr();
+    const [line] = await sql`select l.id from journal_lines l join journal_entries e on e.id = l.entry_id
+      where e.source_type = 'invoice' and e.date = '2026-01-15' and l.account = '8400' limit 1`;
+    await sql.begin(async (tx) => {
+      await tx`set local session_replication_role = replica`;
+      await tx`update journal_lines set tax_code = 'USt7' where id = ${line!.id}`;
+    });
+    const found = abgleich.abweichungen((await abgleich.vatAbgleich({ year: 2026, month: 1 })).zeilen);
+    expect(found).toEqual([
+      expect.objectContaining({ posten: "Bemessungsgrundlage 19 % (Kz 81)", journal: 0, quelle: 400_000 }),
+      expect.objectContaining({ posten: "Bemessungsgrundlage 7 % (Kz 86)", journal: 500_000, quelle: 100_000 }),
+    ]);
+  }, 60_000);
+
+  for (const kontenrahmen of ["SKR03", "SKR04"] as const) {
+    for (const versteuerung of ["ist", "soll"] as const) {
+      it(`Sonderfälle ohne Steuer, Ausbuchungen, Storno, § 13b und Erwerb ohne Abweichung (${kontenrahmen}, ${versteuerung})`, async () => {
+        await reset(versteuerung);
+        await leeren(sql)`truncate write_offs, cash_entries, document_cancellations cascade`;
+        await sql`update company set kontenrahmen = ${kontenrahmen}`;
+        const cash = await import("../bank/cash-income.ts");
+        async function special(
+          taxTreatment: "reverse_charge" | "drittland" | "steuerfrei" | "ausfuhr" | "ig_lieferung",
+          land: string,
+          ustId: string,
+          issueDate: string,
+        ) {
+          const contact = await contacts.createContact(actor, {
+            kundennummer: "",
+            name: `Kunde ${taxTreatment}`,
+            strasse: "Ring 1",
+            plz: "1010",
+            ort: "Wien",
+            land,
+            email: "a@b.example",
+            ustId,
+            iban: "",
+            leitwegId: "",
+            defaultFormat: null,
+          });
+          const draft = await invoices.createDraft(actor, {
+            contactId: contact.id,
+            issueDate,
+            serviceFrom: null,
+            serviceTo: null,
+            paymentTermDays: 14,
+            format: "zugferd",
+            note: "",
+            taxTreatment,
+            exemptionReason: taxTreatment === "steuerfrei" ? "Steuerfrei nach § 4 Nr. 21 UStG" : "",
+            lines: [{ description: "Leistung", quantity: 1000, unit: "Psch." as const, unitPrice: 500_000, taxRate: 0 }],
+          });
+          return invoices.finalizeInvoice(actor, draft.id);
+        }
+        const rc = await special("reverse_charge", "AT", "ATU12345678", "2026-01-10");
+        const ch = await special("drittland", "CH", "", "2026-01-12");
+        await special("ausfuhr", "US", "", "2026-01-20");
+        const sf = await special("steuerfrei", "DE", "", "2026-01-22");
+        const igl = await special("ig_lieferung", "AT", "ATU12345678", "2026-01-25");
+        await bank.writeOff(actor, { kind: "skonto", invoiceId: rc.id, date: "2026-02-05", amount: 10_000 });
+        await bank.writeOff(actor, { kind: "forderungsausfall", invoiceId: rc.id, date: "2026-02-06" });
+        await bank.writeOff(actor, { kind: "skonto", invoiceId: igl.id, date: "2026-02-07", amount: 15_000 });
+        await bank.writeOff(actor, { kind: "forderungsausfall", invoiceId: sf.id, date: "2026-02-08", amount: 20_000 });
+        await invoices.cancelInvoice(actor, ch.id, "2026-02-10");
+        await cash.createCashIncome(
+          actor,
+          { date: "2026-02-11", amount: 12_345, text: "Kurs", steuer: { behandlung: "steuerfrei", steuersatz: 0 } },
+          "2026-12-31",
+        );
+        await cash.createCashIncome(
+          actor,
+          { date: "2026-02-12", amount: 11_900, text: "Markt", steuer: { behandlung: "regulaer", steuersatz: 1900 } },
+          "2026-12-31",
+        );
+        await bookedDocument("2026-01-14", [{ taxRate: 1900, net: 20_000, tax: 3_800 }], { reverseCharge: "eu" });
+        await bookedDocument("2026-02-14", [{ taxRate: 1900, net: 30_000, tax: 5_700 }], { reverseCharge: "drittland" });
+        for (const month of [1, 2, 3, 41]) {
+          const result = await abgleich.vatAbgleich({ year: 2026, month });
+          expect(abgleich.abweichungen(result.zeilen), `2026-${month}`).toEqual([]);
+        }
+        const jan = await abgleich.vatAbgleich({ year: 2026, month: 1 });
+        expect(jan.zeilen.find((z) => z.posten.includes("(Kz 21)"))).toMatchObject({ journal: 500_000 });
+      }, 60_000);
+    }
+  }
 
   it("AfA und Privatnutzung: Hinweis, solange das Jahr nicht gebucht ist, danach Abgleich", async () => {
     await reset("soll");
@@ -237,7 +428,7 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
     expect(after.hinweise).toEqual([]);
     expect(abgleich.abweichungen(after.zeilen)).toEqual([]);
     const values = Object.fromEntries(after.zeilen.map((z) => [z.posten, z.journal]));
-    expect(values["AfA"]).toBe(600_000);
+    expect(values.AfA).toBe(600_000);
     expect(values["Sofortabschreibung GWG"]).toBe(70_000);
     expect(values["Private Kfz-Nutzung"]).toBeGreaterThan(0);
     expect(values["Umsatzsteuer auf die private Kfz-Nutzung"]).toBeGreaterThan(0);
@@ -245,6 +436,39 @@ describe.skipIf(!testDatabaseUrl)("Abgleich Journal ↔ Umsatzsteuer und EÜR (P
       expect(abgleich.abweichungen((await abgleich.vatAbgleich({ year: 2025, month })).zeilen)).toEqual([]);
     }
   }, 60_000);
+
+  it("meldet keine Abweichung, nur weil während der Prüfung eine Rechnung festgeschrieben wird", async () => {
+    // Soll: Rechnung und Buchung entstehen in einer Transaktion. Der Abgleich darf sie nicht nur halb sehen.
+    await reset("soll");
+    const { today } = await import("../../today.ts");
+    const date = today();
+    await invoice(date, [{ net: 10_000, rate: 1900 }]);
+    // Je Runde eine Prüfung neben einigen Festschreibungen, wie wenn die wöchentliche Mail während der Arbeit läuft
+    for (let round = 0; round < 5; round++) {
+      const writes = (async () => {
+        for (let i = 0; i < 5; i++) await invoice(date, [{ net: 10_000, rate: 1900 }]);
+      })();
+      const report = await integrity.checkIntegrity(date);
+      await writes;
+      expect(report.abgleich.abweichungen).toEqual([]);
+    }
+  }, 120_000);
+
+  it("meldet keine Abweichung, nur weil während der Prüfung ein Beleg gebucht wird (Ist)", async () => {
+    // Ist: Vorsteuer nach Belegdatum, Beleg und Buchung entstehen in einer Transaktion
+    await reset("ist");
+    const { today } = await import("../../today.ts");
+    const date = today();
+    await bookedDocument(date, [{ taxRate: 1900, net: 10_000, tax: 1_900 }]);
+    for (let round = 0; round < 5; round++) {
+      const writes = (async () => {
+        for (let i = 0; i < 5; i++) await bookedDocument(date, [{ taxRate: 1900, net: 10_000, tax: 1_900 }]);
+      })();
+      const report = await integrity.checkIntegrity(date);
+      await writes;
+      expect(report.abgleich.abweichungen).toEqual([]);
+    }
+  }, 120_000);
 
   it("Vorprüfung der Voranmeldung meldet Abweichungen mit Beträgen", () => {
     expect(

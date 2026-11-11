@@ -6,7 +6,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, readFileSync } from "node:fs";
 import { type FileHandle, mkdir, mkdtemp, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, dirname, join, normalize } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -14,8 +13,12 @@ import { crc32, createInflateRaw } from "node:zlib";
 import { networkErrorText } from "@haben/core";
 import { ericLibraryPath, ericPluginPath } from "./eric.ts";
 
-/** Zuletzt bekannte ERiC-Version; neuere stehen im Entwicklerbereich von ELSTER */
-export const DEFAULT_ERIC_VERSION = "43.4.6.0";
+/**
+ * Neueste für Echtfälle freigegebene ERiC-Version; neuere stehen im Entwicklerbereich von ELSTER. Haben arbeitet mit
+ * ERiC 43 bis 45. 45.1.5.0 ist ein BETA-Release: Senden geht damit nur mit Testmerker (ERiC-Entwicklerhandbuch,
+ * Kap. 5.4.3); auf 45 hebt man mit dem Hauptrelease 45.2 (Kap. 2.3).
+ */
+export const DEFAULT_ERIC_VERSION = "44.3.6.0";
 export const ERIC_DOWNLOAD_BASE = "https://download.elster.de/download/eric";
 /** Infoseite mit der aktuellen Version und den Nutzungsbedingungen */
 export const ERIC_INFO_URL = "https://www.elster.de/elsterweb/entwickler/infoseite/eric";
@@ -31,6 +34,14 @@ const SHA256_FILE = "HABEN_ERIC_SHA256";
 const CURRENT_FILE = "AKTUELL";
 
 export class EricInstallError extends Error {}
+
+/**
+ * Kann dieser Server ERiC nutzen? Das Paket gibt es nur für Linux x86_64. Auf anderen Rechnern (arm64) geht es nur
+ * mit einem Worker-Befehl (ERIC_WORKER_COMMAND), der den Worker als x86_64-Prozess startet, etwa unter QEMU.
+ */
+export function ericPlatformSupported(workerCommand?: string, platform: string = process.platform, arch: string = process.arch): boolean {
+  return (platform === "linux" && arch === "x64") || Boolean(workerCommand?.trim());
+}
 
 export function isEricVersion(version: string): boolean {
   return /^\d{2,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(version);
@@ -86,8 +97,10 @@ export interface InstallOptions {
   /** Erwartete SHA-256 des Pakets (hex); stimmt sie nicht, bricht die Installation ab */
   sha256?: string;
   maxBytes?: number;
-  /** Nur Linux x86_64; in Tests abschaltbar */
+  /** Nur Linux x86_64 oder mit workerCommand; in Tests abschaltbar */
   checkPlatform?: boolean;
+  /** ERIC_WORKER_COMMAND: Der Worker läuft dann als x86_64-Prozess, das Paket passt auch auf anderen Rechnern */
+  workerCommand?: string | undefined;
 }
 
 /**
@@ -95,11 +108,24 @@ export interface InstallOptions {
  * vorhandene Installation erst, wenn die neue vollständig ist.
  */
 export async function installEric(options: InstallOptions): Promise<{ version: string; files: number; sha256: string }> {
-  if ((options.checkPlatform ?? true) && (process.platform !== "linux" || process.arch !== "x64")) {
-    throw new EricInstallError(`ERiC gibt es für Server nur für Linux x86_64, nicht für ${process.platform}/${process.arch}.`);
+  if ((options.checkPlatform ?? true) && !ericPlatformSupported(options.workerCommand)) {
+    throw new EricInstallError(
+      `ERiC gibt es für Server nur für Linux x86_64, nicht für ${process.platform}/${process.arch}. ` +
+        "Auf anderen Rechnern startet ERIC_WORKER_COMMAND den Worker als x86_64-Prozess (siehe Installation).",
+    );
   }
   const url = ericDownloadUrl(options.version, options.baseUrl);
-  const work = await mkdtemp(join(tmpdir(), "haben-ericdl-"));
+  // Das Ziel ist im Container ein Volume und lässt sich nicht umbenennen: Versionen liegen in
+  // Unterordnern, AKTUELL zeigt auf die aktive; umgeschaltet wird erst nach vollständigem Entpacken.
+  const root = normalize(options.dir).replace(/\/+$/, "");
+  await mkdir(root, { recursive: true });
+  // Reste einer hart abgebrochenen Installation (Neustart während des Downloads) liegen sonst für immer im Volume.
+  // Gleichzeitig läuft keine zweite: startEricInstall sperrt, install-cli.ts läuft vor dem Server.
+  for (const entry of await readdir(root)) {
+    if (entry.startsWith(".download-")) await rm(join(root, entry), { recursive: true, force: true });
+  }
+  // Das Paket (rund 520 MB) kommt ins Ziel, nicht nach /tmp: Das ist im gehärteten Container ein tmpfs im Arbeitsspeicher
+  const work = await mkdtemp(join(root, ".download-"));
   try {
     const jar = join(work, "eric.jar");
     // ERiC wird als native Bibliothek in den Prozess geladen: Herkunft, Größe und Prüfsumme prüfen
@@ -108,10 +134,6 @@ export async function installEric(options: InstallOptions): Promise<{ version: s
       throw new EricInstallError(`Die Prüfsumme des ERiC-Pakets stimmt nicht: erwartet ${options.sha256.trim()}, erhalten ${sha256}.`);
     }
 
-    // Das Ziel ist im Container ein Volume und lässt sich nicht umbenennen: Versionen liegen in
-    // Unterordnern, AKTUELL zeigt auf die aktive; umgeschaltet wird erst nach vollständigem Entpacken.
-    const root = normalize(options.dir).replace(/\/+$/, "");
-    await mkdir(root, { recursive: true });
     const name = `ERiC-${options.version}`;
     const fresh = join(root, `${name}.neu`);
     await rm(fresh, { recursive: true, force: true });

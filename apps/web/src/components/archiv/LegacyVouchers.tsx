@@ -18,6 +18,12 @@ export const LEGACY_TYPES: Record<string, string> = {
   purchasecreditnote: "Ausgabe-Gutschrift",
 };
 
+/**
+ * Ein Filter-Link ist nur aktiv, wenn auch die auf undefined gesetzten Suchparameter fehlen. Sonst gilt „Alle“
+ * für TanStack Router immer als aktiv und bekommt von ihm aria-current="page", auch wenn „Ausgaben“ gewählt ist.
+ */
+export const EXACT_SEARCH = { explicitUndefined: true } as const;
+
 export function LegacyVouchers({ year, years, rows, search }: { year: number; years: number[]; rows: Row[]; search: ArchiveSearch }) {
   const navigate = useNavigate();
   const [term, setTerm] = useState(search.suche ?? "");
@@ -28,8 +34,7 @@ export function LegacyVouchers({ year, years, rows, search }: { year: number; ye
     void navigate({ to: "/archiv", search: { ...search, suche: term || undefined } });
   }
 
-  const sumOf = (dir: "einnahme" | "ausgabe", key: "net" | "gross") =>
-    rows.filter((r) => r.direction === dir).reduce((s, r) => s + r[key], 0);
+  const sumOf = (dir: "einnahme" | "ausgabe", key: "net" | "gross") => rows.filter((r) => r.direction === dir).reduce((s, r) => s + r[key], 0);
   return (
     <section className="card stack" aria-label={`Belege ${year}`}>
       <YearSwitch year={year} years={years} search={search} />
@@ -38,19 +43,23 @@ export function LegacyVouchers({ year, years, rows, search }: { year: number; ye
           {(["alle", "einnahme", "ausgabe"] as const).map((value) => (
             <Link
               key={value}
-              to="/archiv" activeProps={{}}
+              to="/archiv"
+              activeProps={{}}
+              activeOptions={EXACT_SEARCH}
               search={{ ...search, richtung: value === "alle" ? undefined : value }}
               className={direction === value ? "chip active" : "chip"}
-              aria-pressed={direction === value}
+              aria-current={direction === value ? "page" : undefined}
             >
               {value === "alle" ? "Alle" : value === "einnahme" ? "Einnahmen" : "Ausgaben"}
             </Link>
           ))}
           <Link
-            to="/archiv" activeProps={{}}
+            to="/archiv"
+            activeProps={{}}
+            activeOptions={EXACT_SEARCH}
             search={{ ...search, ohneDatei: search.ohneDatei ? undefined : true }}
             className={search.ohneDatei ? "chip active" : "chip"}
-            aria-pressed={Boolean(search.ohneDatei)}
+            aria-current={search.ohneDatei ? "page" : undefined}
           >
             Ohne Datei
           </Link>
@@ -63,7 +72,9 @@ export function LegacyVouchers({ year, years, rows, search }: { year: number; ye
         </form>
       </div>
       {rows.length === 0 ? (
-        <p className="muted" style={{ margin: 0 }}>Keine Belege für diese Auswahl.</p>
+        <p className="muted" style={{ margin: 0 }}>
+          Keine Belege für diese Auswahl.
+        </p>
       ) : (
         <div className="table">
           <div className="table-row head legacy-cols">
@@ -90,8 +101,8 @@ export function LegacyVouchers({ year, years, rows, search }: { year: number; ye
           {direction === "alle" ? (
             <div className="table-row" style={{ fontWeight: 600 }}>
               <div>
-                {rows.length} Belege{rows.length === 1000 ? " (erste 1000)" : ""} · Einnahmen netto {formatEuro(sumOf("einnahme", "net"))} ·
-                Ausgaben netto {formatEuro(sumOf("ausgabe", "net"))}
+                {rows.length} Belege{rows.length === 1000 ? " (erste 1000)" : ""} · Einnahmen netto {formatEuro(sumOf("einnahme", "net"))} · Ausgaben netto{" "}
+                {formatEuro(sumOf("ausgabe", "net"))}
               </div>
             </div>
           ) : (

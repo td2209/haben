@@ -1,18 +1,22 @@
+import { germanDay, periodKey } from "@haben/core";
 import { createFileRoute } from "@tanstack/react-router";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { loadKapEStProtocol } from "../../../server/modules/ausschuettung/index.ts";
 import { loadAnnualProtocol } from "../../../server/modules/jahreserklaerung/index.ts";
-import { auth } from "../../../server/auth.ts";
+import { loadLstaProtocol } from "../../../server/modules/lohn/index.ts";
+import { loadDauerfristProtocol, loadFilingProtocol, loadZmProtocol } from "../../../server/modules/umsatzsteuer/index.ts";
+import { requireUser } from "../../../server/rollen.ts";
 import { db, schema } from "../../../server/db/index.ts";
 import { fileResponse } from "../../../server/file-response.ts";
 
-/** Übertragungsprotokoll (PDF) einer Übermittlung: Voranmeldung oder Jahreserklärung */
+/** Übertragungsprotokoll (PDF) einer Übermittlung: Voranmeldung, Jahreserklärung, Kapitalertragsteuer-Anmeldung, Zusammenfassende Meldung, Lohnsteuer-Anmeldung; dazu das Übermittlungsprotokoll einer vermerkten Abgabe außerhalb von Haben */
 export const Route = createFileRoute("/api/protokoll/$id")({
   server: {
     handlers: {
       GET: async ({ request, params }) => {
-        const session = await auth().api.getSession({ headers: request.headers });
-        if (!session) return new Response("Nicht angemeldet", { status: 401 });
+        const user = await requireUser(request, "inhaber");
+        if (user instanceof Response) return user;
         const id = z.uuid().safeParse(params.id);
         if (!id.success) return new Response("Nicht gefunden", { status: 404 });
 
@@ -27,12 +31,18 @@ export const Route = createFileRoute("/api/protokoll/$id")({
           .innerJoin(schema.vatReturns, eq(schema.vatReturns.id, schema.vatReturnSubmissions.vatReturnId))
           .where(eq(schema.vatReturnSubmissions.id, id.data));
         if (!row?.pdf) {
-          const annual = await loadAnnualProtocol(id.data);
-          if (!annual) return new Response("Nicht gefunden", { status: 404 });
-          return pdfResponse(annual.pdf, annual.filename);
+          const other =
+            (await loadAnnualProtocol(id.data)) ??
+            (await loadKapEStProtocol(id.data)) ??
+            (await loadDauerfristProtocol(id.data)) ??
+            (await loadZmProtocol(id.data)) ??
+            (await loadLstaProtocol(id.data)) ??
+            (await loadFilingProtocol(id.data));
+          if (!other) return new Response("Nicht gefunden", { status: 404 });
+          return pdfResponse(other.pdf, other.filename);
         }
 
-        const filename = `UStVA-${row.year}-${String(row.month).padStart(2, "0")}-${row.createdAt.toISOString().slice(0, 10)}.pdf`;
+        const filename = `UStVA-${periodKey(row)}-${germanDay(row.createdAt)}.pdf`;
         return pdfResponse(row.pdf, filename);
       },
     },

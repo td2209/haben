@@ -1,3 +1,4 @@
+import { notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
@@ -5,10 +6,16 @@ import {
   addArchiveFile,
   ARCHIVE_KINDS,
   ArchiveError,
+  datevAbschluss,
   listArchiveFiles,
   listDatevBookings,
   MAX_ARCHIVE_SIZE,
   type ArchiveKind,
+  attachOrderPdf,
+  listOrderDocuments,
+  orderArchiveOverview,
+  orderDocumentDetail,
+  externalImportOverview,
 } from "../modules/archiv/index.ts";
 import {
   cancelImport,
@@ -20,8 +27,19 @@ import {
   removeApiKey,
   saveApiKey,
   startImport,
+  startWebImport,
 } from "../modules/archiv/index.ts";
-import { openLegacyItems, takeOverAll, takeOverLegacyItem } from "../modules/archiv/index.ts";
+import { openItemsOverview, takeOverAll, takeOverLegacyItem } from "../modules/archiv/index.ts";
+import {
+  accountableImportStatus,
+  AccountableError,
+  analyseAccountableUpload,
+  cancelAccountableImport as cancelAccountable,
+  discardAccountableUpload,
+  latestAccountableImport,
+  MAX_ACCOUNTABLE_SIZE as MAX_ACCOUNTABLE,
+  startAccountableImport as startAccountable,
+} from "../modules/archiv/index.ts";
 import {
   cancelSevdeskImport as cancelSevdesk,
   latestSevdeskImport,
@@ -30,28 +48,54 @@ import {
   sevdeskConnectionStatus,
   startSevdeskImport as startSevdesk,
 } from "../modules/archiv/index.ts";
+import { bbSummary, latestBuchhaltungsbutlerImport, MAX_BB_EXPORT_SIZE, previewBbExport, startBuchhaltungsbutlerImport } from "../modules/archiv/index.ts";
 import { authMiddleware } from "../middleware.ts";
 import { UserError } from "../errors.ts";
-import { yearSchema } from "./schemas.ts";
+import { detailId, yearSchema } from "./schemas.ts";
+
+/** Stichtag der Übernahme offener Posten; geprüft wird er im Modul (takeoverCutoffIssue) */
+const stichtagSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /** Umzug: Verbindungen, letzte Abrufe, Abgleich je Jahr und archivierte Dateien */
 export const getMigration = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async () => {
-    const [connection, check, files, openItems, sevdeskConnection, sevdeskImport] = await Promise.all([
+  .validator(z.object({ stichtag: stichtagSchema.optional() }))
+  .handler(async ({ data }) => {
+    const [
+      connection,
+      check,
+      files,
+      { items: openItems, cutoff, cutoffError },
+      sevdeskConnection,
+      sevdeskImport,
+      accountableImport,
+      orderArchive,
+      externalImports,
+      bbImport,
+    ] = await Promise.all([
       connectionStatus(),
       reconciliation(),
       listArchiveFiles(),
-      openLegacyItems(),
+      openItemsOverview(data.stichtag),
       sevdeskConnectionStatus(),
       latestSevdeskImport(),
+      latestAccountableImport(),
+      orderArchiveOverview(),
+      externalImportOverview(),
+      latestBuchhaltungsbutlerImport(),
     ]);
     return {
       connection,
       sevdeskConnection,
       sevdeskImport,
+      bbImport,
+      accountableImport,
       openItems,
+      cutoff,
+      cutoffError,
       ...check,
+      orderArchive,
+      externalImports,
       files: files.map(({ meta, ...file }) => ({
         ...file,
         bookings: typeof meta?.bookings === "number" ? meta.bookings : null,
@@ -83,6 +127,22 @@ export const startLexofficeImport = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => ({ id: await startImport(context.user.id) }));
 
+/** Sicherung aus der Web-Oberfläche von Lexware Office (ZIP-Teile aus lexware-sicherung.js) übernehmen */
+export const uploadLexwareBackup = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: unknown) => {
+    if (!(data instanceof FormData)) throw new UserError("FormData erwartet");
+    const files = data.getAll("files").filter((f): f is File => f instanceof File);
+    if (files.length === 0) throw new UserError("Keine Datei ausgewählt.");
+    if (files.length > 20) throw new UserError("Höchstens 20 Teile auf einmal.");
+    if (files.some((f) => f.size > MAX_ARCHIVE_SIZE)) throw new UserError("Ein Teil ist größer als 100 MB.");
+    return { files };
+  })
+  .handler(async ({ data, context }) => {
+    const parts = await Promise.all(data.files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
+    return { id: await startWebImport(context.user.id, parts) };
+  });
+
 export const cancelLexofficeImport = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.object({ id: z.uuid() }))
@@ -109,6 +169,75 @@ export const cancelSevdeskImport = createServerFn({ method: "POST" })
   .validator(z.object({ id: z.uuid() }))
   .handler(async ({ data }) => ({ cancelled: cancelSevdesk(data.id) }));
 
+function bbFiles(input: unknown): { files: File[] } {
+  if (!(input instanceof FormData)) throw new UserError("FormData erwartet");
+  const files = input.getAll("files").filter((f): f is File => f instanceof File);
+  if (files.length === 0) throw new UserError("Keine Datei ausgewählt.");
+  if (files.length > 3) throw new UserError("Höchstens datenexport.zip, BB_Buchungsstapel.csv und EXTF_Buchungsstapel.csv auswählen.");
+  if (files.some((f) => f.size > MAX_BB_EXPORT_SIZE)) throw new UserError("Eine Datei ist größer als 500 MB.");
+  return { files };
+}
+
+async function bbParts(files: File[]) {
+  return Promise.all(files.map(async (file) => ({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) })));
+}
+
+export const previewBuchhaltungsbutlerImport = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(bbFiles)
+  .handler(async ({ data }) => bbSummary(await previewBbExport(await bbParts(data.files))));
+
+export const importBuchhaltungsbutler = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(bbFiles)
+  .handler(async ({ data, context }) => startBuchhaltungsbutlerImport(context.user.id, await bbParts(data.files)));
+
+/*
+ * Accountable hat keine API: Der Export (ZIP je Geschäftsjahr) wird hochgeladen, geprüft und erst auf Knopfdruck
+ * übernommen. Die Analyse liefert, was der Export enthält, bevor etwas geschrieben wird.
+ */
+
+/** Ein Export je Aufruf; mehrere Jahre lädt die Oberfläche nacheinander hoch, jedes Jahr ist ein eigener Lauf. */
+export const uploadAccountableExport = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: unknown) => {
+    if (!(data instanceof FormData)) throw new UserError("FormData erwartet");
+    const files = data.getAll("files").filter((f): f is File => f instanceof File);
+    if (files.length === 0) throw new UserError("Keine Datei ausgewählt.");
+    if (files.length > 1) throw new UserError("Bitte je Aufruf einen Export (ein Geschäftsjahr) hochladen.");
+    if (files[0]!.size > MAX_ACCOUNTABLE) throw new UserError("Der Export ist größer als 100 MB.");
+    return { file: files[0]! };
+  })
+  .handler(async ({ data }) => analyseAccountableUpload(new Uint8Array(await data.file.arrayBuffer()), data.file.name));
+
+export const startAccountableImport = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => ({ id: await startAccountable(context.user.id) }));
+
+export const cancelAccountableImport = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.uuid() }))
+  .handler(async ({ data }) => ({ cancelled: cancelAccountable(data.id) }));
+
+/** Der laufende oder letzte Lauf; ohne id der letzte, sonst der, den die Oberfläche beobachtet. */
+export const getAccountableStatus = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.uuid().optional() }))
+  .handler(async ({ data }) => {
+    if (!data.id) return latestAccountableImport();
+    const run = await accountableImportStatus(data.id);
+    if (!run) throw new AccountableError("Den Lauf gibt es nicht.");
+    return run;
+  });
+
+/** Hochgeladenen Export wieder verwerfen (falsche Datei); angestoßene Läufe bleiben davon unberührt. */
+export const discardAccountableExport = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async () => {
+    discardAccountableUpload();
+    return { ok: true };
+  });
+
 const kindSchema = z.enum(Object.keys(ARCHIVE_KINDS) as [ArchiveKind, ...ArchiveKind[]]);
 
 export const uploadArchiveFiles = createServerFn({ method: "POST" })
@@ -124,7 +253,10 @@ export const uploadArchiveFiles = createServerFn({ method: "POST" })
       files,
       kind: kindSchema.parse(data.get("kind")),
       year: year ? yearSchema.parse(Number(year)) : null,
-      note: z.string().max(500).parse(data.get("note") ?? ""),
+      note: z
+        .string()
+        .max(500)
+        .parse(data.get("note") ?? ""),
     };
   })
   .handler(async ({ data, context }) => {
@@ -156,10 +288,10 @@ export const getLegacyVouchers = createServerFn({ method: "GET" })
 
 export const getLegacyVoucher = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .validator(z.object({ id: z.uuid() }))
+  .validator(({ id }: { id: string }) => ({ id: detailId(id) }))
   .handler(async ({ data }) => {
     const detail = await legacyVoucherDetail(data.id);
-    if (!detail) throw new UserError("Beleg nicht gefunden.");
+    if (!detail) throw notFound();
     return detail;
   });
 
@@ -174,15 +306,45 @@ export const getDatevBookings = createServerFn({ method: "GET" })
     }),
   )
   .handler(async ({ data }) => {
-    const [bookings, totals] = await Promise.all([listDatevBookings(data), accountTotals(data.year)]);
-    return { ...bookings, totals };
+    const [bookings, totals, abschluss] = await Promise.all([listDatevBookings(data), accountTotals(data.year), datevAbschluss(data.year)]);
+    return { ...bookings, totals, abschluss };
   });
 
 export const takeOverOpenItem = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(z.object({ id: z.uuid() }))
-  .handler(async ({ data, context }) => takeOverLegacyItem(context.user.id, data.id));
+  .validator(z.object({ id: z.uuid(), stichtag: stichtagSchema }))
+  .handler(async ({ data, context }) => takeOverLegacyItem(context.user.id, data.id, data.stichtag));
 
 export const takeOverAllOpenItems = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .handler(async ({ context }) => takeOverAll(context.user.id));
+  .validator(z.object({ stichtag: stichtagSchema }))
+  .handler(async ({ data, context }) => takeOverAll(context.user.id, data.stichtag));
+
+export const getOrderDocuments = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(z.object({ year: yearSchema, search: z.string().max(100).default(""), kind: z.enum(["AN", "AB", "LI"]).optional() }))
+  .handler(async ({ data }) => listOrderDocuments(data));
+
+export const getOrderDocument = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(({ id }: { id: string }) => ({ id: detailId(id) }))
+  .handler(async ({ data }) => {
+    const detail = await orderDocumentDetail(data.id);
+    if (!detail) throw notFound();
+    return detail;
+  });
+
+export const uploadOrderPdf = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => {
+    if (!(input instanceof FormData)) throw new UserError("FormData erwartet.");
+    const file = input.get("file");
+    if (!(file instanceof File) || file.size > 20 * 1024 * 1024) throw new UserError("Bitte ein PDF mit höchstens 20 MB auswählen.");
+    return { id: z.uuid().parse(input.get("id")), file };
+  })
+  .handler(async ({ data, context }) =>
+    attachOrderPdf(context.user.id, data.id, {
+      filename: data.file.name,
+      bytes: new Uint8Array(await data.file.arrayBuffer()),
+    }),
+  );

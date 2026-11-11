@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Mahnwesen (Postgres)", () => {
   let dunning: typeof import("./dunning.ts");
@@ -22,22 +22,41 @@ describe.skipIf(!testDatabaseUrl)("Mahnwesen (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate dunnings, journal_lines, journal_entries, invoice_lines, invoices, recurring_invoices, invoice_number_counters,
+    await leeren(sql)`truncate dunnings, journal_lines, journal_entries, invoice_lines, invoices, recurring_invoices, invoice_number_counters,
       contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, telefon, steuernummer, ust_id, bundesland, iban, bic, bank, dunning)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '+49 941 123456',
               '198/113/10010', 'DE123456789', 'BY', 'DE89370400440532013000', 'COBADEFFXXX', 'Commerzbank',
               '{"baseRate": 127, "fees": {"1": 0, "2": 500, "3": 1000}, "deadlineDays": 10}'::jsonb)`;
     const contact = await contacts.createContact(actor, {
-      kundennummer: "10001", name: "Nordwerk Software GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-      email: "rechnung@nordwerk.example", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+      kundennummer: "10001",
+      name: "Nordwerk Software GmbH",
+      strasse: "Hafenstraße 5",
+      plz: "20457",
+      ort: "Hamburg",
+      land: "DE",
+      email: "rechnung@nordwerk.example",
+      ustId: "",
+      iban: "",
+      leitwegId: "",
+      defaultFormat: null,
     });
     const draft = await invoices.createDraft(actor, {
-      contactId: contact.id, issueDate: "2026-09-01", serviceFrom: null, serviceTo: null, paymentTermDays: 14, format: "zugferd", note: "",
+      contactId: contact.id,
+      issueDate: "2026-09-01",
+      serviceFrom: null,
+      serviceTo: null,
+      paymentTermDays: 14,
+      format: "zugferd",
+      note: "",
       lines: [{ description: "Beratung", quantity: 1000, unit: "Psch.", unitPrice: 100_000, taxRate: 1900 }],
     });
     invoiceId = (await invoices.finalizeInvoice(actor, draft.id)).id;
   }, 30_000);
+
+  it("unbekannte Rechnung: kein Vorschlag statt Fachfehler, damit die Mahnungsseite 404 zeigt", async () => {
+    expect(await dunning.dunningDraft("00000000-0000-4000-8000-000000000000", "2026-10-15")).toBeNull();
+  });
 
   it("überfällige Rechnung: Vorschlag, Mahnung mit Zinsen und PDF, danach nächste Stufe", async () => {
     // fällig am 15.09.2026

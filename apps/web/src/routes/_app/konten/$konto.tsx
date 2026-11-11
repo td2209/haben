@@ -1,4 +1,4 @@
-import { MONTHS, formatEuro, kontoart, type Kontenrahmen } from "@haben/core";
+import { currentYear, MONTHS, formatEuro, kontoart, type Kontenrahmen } from "@haben/core";
 import { Link, createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { Fragment } from "react";
 import { z } from "zod/mini";
@@ -7,6 +7,7 @@ import { JOURNAL_SOURCE, SaldoBetrag, ZEITRAEUME, lastDayBefore, shortDate } fro
 import { formatDate } from "../../../lib/format.ts";
 import { getKontenblatt } from "../../../server/functions/ledger.ts";
 import styles from "../../../styles/auswertungen.css?url";
+import { Field } from "../../../components/Field.tsx";
 
 export const Route = createFileRoute("/_app/konten/$konto")({
   validateSearch: z.object({
@@ -16,21 +17,36 @@ export const Route = createFileRoute("/_app/konten/$konto")({
   loaderDeps: ({ search }) => search,
   loader: ({ params, deps }) => {
     if (!/^\d{4,8}$/.test(params.konto)) throw notFound();
-    return getKontenblatt({ data: { account: params.konto, year: deps.jahr ?? new Date().getFullYear(), period: deps.zeitraum ?? "jahr" } });
+    return getKontenblatt({ data: { account: params.konto, year: deps.jahr ?? currentYear(), period: deps.zeitraum ?? "jahr" } });
   },
   head: ({ params }) => ({ meta: [{ title: `Konto ${params.konto} · Haben` }], links: [{ rel: "stylesheet", href: styles }] }),
   component: KontenblattPage,
 });
 
-
 function SourceLink({ type, id, reversal }: { type: string; id: string; reversal: boolean }) {
   const label = reversal ? "Gegenbuchung" : (JOURNAL_SOURCE[type as keyof typeof JOURNAL_SOURCE] ?? type);
-  if (type === "invoice") return <Link to="/rechnungen/$id" params={{ id }}>{label}</Link>;
-  if (type === "document") return <Link to="/belege/$id" params={{ id }}>{label}</Link>;
-  if (type === "asset") return <Link to="/anlagen/$id" params={{ id }}>{label}</Link>;
+  if (type === "invoice")
+    return (
+      <Link to="/rechnungen/$id" params={{ id }}>
+        {label}
+      </Link>
+    );
+  if (type === "document")
+    return (
+      <Link to="/belege/$id" params={{ id }}>
+        {label}
+      </Link>
+    );
+  if (type === "asset")
+    return (
+      <Link to="/anlagen/$id" params={{ id }}>
+        {label}
+      </Link>
+    );
   if (type === "allocation") return <Link to="/bank">{label}</Link>;
   if (type === "pauschale") return <Link to="/pauschalen">{label}</Link>;
   if (type === "kasse") return <Link to="/kasse">{label}</Link>;
+  if (type === "lohn") return <Link to="/lohn">{label}</Link>;
   return <>{label}</>;
 }
 
@@ -65,19 +81,21 @@ function KontenblattPage() {
           </h1>
         </div>
         <div className="actions" style={{ alignItems: "end" }}>
-          <label className="field">
-            Zeitraum
-            <select
-              value={zeitraum}
-              onChange={(e) => navigate({ to: "/konten/$konto", params: { konto }, search: { jahr: year, zeitraum: e.target.value } })}
-            >
-              {ZEITRAEUME.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <Field label="Zeitraum">
+            {(control) => (
+              <select
+                {...control}
+                value={zeitraum}
+                onChange={(e) => navigate({ to: "/konten/$konto", params: { konto }, search: { jahr: year, zeitraum: e.target.value } })}
+              >
+                {ZEITRAEUME.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
           <a className="btn" href={`/api/konten/${year}?zeitraum=${zeitraum}&konto=${konto}`}>
             CSV
           </a>
@@ -87,14 +105,14 @@ function KontenblattPage() {
       <div className="kpi-grid">
         <div className="card">
           <div className="kpi-label">Eröffnung</div>
-          <div className="kpi-value" style={{ fontSize: 22 }}>
+          <div className="kpi-value">
             <SaldoBetrag kontenrahmen={kr} account={konto} saldo={data.eroeffnung} />
           </div>
           <div className="small muted">am {formatDate(data.from)}</div>
         </div>
         <div className="card kpi-wide">
           <div className="kpi-label">Bewegungen im Zeitraum</div>
-          <dl className="facts" style={{ gap: "2px 12px", fontSize: 15 }}>
+          <dl className="facts" style={{ gap: "2px 12px", fontSize: 16 }}>
             <dt>Soll</dt>
             <dd className="mono">{formatEuro(data.soll)}</dd>
             <dt>Haben</dt>
@@ -104,7 +122,7 @@ function KontenblattPage() {
         </div>
         <div className="card">
           <div className="kpi-label">Saldo am Ende</div>
-          <div className="kpi-value" style={{ fontSize: 22 }}>
+          <div className="kpi-value">
             <SaldoBetrag kontenrahmen={kr} account={konto} saldo={data.saldo} />
           </div>
           <div className="small muted">am {formatDate(lastDayBefore(data.to))}</div>

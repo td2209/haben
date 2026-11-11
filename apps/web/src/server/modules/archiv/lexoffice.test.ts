@@ -38,7 +38,7 @@ function listItem(id: string, voucherType: string, voucherStatus: string, vouche
 }
 
 /** Nachgebaute Lexware-API mit einer Rechnung, einer Gutschrift, einem Ausgabebeleg und einem Entwurf */
-function fakeApi(options: { failVoucher?: boolean } = {}) {
+function fakeApi(options: { failVoucher?: boolean; contacts?: Record<string, unknown>[] } = {}) {
   const calls: string[] = [];
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -52,7 +52,8 @@ function fakeApi(options: { failVoucher?: boolean } = {}) {
         { id: "16d04a28-b1d0-11e6-b4e8-8f6d5b2f9e0a", name: "Bürobedarf", type: "outgo", contactRequired: false, splitAllowed: true, groupName: "Büro" },
       ]);
     }
-    if (path === "/contacts") return json(page(url.searchParams.get("page") === "0" ? [fixture("contact-company.json"), fixture("contact-person.json")] : []));
+    if (path === "/contacts")
+      return json(page(url.searchParams.get("page") === "0" ? (options.contacts ?? [fixture("contact-company.json"), fixture("contact-person.json")]) : []));
     if (path === "/voucherlist") {
       if (url.searchParams.get("archived") === "true") return json(page([]));
       return json(
@@ -89,7 +90,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   const actor = "test-user";
   const key = "schluessel-1234567890-abcdefghij";
 
-  function useApi(options: { failVoucher?: boolean } = {}) {
+  function installFakeApi(options: { failVoucher?: boolean; contacts?: Record<string, unknown>[] } = {}) {
     const api = fakeApi(options);
     lexoffice.setLexofficeClientFactory(
       (o) => new importPkg.LexofficeClient({ ...o, fetch: api.fetchFn, minIntervalMs: 0, maxRetries: 0, sleep: async () => {} }),
@@ -109,7 +110,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   });
 
   it("lehnt einen falschen Schlüssel ab und speichert den richtigen verschlüsselt", async () => {
-    useApi();
+    installFakeApi();
     await expect(lexoffice.saveApiKey(actor, "falsch-falsch-falsch-falsch")).rejects.toThrow(/lehnt den Schlüssel ab: API-Schlüssel ungültig/);
     expect(await lexoffice.saveApiKey(actor, key)).toEqual({ organizationName: "Testfirma Teufel" });
     const [row] = await sql`select ciphertext from lexoffice_connection`;
@@ -119,7 +120,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
 
   it("übernimmt Kontakte, Rechnungen, Gutschriften und Belege mit Dateien; ein Fehler hält den Lauf nicht auf", async () => {
     await sql`insert into contacts (name) values ('Berliner Kindl GmbH')`;
-    useApi({ failVoucher: true });
+    installFakeApi({ failVoucher: true });
     const id = await lexoffice.startImport(actor, { wait: true });
     const run = await lexoffice.latestImport();
     expect(run).toMatchObject({ id, status: "fertig" });
@@ -128,6 +129,9 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
 
     const contacts = await sql`select name, lexoffice_id from contacts order by name`;
     expect(contacts.every((c) => c.lexoffice_id)).toBe(true);
+    // Rollen aus Lexoffice: Die Person ist dort Kunde und Lieferant (#224)
+    const roles = await sql`select is_customer, is_supplier, lieferantennummer from contacts where lieferantennummer is not null`;
+    expect(roles).toEqual([{ is_customer: true, is_supplier: true, lieferantennummer: "70001" }]);
 
     const vouchers = await sql`select number, type, direction, net, tax, gross, contact_id, payment from lexoffice_vouchers order by number`;
     expect(vouchers.map((v) => [v.number, v.direction, v.gross])).toEqual([
@@ -136,12 +140,13 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
     ]);
     expect(vouchers.every((v) => v.contact_id)).toBe(true);
     expect(vouchers[1]!.payment).toMatchObject({ status: "balanced", items: [{ amount: 100000 }, { amount: 17250 }] });
-    const [file] = await sql`select filename, mime_type, role from lexoffice_voucher_files f join lexoffice_vouchers v on v.id = f.voucher_id where v.number = 'RE1019'`;
+    const [file] =
+      await sql`select filename, mime_type, role from lexoffice_voucher_files f join lexoffice_vouchers v on v.id = f.voucher_id where v.number = 'RE1019'`;
     expect(file).toMatchObject({ filename: "RE1019.pdf", mime_type: "application/pdf", role: "pdf" });
   });
 
   it("setzt beim nächsten Abruf fort und überspringt Übernommenes", async () => {
-    const api = useApi();
+    const api = installFakeApi();
     await lexoffice.startImport(actor, { wait: true });
     const run = await lexoffice.latestImport();
     expect(run!.progress).toMatchObject({ imported: 1, skipped: 2, contacts: 0, failed: [] });
@@ -153,7 +158,7 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   });
 
   it("startet nie zwei Abrufe gleichzeitig", async () => {
-    useApi();
+    installFakeApi();
     const results = await Promise.allSettled([lexoffice.startImport(actor, { wait: true }), lexoffice.startImport(actor, { wait: true })]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(results.find((r) => r.status === "rejected")).toMatchObject({ reason: expect.objectContaining({ message: "Ein Abruf läuft bereits." }) });
@@ -254,7 +259,14 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
   it("liefert die Belege eines Monats mit Steuerart und Zahlungen, bei Ist auch nach Zahlungsdatum", async () => {
     const march = await lexoffice.legacyVouchersForPeriod({ period: "2023-03", direction: "alle", search: "", withPayments: true, limit: 50 });
     expect(march.vouchers.map((v) => v.number)).toEqual(["RE1019"]);
-    expect(march.vouchers[0]).toMatchObject({ taxType: "net", taxSubType: null, payments: [{ date: "2023-02-28", amount: 100_000 }, { date: "2023-03-01", amount: 17_250 }] });
+    expect(march.vouchers[0]).toMatchObject({
+      taxType: "net",
+      taxSubType: null,
+      payments: [
+        { date: "2023-02-28", amount: 100_000 },
+        { date: "2023-03-01", amount: 17_250 },
+      ],
+    });
     expect((await lexoffice.legacyVouchersForPeriod({ period: "2023-03", direction: "alle", search: "", withPayments: false, limit: 50 })).total).toBe(0);
 
     const year = await lexoffice.legacyVouchersForPeriod({ period: "2023", direction: "ausgabe", search: "", withPayments: false, limit: 50 });
@@ -278,7 +290,9 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
     const chunks: Uint8Array[] = [];
     for await (const chunk of exportYear(2023, new Date("2026-10-02T10:00:00Z"))) chunks.push(chunk);
     const files = unzipSync(Buffer.concat(chunks));
-    const names = Object.keys(files).filter((n) => n.startsWith("lexoffice/")).sort();
+    const names = Object.keys(files)
+      .filter((n) => n.startsWith("lexoffice/"))
+      .sort();
     expect(names).toEqual([
       "lexoffice/belege.csv",
       expect.stringMatching(/^lexoffice\/belege\/2023-02-21_RE1019_[0-9a-f]{8}\.pdf$/),
@@ -290,5 +304,20 @@ describe.skipIf(!testDatabaseUrl)("Lexoffice-Übernahme (Postgres)", () => {
     ]);
     expect(new TextDecoder().decode(files["lexoffice/belege.csv"]!)).toContain("RE1019");
     expect(new TextDecoder().decode(files["pruefsummen.sha256"]!)).toContain("lexoffice/datev-buchungen.csv");
+  });
+
+  it("ein gleichnamiger Kontakt, der in Lexoffice Lieferant ist, wird auch in Haben Lieferant", async () => {
+    await sql`insert into contacts (name) values ('Hetzner Online GmbH')`;
+    const vendor = {
+      ...fixture("contact-company.json"),
+      id: "5c5c5c5c-1234-4567-89ab-cdef01234567",
+      roles: { vendor: { number: 70002 } },
+      company: { name: "Hetzner Online GmbH" },
+    };
+    installFakeApi({ contacts: [vendor] });
+    await lexoffice.startImport(actor, { wait: true });
+    expect((await lexoffice.latestImport())!.progress).toMatchObject({ contactsLinked: 1 });
+    const [contact] = await sql`select is_customer, is_supplier, lieferantennummer, lexoffice_id from contacts where name = 'Hetzner Online GmbH'`;
+    expect(contact).toMatchObject({ is_customer: true, is_supplier: true, lieferantennummer: "70002", lexoffice_id: vendor.id });
   });
 });

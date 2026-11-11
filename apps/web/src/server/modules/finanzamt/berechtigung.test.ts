@@ -2,7 +2,7 @@ import { EricGeprueftClient } from "../../test-eric.ts";
 import type { ElsterClient, ElsterResult } from "@haben/elster";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Berechtigung zum Belegabruf (Postgres)", () => {
   let brm: typeof import("./berechtigung.ts");
@@ -10,7 +10,15 @@ describe.skipIf(!testDatabaseUrl)("Berechtigung zum Belegabruf (Postgres)", () =
   let taxpayer: typeof import("../stammdaten/taxpayer.ts");
   let sql: postgres.Sql;
   const actor = "test-user";
-  const person = (idnr: string, vorname: string) => ({ idnr, anrede: "Frau" as const, vorname, name: "Muster", geburtsdatum: "1987-03-01", religion: "11", beruf: "" });
+  const person = (idnr: string, vorname: string) => ({
+    idnr,
+    anrede: "Frau" as const,
+    vorname,
+    name: "Muster",
+    geburtsdatum: "1987-03-01",
+    religion: "11",
+    beruf: "",
+  });
 
   beforeAll(async () => {
     sql = await setupTestDb();
@@ -24,7 +32,7 @@ describe.skipIf(!testDatabaseUrl)("Berechtigung zum Belegabruf (Postgres)", () =
   });
 
   beforeEach(async () => {
-    await sql`truncate elster_certificates, company, brm_requests cascade`;
+    await leeren(sql)`truncate elster_certificates, company, brm_requests cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, steuernummer, bundesland, email) values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', '198/113/10010', 'BY', 'max@example.com')`;
     await taxpayer.saveTaxpayer(actor, { a: person("65929970489", "Max"), b: person("86095742719", "Erika"), veranlagung: "zusammen" });
     await sql`insert into elster_certificates (filename, ciphertext) values ('test.pfx', ${crypto.encrypt(new Uint8Array([1]))})`;
@@ -98,8 +106,19 @@ describe.skipIf(!testDatabaseUrl)("Berechtigung zum Belegabruf (Postgres)", () =
     expect(row).toMatchObject({ ok: false, code: 371015211 });
   });
 
+  it("GmbH und UG: keine Abrufberechtigung für den Ehegatten, es gibt keine Zusammenveranlagung", async () => {
+    await sql`update company set rechtsform = 'gmbh'`;
+    const sent: string[] = [];
+    await expect(brm.requestBerechtigung(actor, recordingClient(sent), { kind: "test", pin: "1", gueltigBis: "2028-12-31" })).rejects.toThrow(
+      /nur im Einzelunternehmen/,
+    );
+    expect(sent).toEqual([]);
+  });
+
   it("braucht Angaben zum Ehegatten und für den Echtabruf ERiC", async () => {
-    await expect(brm.requestBerechtigung(actor, new EricGeprueftClient(), { kind: "send", pin: "1", herstellerId: "12345", gueltigBis: "2028-12-31" })).rejects.toThrow(/Ohne ERiC/);
+    await expect(
+      brm.requestBerechtigung(actor, new EricGeprueftClient(), { kind: "send", pin: "1", herstellerId: "12345", gueltigBis: "2028-12-31" }),
+    ).rejects.toThrow(/Ohne ERiC/);
     await taxpayer.saveTaxpayer(actor, { a: person("65929970489", "Max") });
     await expect(brm.requestBerechtigung(actor, recordingClient(), { kind: "test", pin: "1", gueltigBis: "2028-12-31" })).rejects.toThrow(/Ehegatten/);
     expect(brm.defaultGueltigBis("2026-10-03")).toBe("2028-12-31");

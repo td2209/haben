@@ -3,7 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import { loadCompany } from "../stammdaten/index.ts";
 import { withActor } from "../../db/actor.ts";
 import { db, schema } from "../../db/index.ts";
-import { FinanzamtError } from "./finanzamt.ts";
+import { FinanzamtError, nurEinzelunternehmen } from "./finanzamt.ts";
 import { prepareAbruf } from "../elster/index.ts";
 
 export interface VastFetchOptions {
@@ -26,15 +26,15 @@ export interface VastFetchSummary {
   fehler: { id: string; fehler: string }[];
 }
 
-
 /**
  * Holt die Belege der vorausgefüllten Steuererklärung (Lohnsteuerbescheinigung, Rentenbezüge, Beiträge …)
  * für eine Person und ein Jahr von ELSTER, entschlüsselt und speichert sie. Bereits gespeicherte Belege
  * bleiben, wie sie sind; ein berichtigter Beleg kommt bei ELSTER mit neuer ID.
  */
 export async function fetchVastBelege(actor: string, client: ElsterClient, options: VastFetchOptions): Promise<VastFetchSummary> {
-  const { test, herstellerId, pfx, pin } = await prepareAbruf(client, options);
   const company = await loadCompany();
+  nurEinzelunternehmen(company.rechtsform, "Belege der vorausgefüllten Steuererklärung");
+  const { test, herstellerId, pfx, pin } = await prepareAbruf(client, options);
   const person = company.taxpayer[options.person];
   if (!person) {
     throw new FinanzamtError(
@@ -43,11 +43,7 @@ export async function fetchVastBelege(actor: string, client: ElsterClient, optio
   }
   const datenlieferant = `${company.taxpayer.a?.vorname ?? ""} ${company.taxpayer.a?.name ?? ""}`.trim() || company.name || "Haben";
 
-  const result = await client.fetchBelege(
-    { idnr: person.idnr, veranlagungsjahr: options.year, datenlieferant, herstellerId, test },
-    pfx,
-    pin,
-  );
+  const result = await client.fetchBelege({ idnr: person.idnr, veranlagungsjahr: options.year, datenlieferant, herstellerId, test }, pfx, pin);
   const refs = new Map(result.liste.map((ref) => [ref.id, ref]));
   const fehler = result.belege.flatMap((b) => (b.fehler ? [{ id: b.id, fehler: b.fehler }] : []));
 

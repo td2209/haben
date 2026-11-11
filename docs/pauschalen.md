@@ -1,3 +1,10 @@
+---
+title: "Pauschalen ohne Beleg: Homeoffice, Fahrten, Verpflegung"
+description: >-
+  Betriebsausgaben ohne Rechnung buchen: Homeoffice-Pauschale, Fahrten mit dem eigenen Fahrzeug,
+  Verpflegungsmehraufwand und weitere Pauschalen.
+---
+
 # Pauschalen ohne Beleg
 
 Unter **Pauschalen** trägst du Betriebsausgaben ein, für die es keine Rechnung gibt:
@@ -6,7 +13,7 @@ Unter **Pauschalen** trägst du Betriebsausgaben ein, für die es keine Rechnung
 - Fahrten mit dem eigenen Fahrzeug,
 - Verpflegungsmehraufwand auf Geschäftsreisen.
 
-Haben bucht jede Pauschale sofort als Ausgabe an Privateinlage, weil du sie privat getragen hast. In der [Anlage EÜR](jahreserklaerung.md) landet sie in der passenden Zeile.
+Pauschalen gibt es nur im Einzelunternehmen; bei einer GmbH oder UG fehlen sie im Menü (siehe [Rechtsform](einrichtung.md#rechtsform-einzelunternehmen-gmbh-oder-ug)). Haben bucht jede Pauschale sofort als Ausgabe an Privateinlage, weil du sie privat getragen hast. In der [Anlage EÜR](jahreserklaerung.md) landet sie in der passenden Zeile.
 
 Halte fest, wann du wo warst, zum Beispiel im Kalender oder in einer Fahrtenliste. Das Finanzamt kann danach fragen. Die Eingabe in Haben ist der Eigenbeleg.
 
@@ -62,7 +69,7 @@ Hat der Kunde oder das Hotel eine Mahlzeit gestellt, kürzt Haben vom Satz für 
 | Mittagessen | 40 % | 11,20 € |
 | Abendessen | 40 % | 11,20 € |
 
-Die Pauschale wird dabei nie negativ.
+Die Pauschale wird dabei nie negativ; bleibt nach der Kürzung nichts übrig, lehnt Haben die Zeile ab.
 
 - Du trägst eine Zeile je Reisetag ein.
 - Am selben Ort gibt es die Pauschale nur in den ersten drei Monaten.
@@ -86,4 +93,4 @@ Eine falsche Eingabe hebst du mit **Stornieren** auf:
 - Das Original bleibt durchgestrichen stehen.
 - Danach trägst du die Pauschale richtig neu ein.
 
-Ändern oder Löschen geht nicht (GoBD). Im [Jahresarchiv](auswertungen.md) stehen die Pauschalen mit allen Angaben in `pauschalen/pauschalen.csv`.
+Ändern oder Löschen geht nicht (GoBD). Ein Datum bzw. bei Homeoffice ein Monat in der Zukunft ist nicht möglich. Im [Jahresarchiv](auswertungen.md) stehen die Pauschalen mit allen Angaben in `pauschalen/pauschalen.csv`.

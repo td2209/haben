@@ -13,16 +13,27 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppAusschuettungenRouteImport } from './routes/_app/ausschuettungen'
 import { Route as AppAuswertungenRouteImport } from './routes/_app/auswertungen'
 import { Route as AppBankRouteImport } from './routes/_app/bank'
-import { Route as AppBuchungenRouteImport } from './routes/_app/buchungen'
+import { Route as AppCsvImportRouteImport } from './routes/_app/csv-import'
+import { Route as AppDarlehenRouteImport } from './routes/_app/darlehen'
 import { Route as AppEinstellungenRouteImport } from './routes/_app/einstellungen'
 import { Route as AppFinanzamtRouteImport } from './routes/_app/finanzamt'
 import { Route as AppFristenRouteImport } from './routes/_app/fristen'
 import { Route as AppKasseRouteImport } from './routes/_app/kasse'
+import { Route as AppLastschriftenRouteImport } from './routes/_app/lastschriften'
 import { Route as AppPauschalenRouteImport } from './routes/_app/pauschalen'
+import { Route as AppSteuerberatungRouteImport } from './routes/_app/steuerberatung'
+import { Route as AppSvMeldeportalRouteImport } from './routes/_app/sv-meldeportal'
+import { Route as AppUeberweisungenRouteImport } from './routes/_app/ueberweisungen'
+import { Route as ApiBelegvorlagenRouteImport } from './routes/api/belegvorlagen'
+import { Route as ApiBriefpapierRouteImport } from './routes/api/briefpapier'
 import { Route as ApiLogoRouteImport } from './routes/api/logo'
 import { Route as ApiMcpRouteImport } from './routes/api/mcp'
+import { Route as EinladungTokenRouteImport } from './routes/einladung.$token'
+import { Route as AppAbschlussIndexRouteImport } from './routes/_app/abschluss/index'
+import { Route as AppAbschlussJahrRouteImport } from './routes/_app/abschluss/$jahr'
 import { Route as AppAngeboteIndexRouteImport } from './routes/_app/angebote/index'
 import { Route as AppAngeboteIdRouteImport } from './routes/_app/angebote/$id'
 import { Route as AppAngeboteNeuRouteImport } from './routes/_app/angebote/neu'
@@ -33,6 +44,11 @@ import { Route as AppArchivIndexRouteImport } from './routes/_app/archiv/index'
 import { Route as AppArtikelIndexRouteImport } from './routes/_app/artikel/index'
 import { Route as AppBelegeIndexRouteImport } from './routes/_app/belege/index'
 import { Route as AppBelegeIdRouteImport } from './routes/_app/belege/$id'
+import { Route as AppBuchungenIndexRouteImport } from './routes/_app/buchungen/index'
+import { Route as AppBuchungenNeuRouteImport } from './routes/_app/buchungen/neu'
+import { Route as AppDauerbelegeIndexRouteImport } from './routes/_app/dauerbelege/index'
+import { Route as AppDauerbelegeIdRouteImport } from './routes/_app/dauerbelege/$id'
+import { Route as AppDauerbelegeNeuRouteImport } from './routes/_app/dauerbelege/neu'
 import { Route as AppJahreserklaerungIndexRouteImport } from './routes/_app/jahreserklaerung/index'
 import { Route as AppJahreserklaerungJahrRouteImport } from './routes/_app/jahreserklaerung/$jahr'
 import { Route as AppKontakteIndexRouteImport } from './routes/_app/kontakte/index'
@@ -40,13 +56,17 @@ import { Route as AppKontakteIdRouteImport } from './routes/_app/kontakte/$id'
 import { Route as AppKontakteNeuRouteImport } from './routes/_app/kontakte/neu'
 import { Route as AppKontenIndexRouteImport } from './routes/_app/konten/index'
 import { Route as AppKontenKontoRouteImport } from './routes/_app/konten/$konto'
+import { Route as AppLohnIndexRouteImport } from './routes/_app/lohn/index'
 import { Route as AppRechnungenIndexRouteImport } from './routes/_app/rechnungen/index'
 import { Route as AppRechnungenIdRouteImport } from './routes/_app/rechnungen/$id'
 import { Route as AppRechnungenNeuRouteImport } from './routes/_app/rechnungen/neu'
+import { Route as AppSeitenIdRouteImport } from './routes/_app/seiten/$id'
+import { Route as AppTextbausteineIndexRouteImport } from './routes/_app/textbausteine/index'
 import { Route as AppUmsatzsteuerIndexRouteImport } from './routes/_app/umsatzsteuer/index'
 import { Route as AppUmsatzsteuerZeitraumRouteImport } from './routes/_app/umsatzsteuer/$zeitraum'
 import { Route as ApiAltbelegIdRouteImport } from './routes/api/altbeleg/$id'
 import { Route as ApiAngebotIdRouteImport } from './routes/api/angebot/$id'
+import { Route as ApiAngebotsanhangIdRouteImport } from './routes/api/angebotsanhang/$id'
 import { Route as ApiArchivIdRouteImport } from './routes/api/archiv/$id'
 import { Route as ApiAuswertungenJahrRouteImport } from './routes/api/auswertungen/$jahr'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -54,22 +74,46 @@ import { Route as ApiBankCallbackRouteImport } from './routes/api/bank/callback'
 import { Route as ApiBelegIdRouteImport } from './routes/api/beleg/$id'
 import { Route as ApiBelegeTeilenRouteImport } from './routes/api/belege/teilen'
 import { Route as ApiDatevJahrRouteImport } from './routes/api/datev/$jahr'
+import { Route as ApiDauerbelegIdRouteImport } from './routes/api/dauerbeleg/$id'
 import { Route as ApiExportJahrRouteImport } from './routes/api/export/$jahr'
 import { Route as ApiFristenKalenderRouteImport } from './routes/api/fristen/kalender'
+import { Route as ApiHinterlegungJahrRouteImport } from './routes/api/hinterlegung/$jahr'
 import { Route as ApiKasseJahrRouteImport } from './routes/api/kasse/$jahr'
 import { Route as ApiKontenJahrRouteImport } from './routes/api/konten/$jahr'
+import { Route as ApiLastschriftIdRouteImport } from './routes/api/lastschrift/$id'
 import { Route as ApiMahnungIdRouteImport } from './routes/api/mahnung/$id'
+import { Route as ApiMandatIdRouteImport } from './routes/api/mandat/$id'
 import { Route as ApiPostfachIdRouteImport } from './routes/api/postfach/$id'
 import { Route as ApiProtokollIdRouteImport } from './routes/api/protokoll/$id'
+import { Route as ApiRechnungsanhangIdRouteImport } from './routes/api/rechnungsanhang/$id'
+import { Route as ApiStandardanhangIdRouteImport } from './routes/api/standardanhang/$id'
+import { Route as ApiSvProtokollIdRouteImport } from './routes/api/sv-protokoll/$id'
+import { Route as ApiUeberweisungIdRouteImport } from './routes/api/ueberweisung/$id'
+import { Route as ApiUstvaIdRouteImport } from './routes/api/ustva/$id'
+import { Route as ApiV1SplatRouteImport } from './routes/api/v1/$'
 import { Route as ApiVastIdRouteImport } from './routes/api/vast/$id'
+import { Route as AppArchivAuftragIdRouteImport } from './routes/_app/archiv/auftrag.$id'
 import { Route as AppArchivBelegIdRouteImport } from './routes/_app/archiv/beleg.$id'
+import { Route as AppLohnAnmeldungIndexRouteImport } from './routes/_app/lohn/anmeldung.index'
+import { Route as AppLohnAnmeldungZeitraumRouteImport } from './routes/_app/lohn/anmeldung.$zeitraum'
+import { Route as AppLohnBescheinigungJahrRouteImport } from './routes/_app/lohn/bescheinigung.$jahr'
+import { Route as AppLohnMitarbeiterIdRouteImport } from './routes/_app/lohn/mitarbeiter/$id'
+import { Route as AppLohnMitarbeiterNeuRouteImport } from './routes/_app/lohn/mitarbeiter/neu'
 import { Route as AppRechnungenMahnwesenIndexRouteImport } from './routes/_app/rechnungen/mahnwesen/index'
 import { Route as AppRechnungenMahnwesenIdRouteImport } from './routes/_app/rechnungen/mahnwesen/$id'
 import { Route as AppRechnungenWiederkehrendIndexRouteImport } from './routes/_app/rechnungen/wiederkehrend/index'
 import { Route as AppRechnungenWiederkehrendIdRouteImport } from './routes/_app/rechnungen/wiederkehrend/$id'
 import { Route as AppRechnungenWiederkehrendNeuRouteImport } from './routes/_app/rechnungen/wiederkehrend/neu'
+import { Route as AppUmsatzsteuerZmQuartalRouteImport } from './routes/_app/umsatzsteuer/zm.$quartal'
+import { Route as ApiArchivAuftragsdateiIdRouteImport } from './routes/api/archiv/auftragsdatei.$id'
 import { Route as ApiDokumentArtIdRouteImport } from './routes/api/dokument/$art.$id'
+import { Route as ApiEntwurfAngebotIdRouteImport } from './routes/api/entwurf/angebot.$id'
+import { Route as ApiEntwurfRechnungIdRouteImport } from './routes/api/entwurf/rechnung.$id'
+import { Route as ApiLohnAbrechnungIdRouteImport } from './routes/api/lohn/abrechnung.$id'
 import { Route as ApiRechnungIdDateiRouteImport } from './routes/api/rechnung/$id.$datei'
+import { Route as ApiSteuerbescheinigungIdNrRouteImport } from './routes/api/steuerbescheinigung/$id.$nr'
+import { Route as ApiLohnBescheinigungIdJahrRouteImport } from './routes/api/lohn/bescheinigung.$id.$jahr'
+import { Route as ApiLohnLohnkontoIdJahrFormatRouteImport } from './routes/api/lohn/lohnkonto.$id.$jahr.$format'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -90,6 +134,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAusschuettungenRoute = AppAusschuettungenRouteImport.update({
+  id: '/ausschuettungen',
+  path: '/ausschuettungen',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAuswertungenRoute = AppAuswertungenRouteImport.update({
   id: '/auswertungen',
   path: '/auswertungen',
@@ -100,9 +149,14 @@ const AppBankRoute = AppBankRouteImport.update({
   path: '/bank',
   getParentRoute: () => AppRoute,
 } as any)
-const AppBuchungenRoute = AppBuchungenRouteImport.update({
-  id: '/buchungen',
-  path: '/buchungen',
+const AppCsvImportRoute = AppCsvImportRouteImport.update({
+  id: '/csv-import',
+  path: '/csv-import',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDarlehenRoute = AppDarlehenRouteImport.update({
+  id: '/darlehen',
+  path: '/darlehen',
   getParentRoute: () => AppRoute,
 } as any)
 const AppEinstellungenRoute = AppEinstellungenRouteImport.update({
@@ -125,10 +179,40 @@ const AppKasseRoute = AppKasseRouteImport.update({
   path: '/kasse',
   getParentRoute: () => AppRoute,
 } as any)
+const AppLastschriftenRoute = AppLastschriftenRouteImport.update({
+  id: '/lastschriften',
+  path: '/lastschriften',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppPauschalenRoute = AppPauschalenRouteImport.update({
   id: '/pauschalen',
   path: '/pauschalen',
   getParentRoute: () => AppRoute,
+} as any)
+const AppSteuerberatungRoute = AppSteuerberatungRouteImport.update({
+  id: '/steuerberatung',
+  path: '/steuerberatung',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSvMeldeportalRoute = AppSvMeldeportalRouteImport.update({
+  id: '/sv-meldeportal',
+  path: '/sv-meldeportal',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUeberweisungenRoute = AppUeberweisungenRouteImport.update({
+  id: '/ueberweisungen',
+  path: '/ueberweisungen',
+  getParentRoute: () => AppRoute,
+} as any)
+const ApiBelegvorlagenRoute = ApiBelegvorlagenRouteImport.update({
+  id: '/api/belegvorlagen',
+  path: '/api/belegvorlagen',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBriefpapierRoute = ApiBriefpapierRouteImport.update({
+  id: '/api/briefpapier',
+  path: '/api/briefpapier',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiLogoRoute = ApiLogoRouteImport.update({
   id: '/api/logo',
@@ -139,6 +223,21 @@ const ApiMcpRoute = ApiMcpRouteImport.update({
   id: '/api/mcp',
   path: '/api/mcp',
   getParentRoute: () => rootRouteImport,
+} as any)
+const EinladungTokenRoute = EinladungTokenRouteImport.update({
+  id: '/einladung/$token',
+  path: '/einladung/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppAbschlussIndexRoute = AppAbschlussIndexRouteImport.update({
+  id: '/abschluss/',
+  path: '/abschluss/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAbschlussJahrRoute = AppAbschlussJahrRouteImport.update({
+  id: '/abschluss/$jahr',
+  path: '/abschluss/$jahr',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppAngeboteIndexRoute = AppAngeboteIndexRouteImport.update({
   id: '/angebote/',
@@ -190,6 +289,31 @@ const AppBelegeIdRoute = AppBelegeIdRouteImport.update({
   path: '/belege/$id',
   getParentRoute: () => AppRoute,
 } as any)
+const AppBuchungenIndexRoute = AppBuchungenIndexRouteImport.update({
+  id: '/buchungen/',
+  path: '/buchungen/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBuchungenNeuRoute = AppBuchungenNeuRouteImport.update({
+  id: '/buchungen/neu',
+  path: '/buchungen/neu',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDauerbelegeIndexRoute = AppDauerbelegeIndexRouteImport.update({
+  id: '/dauerbelege/',
+  path: '/dauerbelege/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDauerbelegeIdRoute = AppDauerbelegeIdRouteImport.update({
+  id: '/dauerbelege/$id',
+  path: '/dauerbelege/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDauerbelegeNeuRoute = AppDauerbelegeNeuRouteImport.update({
+  id: '/dauerbelege/neu',
+  path: '/dauerbelege/neu',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppJahreserklaerungIndexRoute =
   AppJahreserklaerungIndexRouteImport.update({
     id: '/jahreserklaerung/',
@@ -226,6 +350,11 @@ const AppKontenKontoRoute = AppKontenKontoRouteImport.update({
   path: '/konten/$konto',
   getParentRoute: () => AppRoute,
 } as any)
+const AppLohnIndexRoute = AppLohnIndexRouteImport.update({
+  id: '/lohn/',
+  path: '/lohn/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppRechnungenIndexRoute = AppRechnungenIndexRouteImport.update({
   id: '/rechnungen/',
   path: '/rechnungen/',
@@ -239,6 +368,16 @@ const AppRechnungenIdRoute = AppRechnungenIdRouteImport.update({
 const AppRechnungenNeuRoute = AppRechnungenNeuRouteImport.update({
   id: '/rechnungen/neu',
   path: '/rechnungen/neu',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSeitenIdRoute = AppSeitenIdRouteImport.update({
+  id: '/seiten/$id',
+  path: '/seiten/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTextbausteineIndexRoute = AppTextbausteineIndexRouteImport.update({
+  id: '/textbausteine/',
+  path: '/textbausteine/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppUmsatzsteuerIndexRoute = AppUmsatzsteuerIndexRouteImport.update({
@@ -259,6 +398,11 @@ const ApiAltbelegIdRoute = ApiAltbelegIdRouteImport.update({
 const ApiAngebotIdRoute = ApiAngebotIdRouteImport.update({
   id: '/api/angebot/$id',
   path: '/api/angebot/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAngebotsanhangIdRoute = ApiAngebotsanhangIdRouteImport.update({
+  id: '/api/angebotsanhang/$id',
+  path: '/api/angebotsanhang/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiArchivIdRoute = ApiArchivIdRouteImport.update({
@@ -296,6 +440,11 @@ const ApiDatevJahrRoute = ApiDatevJahrRouteImport.update({
   path: '/api/datev/$jahr',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDauerbelegIdRoute = ApiDauerbelegIdRouteImport.update({
+  id: '/api/dauerbeleg/$id',
+  path: '/api/dauerbeleg/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiExportJahrRoute = ApiExportJahrRouteImport.update({
   id: '/api/export/$jahr',
   path: '/api/export/$jahr',
@@ -304,6 +453,11 @@ const ApiExportJahrRoute = ApiExportJahrRouteImport.update({
 const ApiFristenKalenderRoute = ApiFristenKalenderRouteImport.update({
   id: '/api/fristen/kalender',
   path: '/api/fristen/kalender',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHinterlegungJahrRoute = ApiHinterlegungJahrRouteImport.update({
+  id: '/api/hinterlegung/$jahr',
+  path: '/api/hinterlegung/$jahr',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiKasseJahrRoute = ApiKasseJahrRouteImport.update({
@@ -316,9 +470,19 @@ const ApiKontenJahrRoute = ApiKontenJahrRouteImport.update({
   path: '/api/konten/$jahr',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiLastschriftIdRoute = ApiLastschriftIdRouteImport.update({
+  id: '/api/lastschrift/$id',
+  path: '/api/lastschrift/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMahnungIdRoute = ApiMahnungIdRouteImport.update({
   id: '/api/mahnung/$id',
   path: '/api/mahnung/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMandatIdRoute = ApiMandatIdRouteImport.update({
+  id: '/api/mandat/$id',
+  path: '/api/mandat/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPostfachIdRoute = ApiPostfachIdRouteImport.update({
@@ -331,14 +495,76 @@ const ApiProtokollIdRoute = ApiProtokollIdRouteImport.update({
   path: '/api/protokoll/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiRechnungsanhangIdRoute = ApiRechnungsanhangIdRouteImport.update({
+  id: '/api/rechnungsanhang/$id',
+  path: '/api/rechnungsanhang/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStandardanhangIdRoute = ApiStandardanhangIdRouteImport.update({
+  id: '/api/standardanhang/$id',
+  path: '/api/standardanhang/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSvProtokollIdRoute = ApiSvProtokollIdRouteImport.update({
+  id: '/api/sv-protokoll/$id',
+  path: '/api/sv-protokoll/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUeberweisungIdRoute = ApiUeberweisungIdRouteImport.update({
+  id: '/api/ueberweisung/$id',
+  path: '/api/ueberweisung/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUstvaIdRoute = ApiUstvaIdRouteImport.update({
+  id: '/api/ustva/$id',
+  path: '/api/ustva/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1SplatRoute = ApiV1SplatRouteImport.update({
+  id: '/api/v1/$',
+  path: '/api/v1/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiVastIdRoute = ApiVastIdRouteImport.update({
   id: '/api/vast/$id',
   path: '/api/vast/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppArchivAuftragIdRoute = AppArchivAuftragIdRouteImport.update({
+  id: '/archiv/auftrag/$id',
+  path: '/archiv/auftrag/$id',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppArchivBelegIdRoute = AppArchivBelegIdRouteImport.update({
   id: '/archiv/beleg/$id',
   path: '/archiv/beleg/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLohnAnmeldungIndexRoute = AppLohnAnmeldungIndexRouteImport.update({
+  id: '/lohn/anmeldung/',
+  path: '/lohn/anmeldung/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLohnAnmeldungZeitraumRoute =
+  AppLohnAnmeldungZeitraumRouteImport.update({
+    id: '/lohn/anmeldung/$zeitraum',
+    path: '/lohn/anmeldung/$zeitraum',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppLohnBescheinigungJahrRoute =
+  AppLohnBescheinigungJahrRouteImport.update({
+    id: '/lohn/bescheinigung/$jahr',
+    path: '/lohn/bescheinigung/$jahr',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppLohnMitarbeiterIdRoute = AppLohnMitarbeiterIdRouteImport.update({
+  id: '/lohn/mitarbeiter/$id',
+  path: '/lohn/mitarbeiter/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLohnMitarbeiterNeuRoute = AppLohnMitarbeiterNeuRouteImport.update({
+  id: '/lohn/mitarbeiter/neu',
+  path: '/lohn/mitarbeiter/neu',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRechnungenMahnwesenIndexRoute =
@@ -371,9 +597,36 @@ const AppRechnungenWiederkehrendNeuRoute =
     path: '/rechnungen/wiederkehrend/neu',
     getParentRoute: () => AppRoute,
   } as any)
+const AppUmsatzsteuerZmQuartalRoute =
+  AppUmsatzsteuerZmQuartalRouteImport.update({
+    id: '/umsatzsteuer/zm/$quartal',
+    path: '/umsatzsteuer/zm/$quartal',
+    getParentRoute: () => AppRoute,
+  } as any)
+const ApiArchivAuftragsdateiIdRoute =
+  ApiArchivAuftragsdateiIdRouteImport.update({
+    id: '/api/archiv/auftragsdatei/$id',
+    path: '/api/archiv/auftragsdatei/$id',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiDokumentArtIdRoute = ApiDokumentArtIdRouteImport.update({
   id: '/api/dokument/$art/$id',
   path: '/api/dokument/$art/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiEntwurfAngebotIdRoute = ApiEntwurfAngebotIdRouteImport.update({
+  id: '/api/entwurf/angebot/$id',
+  path: '/api/entwurf/angebot/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiEntwurfRechnungIdRoute = ApiEntwurfRechnungIdRouteImport.update({
+  id: '/api/entwurf/rechnung/$id',
+  path: '/api/entwurf/rechnung/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLohnAbrechnungIdRoute = ApiLohnAbrechnungIdRouteImport.update({
+  id: '/api/lohn/abrechnung/$id',
+  path: '/api/lohn/abrechnung/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiRechnungIdDateiRoute = ApiRechnungIdDateiRouteImport.update({
@@ -381,35 +634,68 @@ const ApiRechnungIdDateiRoute = ApiRechnungIdDateiRouteImport.update({
   path: '/api/rechnung/$id/$datei',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSteuerbescheinigungIdNrRoute =
+  ApiSteuerbescheinigungIdNrRouteImport.update({
+    id: '/api/steuerbescheinigung/$id/$nr',
+    path: '/api/steuerbescheinigung/$id/$nr',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiLohnBescheinigungIdJahrRoute =
+  ApiLohnBescheinigungIdJahrRouteImport.update({
+    id: '/api/lohn/bescheinigung/$id/$jahr',
+    path: '/api/lohn/bescheinigung/$id/$jahr',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiLohnLohnkontoIdJahrFormatRoute =
+  ApiLohnLohnkontoIdJahrFormatRouteImport.update({
+    id: '/api/lohn/lohnkonto/$id/$jahr/$format',
+    path: '/api/lohn/lohnkonto/$id/$jahr/$format',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/ausschuettungen': typeof AppAusschuettungenRoute
   '/auswertungen': typeof AppAuswertungenRoute
   '/bank': typeof AppBankRoute
-  '/buchungen': typeof AppBuchungenRoute
+  '/csv-import': typeof AppCsvImportRoute
+  '/darlehen': typeof AppDarlehenRoute
   '/einstellungen': typeof AppEinstellungenRoute
   '/finanzamt': typeof AppFinanzamtRoute
   '/fristen': typeof AppFristenRoute
   '/kasse': typeof AppKasseRoute
+  '/lastschriften': typeof AppLastschriftenRoute
   '/pauschalen': typeof AppPauschalenRoute
+  '/steuerberatung': typeof AppSteuerberatungRoute
+  '/sv-meldeportal': typeof AppSvMeldeportalRoute
+  '/ueberweisungen': typeof AppUeberweisungenRoute
+  '/api/belegvorlagen': typeof ApiBelegvorlagenRoute
+  '/api/briefpapier': typeof ApiBriefpapierRoute
   '/api/logo': typeof ApiLogoRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/einladung/$token': typeof EinladungTokenRoute
+  '/abschluss/$jahr': typeof AppAbschlussJahrRoute
   '/angebote/$id': typeof AppAngeboteIdRoute
   '/angebote/neu': typeof AppAngeboteNeuRoute
   '/anlagen/$id': typeof AppAnlagenIdRoute
   '/anlagen/neu': typeof AppAnlagenNeuRoute
   '/belege/$id': typeof AppBelegeIdRoute
+  '/buchungen/neu': typeof AppBuchungenNeuRoute
+  '/dauerbelege/$id': typeof AppDauerbelegeIdRoute
+  '/dauerbelege/neu': typeof AppDauerbelegeNeuRoute
   '/jahreserklaerung/$jahr': typeof AppJahreserklaerungJahrRoute
   '/kontakte/$id': typeof AppKontakteIdRoute
   '/kontakte/neu': typeof AppKontakteNeuRoute
   '/konten/$konto': typeof AppKontenKontoRoute
   '/rechnungen/$id': typeof AppRechnungenIdRoute
   '/rechnungen/neu': typeof AppRechnungenNeuRoute
+  '/seiten/$id': typeof AppSeitenIdRoute
   '/umsatzsteuer/$zeitraum': typeof AppUmsatzsteuerZeitraumRoute
   '/api/altbeleg/$id': typeof ApiAltbelegIdRoute
   '/api/angebot/$id': typeof ApiAngebotIdRoute
+  '/api/angebotsanhang/$id': typeof ApiAngebotsanhangIdRoute
   '/api/archiv/$id': typeof ApiArchivIdRoute
   '/api/auswertungen/$jahr': typeof ApiAuswertungenJahrRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -417,61 +703,105 @@ export interface FileRoutesByFullPath {
   '/api/beleg/$id': typeof ApiBelegIdRoute
   '/api/belege/teilen': typeof ApiBelegeTeilenRoute
   '/api/datev/$jahr': typeof ApiDatevJahrRoute
+  '/api/dauerbeleg/$id': typeof ApiDauerbelegIdRoute
   '/api/export/$jahr': typeof ApiExportJahrRoute
   '/api/fristen/kalender': typeof ApiFristenKalenderRoute
+  '/api/hinterlegung/$jahr': typeof ApiHinterlegungJahrRoute
   '/api/kasse/$jahr': typeof ApiKasseJahrRoute
   '/api/konten/$jahr': typeof ApiKontenJahrRoute
+  '/api/lastschrift/$id': typeof ApiLastschriftIdRoute
   '/api/mahnung/$id': typeof ApiMahnungIdRoute
+  '/api/mandat/$id': typeof ApiMandatIdRoute
   '/api/postfach/$id': typeof ApiPostfachIdRoute
   '/api/protokoll/$id': typeof ApiProtokollIdRoute
+  '/api/rechnungsanhang/$id': typeof ApiRechnungsanhangIdRoute
+  '/api/standardanhang/$id': typeof ApiStandardanhangIdRoute
+  '/api/sv-protokoll/$id': typeof ApiSvProtokollIdRoute
+  '/api/ueberweisung/$id': typeof ApiUeberweisungIdRoute
+  '/api/ustva/$id': typeof ApiUstvaIdRoute
+  '/api/v1/$': typeof ApiV1SplatRoute
   '/api/vast/$id': typeof ApiVastIdRoute
+  '/abschluss/': typeof AppAbschlussIndexRoute
   '/angebote/': typeof AppAngeboteIndexRoute
   '/anlagen/': typeof AppAnlagenIndexRoute
   '/archiv/': typeof AppArchivIndexRoute
   '/artikel/': typeof AppArtikelIndexRoute
   '/belege/': typeof AppBelegeIndexRoute
+  '/buchungen/': typeof AppBuchungenIndexRoute
+  '/dauerbelege/': typeof AppDauerbelegeIndexRoute
   '/jahreserklaerung/': typeof AppJahreserklaerungIndexRoute
   '/kontakte/': typeof AppKontakteIndexRoute
   '/konten/': typeof AppKontenIndexRoute
+  '/lohn/': typeof AppLohnIndexRoute
   '/rechnungen/': typeof AppRechnungenIndexRoute
+  '/textbausteine/': typeof AppTextbausteineIndexRoute
   '/umsatzsteuer/': typeof AppUmsatzsteuerIndexRoute
+  '/archiv/auftrag/$id': typeof AppArchivAuftragIdRoute
   '/archiv/beleg/$id': typeof AppArchivBelegIdRoute
+  '/lohn/anmeldung/$zeitraum': typeof AppLohnAnmeldungZeitraumRoute
+  '/lohn/bescheinigung/$jahr': typeof AppLohnBescheinigungJahrRoute
+  '/lohn/mitarbeiter/$id': typeof AppLohnMitarbeiterIdRoute
+  '/lohn/mitarbeiter/neu': typeof AppLohnMitarbeiterNeuRoute
   '/rechnungen/mahnwesen/$id': typeof AppRechnungenMahnwesenIdRoute
   '/rechnungen/wiederkehrend/$id': typeof AppRechnungenWiederkehrendIdRoute
   '/rechnungen/wiederkehrend/neu': typeof AppRechnungenWiederkehrendNeuRoute
+  '/umsatzsteuer/zm/$quartal': typeof AppUmsatzsteuerZmQuartalRoute
+  '/api/archiv/auftragsdatei/$id': typeof ApiArchivAuftragsdateiIdRoute
   '/api/dokument/$art/$id': typeof ApiDokumentArtIdRoute
+  '/api/entwurf/angebot/$id': typeof ApiEntwurfAngebotIdRoute
+  '/api/entwurf/rechnung/$id': typeof ApiEntwurfRechnungIdRoute
+  '/api/lohn/abrechnung/$id': typeof ApiLohnAbrechnungIdRoute
   '/api/rechnung/$id/$datei': typeof ApiRechnungIdDateiRoute
+  '/api/steuerbescheinigung/$id/$nr': typeof ApiSteuerbescheinigungIdNrRoute
+  '/lohn/anmeldung/': typeof AppLohnAnmeldungIndexRoute
   '/rechnungen/mahnwesen/': typeof AppRechnungenMahnwesenIndexRoute
   '/rechnungen/wiederkehrend/': typeof AppRechnungenWiederkehrendIndexRoute
+  '/api/lohn/bescheinigung/$id/$jahr': typeof ApiLohnBescheinigungIdJahrRoute
+  '/api/lohn/lohnkonto/$id/$jahr/$format': typeof ApiLohnLohnkontoIdJahrFormatRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/ausschuettungen': typeof AppAusschuettungenRoute
   '/auswertungen': typeof AppAuswertungenRoute
   '/bank': typeof AppBankRoute
-  '/buchungen': typeof AppBuchungenRoute
+  '/csv-import': typeof AppCsvImportRoute
+  '/darlehen': typeof AppDarlehenRoute
   '/einstellungen': typeof AppEinstellungenRoute
   '/finanzamt': typeof AppFinanzamtRoute
   '/fristen': typeof AppFristenRoute
   '/kasse': typeof AppKasseRoute
+  '/lastschriften': typeof AppLastschriftenRoute
   '/pauschalen': typeof AppPauschalenRoute
+  '/steuerberatung': typeof AppSteuerberatungRoute
+  '/sv-meldeportal': typeof AppSvMeldeportalRoute
+  '/ueberweisungen': typeof AppUeberweisungenRoute
+  '/api/belegvorlagen': typeof ApiBelegvorlagenRoute
+  '/api/briefpapier': typeof ApiBriefpapierRoute
   '/api/logo': typeof ApiLogoRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/einladung/$token': typeof EinladungTokenRoute
   '/': typeof AppIndexRoute
+  '/abschluss/$jahr': typeof AppAbschlussJahrRoute
   '/angebote/$id': typeof AppAngeboteIdRoute
   '/angebote/neu': typeof AppAngeboteNeuRoute
   '/anlagen/$id': typeof AppAnlagenIdRoute
   '/anlagen/neu': typeof AppAnlagenNeuRoute
   '/belege/$id': typeof AppBelegeIdRoute
+  '/buchungen/neu': typeof AppBuchungenNeuRoute
+  '/dauerbelege/$id': typeof AppDauerbelegeIdRoute
+  '/dauerbelege/neu': typeof AppDauerbelegeNeuRoute
   '/jahreserklaerung/$jahr': typeof AppJahreserklaerungJahrRoute
   '/kontakte/$id': typeof AppKontakteIdRoute
   '/kontakte/neu': typeof AppKontakteNeuRoute
   '/konten/$konto': typeof AppKontenKontoRoute
   '/rechnungen/$id': typeof AppRechnungenIdRoute
   '/rechnungen/neu': typeof AppRechnungenNeuRoute
+  '/seiten/$id': typeof AppSeitenIdRoute
   '/umsatzsteuer/$zeitraum': typeof AppUmsatzsteuerZeitraumRoute
   '/api/altbeleg/$id': typeof ApiAltbelegIdRoute
   '/api/angebot/$id': typeof ApiAngebotIdRoute
+  '/api/angebotsanhang/$id': typeof ApiAngebotsanhangIdRoute
   '/api/archiv/$id': typeof ApiArchivIdRoute
   '/api/auswertungen/$jahr': typeof ApiAuswertungenJahrRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -479,63 +809,107 @@ export interface FileRoutesByTo {
   '/api/beleg/$id': typeof ApiBelegIdRoute
   '/api/belege/teilen': typeof ApiBelegeTeilenRoute
   '/api/datev/$jahr': typeof ApiDatevJahrRoute
+  '/api/dauerbeleg/$id': typeof ApiDauerbelegIdRoute
   '/api/export/$jahr': typeof ApiExportJahrRoute
   '/api/fristen/kalender': typeof ApiFristenKalenderRoute
+  '/api/hinterlegung/$jahr': typeof ApiHinterlegungJahrRoute
   '/api/kasse/$jahr': typeof ApiKasseJahrRoute
   '/api/konten/$jahr': typeof ApiKontenJahrRoute
+  '/api/lastschrift/$id': typeof ApiLastschriftIdRoute
   '/api/mahnung/$id': typeof ApiMahnungIdRoute
+  '/api/mandat/$id': typeof ApiMandatIdRoute
   '/api/postfach/$id': typeof ApiPostfachIdRoute
   '/api/protokoll/$id': typeof ApiProtokollIdRoute
+  '/api/rechnungsanhang/$id': typeof ApiRechnungsanhangIdRoute
+  '/api/standardanhang/$id': typeof ApiStandardanhangIdRoute
+  '/api/sv-protokoll/$id': typeof ApiSvProtokollIdRoute
+  '/api/ueberweisung/$id': typeof ApiUeberweisungIdRoute
+  '/api/ustva/$id': typeof ApiUstvaIdRoute
+  '/api/v1/$': typeof ApiV1SplatRoute
   '/api/vast/$id': typeof ApiVastIdRoute
+  '/abschluss': typeof AppAbschlussIndexRoute
   '/angebote': typeof AppAngeboteIndexRoute
   '/anlagen': typeof AppAnlagenIndexRoute
   '/archiv': typeof AppArchivIndexRoute
   '/artikel': typeof AppArtikelIndexRoute
   '/belege': typeof AppBelegeIndexRoute
+  '/buchungen': typeof AppBuchungenIndexRoute
+  '/dauerbelege': typeof AppDauerbelegeIndexRoute
   '/jahreserklaerung': typeof AppJahreserklaerungIndexRoute
   '/kontakte': typeof AppKontakteIndexRoute
   '/konten': typeof AppKontenIndexRoute
+  '/lohn': typeof AppLohnIndexRoute
   '/rechnungen': typeof AppRechnungenIndexRoute
+  '/textbausteine': typeof AppTextbausteineIndexRoute
   '/umsatzsteuer': typeof AppUmsatzsteuerIndexRoute
+  '/archiv/auftrag/$id': typeof AppArchivAuftragIdRoute
   '/archiv/beleg/$id': typeof AppArchivBelegIdRoute
+  '/lohn/anmeldung/$zeitraum': typeof AppLohnAnmeldungZeitraumRoute
+  '/lohn/bescheinigung/$jahr': typeof AppLohnBescheinigungJahrRoute
+  '/lohn/mitarbeiter/$id': typeof AppLohnMitarbeiterIdRoute
+  '/lohn/mitarbeiter/neu': typeof AppLohnMitarbeiterNeuRoute
   '/rechnungen/mahnwesen/$id': typeof AppRechnungenMahnwesenIdRoute
   '/rechnungen/wiederkehrend/$id': typeof AppRechnungenWiederkehrendIdRoute
   '/rechnungen/wiederkehrend/neu': typeof AppRechnungenWiederkehrendNeuRoute
+  '/umsatzsteuer/zm/$quartal': typeof AppUmsatzsteuerZmQuartalRoute
+  '/api/archiv/auftragsdatei/$id': typeof ApiArchivAuftragsdateiIdRoute
   '/api/dokument/$art/$id': typeof ApiDokumentArtIdRoute
+  '/api/entwurf/angebot/$id': typeof ApiEntwurfAngebotIdRoute
+  '/api/entwurf/rechnung/$id': typeof ApiEntwurfRechnungIdRoute
+  '/api/lohn/abrechnung/$id': typeof ApiLohnAbrechnungIdRoute
   '/api/rechnung/$id/$datei': typeof ApiRechnungIdDateiRoute
+  '/api/steuerbescheinigung/$id/$nr': typeof ApiSteuerbescheinigungIdNrRoute
+  '/lohn/anmeldung': typeof AppLohnAnmeldungIndexRoute
   '/rechnungen/mahnwesen': typeof AppRechnungenMahnwesenIndexRoute
   '/rechnungen/wiederkehrend': typeof AppRechnungenWiederkehrendIndexRoute
+  '/api/lohn/bescheinigung/$id/$jahr': typeof ApiLohnBescheinigungIdJahrRoute
+  '/api/lohn/lohnkonto/$id/$jahr/$format': typeof ApiLohnLohnkontoIdJahrFormatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/_app/ausschuettungen': typeof AppAusschuettungenRoute
   '/_app/auswertungen': typeof AppAuswertungenRoute
   '/_app/bank': typeof AppBankRoute
-  '/_app/buchungen': typeof AppBuchungenRoute
+  '/_app/csv-import': typeof AppCsvImportRoute
+  '/_app/darlehen': typeof AppDarlehenRoute
   '/_app/einstellungen': typeof AppEinstellungenRoute
   '/_app/finanzamt': typeof AppFinanzamtRoute
   '/_app/fristen': typeof AppFristenRoute
   '/_app/kasse': typeof AppKasseRoute
+  '/_app/lastschriften': typeof AppLastschriftenRoute
   '/_app/pauschalen': typeof AppPauschalenRoute
+  '/_app/steuerberatung': typeof AppSteuerberatungRoute
+  '/_app/sv-meldeportal': typeof AppSvMeldeportalRoute
+  '/_app/ueberweisungen': typeof AppUeberweisungenRoute
+  '/api/belegvorlagen': typeof ApiBelegvorlagenRoute
+  '/api/briefpapier': typeof ApiBriefpapierRoute
   '/api/logo': typeof ApiLogoRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/einladung/$token': typeof EinladungTokenRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/abschluss/$jahr': typeof AppAbschlussJahrRoute
   '/_app/angebote/$id': typeof AppAngeboteIdRoute
   '/_app/angebote/neu': typeof AppAngeboteNeuRoute
   '/_app/anlagen/$id': typeof AppAnlagenIdRoute
   '/_app/anlagen/neu': typeof AppAnlagenNeuRoute
   '/_app/belege/$id': typeof AppBelegeIdRoute
+  '/_app/buchungen/neu': typeof AppBuchungenNeuRoute
+  '/_app/dauerbelege/$id': typeof AppDauerbelegeIdRoute
+  '/_app/dauerbelege/neu': typeof AppDauerbelegeNeuRoute
   '/_app/jahreserklaerung/$jahr': typeof AppJahreserklaerungJahrRoute
   '/_app/kontakte/$id': typeof AppKontakteIdRoute
   '/_app/kontakte/neu': typeof AppKontakteNeuRoute
   '/_app/konten/$konto': typeof AppKontenKontoRoute
   '/_app/rechnungen/$id': typeof AppRechnungenIdRoute
   '/_app/rechnungen/neu': typeof AppRechnungenNeuRoute
+  '/_app/seiten/$id': typeof AppSeitenIdRoute
   '/_app/umsatzsteuer/$zeitraum': typeof AppUmsatzsteuerZeitraumRoute
   '/api/altbeleg/$id': typeof ApiAltbelegIdRoute
   '/api/angebot/$id': typeof ApiAngebotIdRoute
+  '/api/angebotsanhang/$id': typeof ApiAngebotsanhangIdRoute
   '/api/archiv/$id': typeof ApiArchivIdRoute
   '/api/auswertungen/$jahr': typeof ApiAuswertungenJahrRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -543,32 +917,61 @@ export interface FileRoutesById {
   '/api/beleg/$id': typeof ApiBelegIdRoute
   '/api/belege/teilen': typeof ApiBelegeTeilenRoute
   '/api/datev/$jahr': typeof ApiDatevJahrRoute
+  '/api/dauerbeleg/$id': typeof ApiDauerbelegIdRoute
   '/api/export/$jahr': typeof ApiExportJahrRoute
   '/api/fristen/kalender': typeof ApiFristenKalenderRoute
+  '/api/hinterlegung/$jahr': typeof ApiHinterlegungJahrRoute
   '/api/kasse/$jahr': typeof ApiKasseJahrRoute
   '/api/konten/$jahr': typeof ApiKontenJahrRoute
+  '/api/lastschrift/$id': typeof ApiLastschriftIdRoute
   '/api/mahnung/$id': typeof ApiMahnungIdRoute
+  '/api/mandat/$id': typeof ApiMandatIdRoute
   '/api/postfach/$id': typeof ApiPostfachIdRoute
   '/api/protokoll/$id': typeof ApiProtokollIdRoute
+  '/api/rechnungsanhang/$id': typeof ApiRechnungsanhangIdRoute
+  '/api/standardanhang/$id': typeof ApiStandardanhangIdRoute
+  '/api/sv-protokoll/$id': typeof ApiSvProtokollIdRoute
+  '/api/ueberweisung/$id': typeof ApiUeberweisungIdRoute
+  '/api/ustva/$id': typeof ApiUstvaIdRoute
+  '/api/v1/$': typeof ApiV1SplatRoute
   '/api/vast/$id': typeof ApiVastIdRoute
+  '/_app/abschluss/': typeof AppAbschlussIndexRoute
   '/_app/angebote/': typeof AppAngeboteIndexRoute
   '/_app/anlagen/': typeof AppAnlagenIndexRoute
   '/_app/archiv/': typeof AppArchivIndexRoute
   '/_app/artikel/': typeof AppArtikelIndexRoute
   '/_app/belege/': typeof AppBelegeIndexRoute
+  '/_app/buchungen/': typeof AppBuchungenIndexRoute
+  '/_app/dauerbelege/': typeof AppDauerbelegeIndexRoute
   '/_app/jahreserklaerung/': typeof AppJahreserklaerungIndexRoute
   '/_app/kontakte/': typeof AppKontakteIndexRoute
   '/_app/konten/': typeof AppKontenIndexRoute
+  '/_app/lohn/': typeof AppLohnIndexRoute
   '/_app/rechnungen/': typeof AppRechnungenIndexRoute
+  '/_app/textbausteine/': typeof AppTextbausteineIndexRoute
   '/_app/umsatzsteuer/': typeof AppUmsatzsteuerIndexRoute
+  '/_app/archiv/auftrag/$id': typeof AppArchivAuftragIdRoute
   '/_app/archiv/beleg/$id': typeof AppArchivBelegIdRoute
+  '/_app/lohn/anmeldung/$zeitraum': typeof AppLohnAnmeldungZeitraumRoute
+  '/_app/lohn/bescheinigung/$jahr': typeof AppLohnBescheinigungJahrRoute
+  '/_app/lohn/mitarbeiter/$id': typeof AppLohnMitarbeiterIdRoute
+  '/_app/lohn/mitarbeiter/neu': typeof AppLohnMitarbeiterNeuRoute
   '/_app/rechnungen/mahnwesen/$id': typeof AppRechnungenMahnwesenIdRoute
   '/_app/rechnungen/wiederkehrend/$id': typeof AppRechnungenWiederkehrendIdRoute
   '/_app/rechnungen/wiederkehrend/neu': typeof AppRechnungenWiederkehrendNeuRoute
+  '/_app/umsatzsteuer/zm/$quartal': typeof AppUmsatzsteuerZmQuartalRoute
+  '/api/archiv/auftragsdatei/$id': typeof ApiArchivAuftragsdateiIdRoute
   '/api/dokument/$art/$id': typeof ApiDokumentArtIdRoute
+  '/api/entwurf/angebot/$id': typeof ApiEntwurfAngebotIdRoute
+  '/api/entwurf/rechnung/$id': typeof ApiEntwurfRechnungIdRoute
+  '/api/lohn/abrechnung/$id': typeof ApiLohnAbrechnungIdRoute
   '/api/rechnung/$id/$datei': typeof ApiRechnungIdDateiRoute
+  '/api/steuerbescheinigung/$id/$nr': typeof ApiSteuerbescheinigungIdNrRoute
+  '/_app/lohn/anmeldung/': typeof AppLohnAnmeldungIndexRoute
   '/_app/rechnungen/mahnwesen/': typeof AppRechnungenMahnwesenIndexRoute
   '/_app/rechnungen/wiederkehrend/': typeof AppRechnungenWiederkehrendIndexRoute
+  '/api/lohn/bescheinigung/$id/$jahr': typeof ApiLohnBescheinigungIdJahrRoute
+  '/api/lohn/lohnkonto/$id/$jahr/$format': typeof ApiLohnLohnkontoIdJahrFormatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -576,30 +979,45 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/setup'
+    | '/ausschuettungen'
     | '/auswertungen'
     | '/bank'
-    | '/buchungen'
+    | '/csv-import'
+    | '/darlehen'
     | '/einstellungen'
     | '/finanzamt'
     | '/fristen'
     | '/kasse'
+    | '/lastschriften'
     | '/pauschalen'
+    | '/steuerberatung'
+    | '/sv-meldeportal'
+    | '/ueberweisungen'
+    | '/api/belegvorlagen'
+    | '/api/briefpapier'
     | '/api/logo'
     | '/api/mcp'
+    | '/einladung/$token'
+    | '/abschluss/$jahr'
     | '/angebote/$id'
     | '/angebote/neu'
     | '/anlagen/$id'
     | '/anlagen/neu'
     | '/belege/$id'
+    | '/buchungen/neu'
+    | '/dauerbelege/$id'
+    | '/dauerbelege/neu'
     | '/jahreserklaerung/$jahr'
     | '/kontakte/$id'
     | '/kontakte/neu'
     | '/konten/$konto'
     | '/rechnungen/$id'
     | '/rechnungen/neu'
+    | '/seiten/$id'
     | '/umsatzsteuer/$zeitraum'
     | '/api/altbeleg/$id'
     | '/api/angebot/$id'
+    | '/api/angebotsanhang/$id'
     | '/api/archiv/$id'
     | '/api/auswertungen/$jahr'
     | '/api/auth/$'
@@ -607,61 +1025,105 @@ export interface FileRouteTypes {
     | '/api/beleg/$id'
     | '/api/belege/teilen'
     | '/api/datev/$jahr'
+    | '/api/dauerbeleg/$id'
     | '/api/export/$jahr'
     | '/api/fristen/kalender'
+    | '/api/hinterlegung/$jahr'
     | '/api/kasse/$jahr'
     | '/api/konten/$jahr'
+    | '/api/lastschrift/$id'
     | '/api/mahnung/$id'
+    | '/api/mandat/$id'
     | '/api/postfach/$id'
     | '/api/protokoll/$id'
+    | '/api/rechnungsanhang/$id'
+    | '/api/standardanhang/$id'
+    | '/api/sv-protokoll/$id'
+    | '/api/ueberweisung/$id'
+    | '/api/ustva/$id'
+    | '/api/v1/$'
     | '/api/vast/$id'
+    | '/abschluss/'
     | '/angebote/'
     | '/anlagen/'
     | '/archiv/'
     | '/artikel/'
     | '/belege/'
+    | '/buchungen/'
+    | '/dauerbelege/'
     | '/jahreserklaerung/'
     | '/kontakte/'
     | '/konten/'
+    | '/lohn/'
     | '/rechnungen/'
+    | '/textbausteine/'
     | '/umsatzsteuer/'
+    | '/archiv/auftrag/$id'
     | '/archiv/beleg/$id'
+    | '/lohn/anmeldung/$zeitraum'
+    | '/lohn/bescheinigung/$jahr'
+    | '/lohn/mitarbeiter/$id'
+    | '/lohn/mitarbeiter/neu'
     | '/rechnungen/mahnwesen/$id'
     | '/rechnungen/wiederkehrend/$id'
     | '/rechnungen/wiederkehrend/neu'
+    | '/umsatzsteuer/zm/$quartal'
+    | '/api/archiv/auftragsdatei/$id'
     | '/api/dokument/$art/$id'
+    | '/api/entwurf/angebot/$id'
+    | '/api/entwurf/rechnung/$id'
+    | '/api/lohn/abrechnung/$id'
     | '/api/rechnung/$id/$datei'
+    | '/api/steuerbescheinigung/$id/$nr'
+    | '/lohn/anmeldung/'
     | '/rechnungen/mahnwesen/'
     | '/rechnungen/wiederkehrend/'
+    | '/api/lohn/bescheinigung/$id/$jahr'
+    | '/api/lohn/lohnkonto/$id/$jahr/$format'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/setup'
+    | '/ausschuettungen'
     | '/auswertungen'
     | '/bank'
-    | '/buchungen'
+    | '/csv-import'
+    | '/darlehen'
     | '/einstellungen'
     | '/finanzamt'
     | '/fristen'
     | '/kasse'
+    | '/lastschriften'
     | '/pauschalen'
+    | '/steuerberatung'
+    | '/sv-meldeportal'
+    | '/ueberweisungen'
+    | '/api/belegvorlagen'
+    | '/api/briefpapier'
     | '/api/logo'
     | '/api/mcp'
+    | '/einladung/$token'
     | '/'
+    | '/abschluss/$jahr'
     | '/angebote/$id'
     | '/angebote/neu'
     | '/anlagen/$id'
     | '/anlagen/neu'
     | '/belege/$id'
+    | '/buchungen/neu'
+    | '/dauerbelege/$id'
+    | '/dauerbelege/neu'
     | '/jahreserklaerung/$jahr'
     | '/kontakte/$id'
     | '/kontakte/neu'
     | '/konten/$konto'
     | '/rechnungen/$id'
     | '/rechnungen/neu'
+    | '/seiten/$id'
     | '/umsatzsteuer/$zeitraum'
     | '/api/altbeleg/$id'
     | '/api/angebot/$id'
+    | '/api/angebotsanhang/$id'
     | '/api/archiv/$id'
     | '/api/auswertungen/$jahr'
     | '/api/auth/$'
@@ -669,62 +1131,106 @@ export interface FileRouteTypes {
     | '/api/beleg/$id'
     | '/api/belege/teilen'
     | '/api/datev/$jahr'
+    | '/api/dauerbeleg/$id'
     | '/api/export/$jahr'
     | '/api/fristen/kalender'
+    | '/api/hinterlegung/$jahr'
     | '/api/kasse/$jahr'
     | '/api/konten/$jahr'
+    | '/api/lastschrift/$id'
     | '/api/mahnung/$id'
+    | '/api/mandat/$id'
     | '/api/postfach/$id'
     | '/api/protokoll/$id'
+    | '/api/rechnungsanhang/$id'
+    | '/api/standardanhang/$id'
+    | '/api/sv-protokoll/$id'
+    | '/api/ueberweisung/$id'
+    | '/api/ustva/$id'
+    | '/api/v1/$'
     | '/api/vast/$id'
+    | '/abschluss'
     | '/angebote'
     | '/anlagen'
     | '/archiv'
     | '/artikel'
     | '/belege'
+    | '/buchungen'
+    | '/dauerbelege'
     | '/jahreserklaerung'
     | '/kontakte'
     | '/konten'
+    | '/lohn'
     | '/rechnungen'
+    | '/textbausteine'
     | '/umsatzsteuer'
+    | '/archiv/auftrag/$id'
     | '/archiv/beleg/$id'
+    | '/lohn/anmeldung/$zeitraum'
+    | '/lohn/bescheinigung/$jahr'
+    | '/lohn/mitarbeiter/$id'
+    | '/lohn/mitarbeiter/neu'
     | '/rechnungen/mahnwesen/$id'
     | '/rechnungen/wiederkehrend/$id'
     | '/rechnungen/wiederkehrend/neu'
+    | '/umsatzsteuer/zm/$quartal'
+    | '/api/archiv/auftragsdatei/$id'
     | '/api/dokument/$art/$id'
+    | '/api/entwurf/angebot/$id'
+    | '/api/entwurf/rechnung/$id'
+    | '/api/lohn/abrechnung/$id'
     | '/api/rechnung/$id/$datei'
+    | '/api/steuerbescheinigung/$id/$nr'
+    | '/lohn/anmeldung'
     | '/rechnungen/mahnwesen'
     | '/rechnungen/wiederkehrend'
+    | '/api/lohn/bescheinigung/$id/$jahr'
+    | '/api/lohn/lohnkonto/$id/$jahr/$format'
   id:
     | '__root__'
     | '/_app'
     | '/login'
     | '/setup'
+    | '/_app/ausschuettungen'
     | '/_app/auswertungen'
     | '/_app/bank'
-    | '/_app/buchungen'
+    | '/_app/csv-import'
+    | '/_app/darlehen'
     | '/_app/einstellungen'
     | '/_app/finanzamt'
     | '/_app/fristen'
     | '/_app/kasse'
+    | '/_app/lastschriften'
     | '/_app/pauschalen'
+    | '/_app/steuerberatung'
+    | '/_app/sv-meldeportal'
+    | '/_app/ueberweisungen'
+    | '/api/belegvorlagen'
+    | '/api/briefpapier'
     | '/api/logo'
     | '/api/mcp'
+    | '/einladung/$token'
     | '/_app/'
+    | '/_app/abschluss/$jahr'
     | '/_app/angebote/$id'
     | '/_app/angebote/neu'
     | '/_app/anlagen/$id'
     | '/_app/anlagen/neu'
     | '/_app/belege/$id'
+    | '/_app/buchungen/neu'
+    | '/_app/dauerbelege/$id'
+    | '/_app/dauerbelege/neu'
     | '/_app/jahreserklaerung/$jahr'
     | '/_app/kontakte/$id'
     | '/_app/kontakte/neu'
     | '/_app/konten/$konto'
     | '/_app/rechnungen/$id'
     | '/_app/rechnungen/neu'
+    | '/_app/seiten/$id'
     | '/_app/umsatzsteuer/$zeitraum'
     | '/api/altbeleg/$id'
     | '/api/angebot/$id'
+    | '/api/angebotsanhang/$id'
     | '/api/archiv/$id'
     | '/api/auswertungen/$jahr'
     | '/api/auth/$'
@@ -732,42 +1238,75 @@ export interface FileRouteTypes {
     | '/api/beleg/$id'
     | '/api/belege/teilen'
     | '/api/datev/$jahr'
+    | '/api/dauerbeleg/$id'
     | '/api/export/$jahr'
     | '/api/fristen/kalender'
+    | '/api/hinterlegung/$jahr'
     | '/api/kasse/$jahr'
     | '/api/konten/$jahr'
+    | '/api/lastschrift/$id'
     | '/api/mahnung/$id'
+    | '/api/mandat/$id'
     | '/api/postfach/$id'
     | '/api/protokoll/$id'
+    | '/api/rechnungsanhang/$id'
+    | '/api/standardanhang/$id'
+    | '/api/sv-protokoll/$id'
+    | '/api/ueberweisung/$id'
+    | '/api/ustva/$id'
+    | '/api/v1/$'
     | '/api/vast/$id'
+    | '/_app/abschluss/'
     | '/_app/angebote/'
     | '/_app/anlagen/'
     | '/_app/archiv/'
     | '/_app/artikel/'
     | '/_app/belege/'
+    | '/_app/buchungen/'
+    | '/_app/dauerbelege/'
     | '/_app/jahreserklaerung/'
     | '/_app/kontakte/'
     | '/_app/konten/'
+    | '/_app/lohn/'
     | '/_app/rechnungen/'
+    | '/_app/textbausteine/'
     | '/_app/umsatzsteuer/'
+    | '/_app/archiv/auftrag/$id'
     | '/_app/archiv/beleg/$id'
+    | '/_app/lohn/anmeldung/$zeitraum'
+    | '/_app/lohn/bescheinigung/$jahr'
+    | '/_app/lohn/mitarbeiter/$id'
+    | '/_app/lohn/mitarbeiter/neu'
     | '/_app/rechnungen/mahnwesen/$id'
     | '/_app/rechnungen/wiederkehrend/$id'
     | '/_app/rechnungen/wiederkehrend/neu'
+    | '/_app/umsatzsteuer/zm/$quartal'
+    | '/api/archiv/auftragsdatei/$id'
     | '/api/dokument/$art/$id'
+    | '/api/entwurf/angebot/$id'
+    | '/api/entwurf/rechnung/$id'
+    | '/api/lohn/abrechnung/$id'
     | '/api/rechnung/$id/$datei'
+    | '/api/steuerbescheinigung/$id/$nr'
+    | '/_app/lohn/anmeldung/'
     | '/_app/rechnungen/mahnwesen/'
     | '/_app/rechnungen/wiederkehrend/'
+    | '/api/lohn/bescheinigung/$id/$jahr'
+    | '/api/lohn/lohnkonto/$id/$jahr/$format'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
   SetupRoute: typeof SetupRoute
+  ApiBelegvorlagenRoute: typeof ApiBelegvorlagenRoute
+  ApiBriefpapierRoute: typeof ApiBriefpapierRoute
   ApiLogoRoute: typeof ApiLogoRoute
   ApiMcpRoute: typeof ApiMcpRoute
+  EinladungTokenRoute: typeof EinladungTokenRoute
   ApiAltbelegIdRoute: typeof ApiAltbelegIdRoute
   ApiAngebotIdRoute: typeof ApiAngebotIdRoute
+  ApiAngebotsanhangIdRoute: typeof ApiAngebotsanhangIdRoute
   ApiArchivIdRoute: typeof ApiArchivIdRoute
   ApiAuswertungenJahrRoute: typeof ApiAuswertungenJahrRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -775,16 +1314,33 @@ export interface RootRouteChildren {
   ApiBelegIdRoute: typeof ApiBelegIdRoute
   ApiBelegeTeilenRoute: typeof ApiBelegeTeilenRoute
   ApiDatevJahrRoute: typeof ApiDatevJahrRoute
+  ApiDauerbelegIdRoute: typeof ApiDauerbelegIdRoute
   ApiExportJahrRoute: typeof ApiExportJahrRoute
   ApiFristenKalenderRoute: typeof ApiFristenKalenderRoute
+  ApiHinterlegungJahrRoute: typeof ApiHinterlegungJahrRoute
   ApiKasseJahrRoute: typeof ApiKasseJahrRoute
   ApiKontenJahrRoute: typeof ApiKontenJahrRoute
+  ApiLastschriftIdRoute: typeof ApiLastschriftIdRoute
   ApiMahnungIdRoute: typeof ApiMahnungIdRoute
+  ApiMandatIdRoute: typeof ApiMandatIdRoute
   ApiPostfachIdRoute: typeof ApiPostfachIdRoute
   ApiProtokollIdRoute: typeof ApiProtokollIdRoute
+  ApiRechnungsanhangIdRoute: typeof ApiRechnungsanhangIdRoute
+  ApiStandardanhangIdRoute: typeof ApiStandardanhangIdRoute
+  ApiSvProtokollIdRoute: typeof ApiSvProtokollIdRoute
+  ApiUeberweisungIdRoute: typeof ApiUeberweisungIdRoute
+  ApiUstvaIdRoute: typeof ApiUstvaIdRoute
+  ApiV1SplatRoute: typeof ApiV1SplatRoute
   ApiVastIdRoute: typeof ApiVastIdRoute
+  ApiArchivAuftragsdateiIdRoute: typeof ApiArchivAuftragsdateiIdRoute
   ApiDokumentArtIdRoute: typeof ApiDokumentArtIdRoute
+  ApiEntwurfAngebotIdRoute: typeof ApiEntwurfAngebotIdRoute
+  ApiEntwurfRechnungIdRoute: typeof ApiEntwurfRechnungIdRoute
+  ApiLohnAbrechnungIdRoute: typeof ApiLohnAbrechnungIdRoute
   ApiRechnungIdDateiRoute: typeof ApiRechnungIdDateiRoute
+  ApiSteuerbescheinigungIdNrRoute: typeof ApiSteuerbescheinigungIdNrRoute
+  ApiLohnBescheinigungIdJahrRoute: typeof ApiLohnBescheinigungIdJahrRoute
+  ApiLohnLohnkontoIdJahrFormatRoute: typeof ApiLohnLohnkontoIdJahrFormatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -817,6 +1373,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/ausschuettungen': {
+      id: '/_app/ausschuettungen'
+      path: '/ausschuettungen'
+      fullPath: '/ausschuettungen'
+      preLoaderRoute: typeof AppAusschuettungenRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/auswertungen': {
       id: '/_app/auswertungen'
       path: '/auswertungen'
@@ -831,11 +1394,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBankRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/buchungen': {
-      id: '/_app/buchungen'
-      path: '/buchungen'
-      fullPath: '/buchungen'
-      preLoaderRoute: typeof AppBuchungenRouteImport
+    '/_app/csv-import': {
+      id: '/_app/csv-import'
+      path: '/csv-import'
+      fullPath: '/csv-import'
+      preLoaderRoute: typeof AppCsvImportRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/darlehen': {
+      id: '/_app/darlehen'
+      path: '/darlehen'
+      fullPath: '/darlehen'
+      preLoaderRoute: typeof AppDarlehenRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/einstellungen': {
@@ -866,12 +1436,54 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppKasseRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/lastschriften': {
+      id: '/_app/lastschriften'
+      path: '/lastschriften'
+      fullPath: '/lastschriften'
+      preLoaderRoute: typeof AppLastschriftenRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/pauschalen': {
       id: '/_app/pauschalen'
       path: '/pauschalen'
       fullPath: '/pauschalen'
       preLoaderRoute: typeof AppPauschalenRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/_app/steuerberatung': {
+      id: '/_app/steuerberatung'
+      path: '/steuerberatung'
+      fullPath: '/steuerberatung'
+      preLoaderRoute: typeof AppSteuerberatungRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/sv-meldeportal': {
+      id: '/_app/sv-meldeportal'
+      path: '/sv-meldeportal'
+      fullPath: '/sv-meldeportal'
+      preLoaderRoute: typeof AppSvMeldeportalRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/ueberweisungen': {
+      id: '/_app/ueberweisungen'
+      path: '/ueberweisungen'
+      fullPath: '/ueberweisungen'
+      preLoaderRoute: typeof AppUeberweisungenRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/api/belegvorlagen': {
+      id: '/api/belegvorlagen'
+      path: '/api/belegvorlagen'
+      fullPath: '/api/belegvorlagen'
+      preLoaderRoute: typeof ApiBelegvorlagenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/briefpapier': {
+      id: '/api/briefpapier'
+      path: '/api/briefpapier'
+      fullPath: '/api/briefpapier'
+      preLoaderRoute: typeof ApiBriefpapierRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/logo': {
       id: '/api/logo'
@@ -886,6 +1498,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/mcp'
       preLoaderRoute: typeof ApiMcpRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/einladung/$token': {
+      id: '/einladung/$token'
+      path: '/einladung/$token'
+      fullPath: '/einladung/$token'
+      preLoaderRoute: typeof EinladungTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/abschluss/': {
+      id: '/_app/abschluss/'
+      path: '/abschluss'
+      fullPath: '/abschluss/'
+      preLoaderRoute: typeof AppAbschlussIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/abschluss/$jahr': {
+      id: '/_app/abschluss/$jahr'
+      path: '/abschluss/$jahr'
+      fullPath: '/abschluss/$jahr'
+      preLoaderRoute: typeof AppAbschlussJahrRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/angebote/': {
       id: '/_app/angebote/'
@@ -957,6 +1590,41 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBelegeIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/buchungen/': {
+      id: '/_app/buchungen/'
+      path: '/buchungen'
+      fullPath: '/buchungen/'
+      preLoaderRoute: typeof AppBuchungenIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/buchungen/neu': {
+      id: '/_app/buchungen/neu'
+      path: '/buchungen/neu'
+      fullPath: '/buchungen/neu'
+      preLoaderRoute: typeof AppBuchungenNeuRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/dauerbelege/': {
+      id: '/_app/dauerbelege/'
+      path: '/dauerbelege'
+      fullPath: '/dauerbelege/'
+      preLoaderRoute: typeof AppDauerbelegeIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/dauerbelege/$id': {
+      id: '/_app/dauerbelege/$id'
+      path: '/dauerbelege/$id'
+      fullPath: '/dauerbelege/$id'
+      preLoaderRoute: typeof AppDauerbelegeIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/dauerbelege/neu': {
+      id: '/_app/dauerbelege/neu'
+      path: '/dauerbelege/neu'
+      fullPath: '/dauerbelege/neu'
+      preLoaderRoute: typeof AppDauerbelegeNeuRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/jahreserklaerung/': {
       id: '/_app/jahreserklaerung/'
       path: '/jahreserklaerung'
@@ -1006,6 +1674,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppKontenKontoRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/lohn/': {
+      id: '/_app/lohn/'
+      path: '/lohn'
+      fullPath: '/lohn/'
+      preLoaderRoute: typeof AppLohnIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/rechnungen/': {
       id: '/_app/rechnungen/'
       path: '/rechnungen'
@@ -1025,6 +1700,20 @@ declare module '@tanstack/react-router' {
       path: '/rechnungen/neu'
       fullPath: '/rechnungen/neu'
       preLoaderRoute: typeof AppRechnungenNeuRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/seiten/$id': {
+      id: '/_app/seiten/$id'
+      path: '/seiten/$id'
+      fullPath: '/seiten/$id'
+      preLoaderRoute: typeof AppSeitenIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/textbausteine/': {
+      id: '/_app/textbausteine/'
+      path: '/textbausteine'
+      fullPath: '/textbausteine/'
+      preLoaderRoute: typeof AppTextbausteineIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/umsatzsteuer/': {
@@ -1053,6 +1742,13 @@ declare module '@tanstack/react-router' {
       path: '/api/angebot/$id'
       fullPath: '/api/angebot/$id'
       preLoaderRoute: typeof ApiAngebotIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/angebotsanhang/$id': {
+      id: '/api/angebotsanhang/$id'
+      path: '/api/angebotsanhang/$id'
+      fullPath: '/api/angebotsanhang/$id'
+      preLoaderRoute: typeof ApiAngebotsanhangIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/archiv/$id': {
@@ -1104,6 +1800,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDatevJahrRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/dauerbeleg/$id': {
+      id: '/api/dauerbeleg/$id'
+      path: '/api/dauerbeleg/$id'
+      fullPath: '/api/dauerbeleg/$id'
+      preLoaderRoute: typeof ApiDauerbelegIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/export/$jahr': {
       id: '/api/export/$jahr'
       path: '/api/export/$jahr'
@@ -1116,6 +1819,13 @@ declare module '@tanstack/react-router' {
       path: '/api/fristen/kalender'
       fullPath: '/api/fristen/kalender'
       preLoaderRoute: typeof ApiFristenKalenderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/hinterlegung/$jahr': {
+      id: '/api/hinterlegung/$jahr'
+      path: '/api/hinterlegung/$jahr'
+      fullPath: '/api/hinterlegung/$jahr'
+      preLoaderRoute: typeof ApiHinterlegungJahrRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/kasse/$jahr': {
@@ -1132,11 +1842,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiKontenJahrRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/lastschrift/$id': {
+      id: '/api/lastschrift/$id'
+      path: '/api/lastschrift/$id'
+      fullPath: '/api/lastschrift/$id'
+      preLoaderRoute: typeof ApiLastschriftIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/mahnung/$id': {
       id: '/api/mahnung/$id'
       path: '/api/mahnung/$id'
       fullPath: '/api/mahnung/$id'
       preLoaderRoute: typeof ApiMahnungIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mandat/$id': {
+      id: '/api/mandat/$id'
+      path: '/api/mandat/$id'
+      fullPath: '/api/mandat/$id'
+      preLoaderRoute: typeof ApiMandatIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/postfach/$id': {
@@ -1153,6 +1877,48 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProtokollIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/rechnungsanhang/$id': {
+      id: '/api/rechnungsanhang/$id'
+      path: '/api/rechnungsanhang/$id'
+      fullPath: '/api/rechnungsanhang/$id'
+      preLoaderRoute: typeof ApiRechnungsanhangIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/standardanhang/$id': {
+      id: '/api/standardanhang/$id'
+      path: '/api/standardanhang/$id'
+      fullPath: '/api/standardanhang/$id'
+      preLoaderRoute: typeof ApiStandardanhangIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/sv-protokoll/$id': {
+      id: '/api/sv-protokoll/$id'
+      path: '/api/sv-protokoll/$id'
+      fullPath: '/api/sv-protokoll/$id'
+      preLoaderRoute: typeof ApiSvProtokollIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/ueberweisung/$id': {
+      id: '/api/ueberweisung/$id'
+      path: '/api/ueberweisung/$id'
+      fullPath: '/api/ueberweisung/$id'
+      preLoaderRoute: typeof ApiUeberweisungIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/ustva/$id': {
+      id: '/api/ustva/$id'
+      path: '/api/ustva/$id'
+      fullPath: '/api/ustva/$id'
+      preLoaderRoute: typeof ApiUstvaIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/$': {
+      id: '/api/v1/$'
+      path: '/api/v1/$'
+      fullPath: '/api/v1/$'
+      preLoaderRoute: typeof ApiV1SplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/vast/$id': {
       id: '/api/vast/$id'
       path: '/api/vast/$id'
@@ -1160,11 +1926,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiVastIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/archiv/auftrag/$id': {
+      id: '/_app/archiv/auftrag/$id'
+      path: '/archiv/auftrag/$id'
+      fullPath: '/archiv/auftrag/$id'
+      preLoaderRoute: typeof AppArchivAuftragIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/archiv/beleg/$id': {
       id: '/_app/archiv/beleg/$id'
       path: '/archiv/beleg/$id'
       fullPath: '/archiv/beleg/$id'
       preLoaderRoute: typeof AppArchivBelegIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/lohn/anmeldung/': {
+      id: '/_app/lohn/anmeldung/'
+      path: '/lohn/anmeldung'
+      fullPath: '/lohn/anmeldung/'
+      preLoaderRoute: typeof AppLohnAnmeldungIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/lohn/anmeldung/$zeitraum': {
+      id: '/_app/lohn/anmeldung/$zeitraum'
+      path: '/lohn/anmeldung/$zeitraum'
+      fullPath: '/lohn/anmeldung/$zeitraum'
+      preLoaderRoute: typeof AppLohnAnmeldungZeitraumRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/lohn/bescheinigung/$jahr': {
+      id: '/_app/lohn/bescheinigung/$jahr'
+      path: '/lohn/bescheinigung/$jahr'
+      fullPath: '/lohn/bescheinigung/$jahr'
+      preLoaderRoute: typeof AppLohnBescheinigungJahrRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/lohn/mitarbeiter/$id': {
+      id: '/_app/lohn/mitarbeiter/$id'
+      path: '/lohn/mitarbeiter/$id'
+      fullPath: '/lohn/mitarbeiter/$id'
+      preLoaderRoute: typeof AppLohnMitarbeiterIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/lohn/mitarbeiter/neu': {
+      id: '/_app/lohn/mitarbeiter/neu'
+      path: '/lohn/mitarbeiter/neu'
+      fullPath: '/lohn/mitarbeiter/neu'
+      preLoaderRoute: typeof AppLohnMitarbeiterNeuRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/rechnungen/mahnwesen/': {
@@ -1202,11 +2010,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRechnungenWiederkehrendNeuRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/umsatzsteuer/zm/$quartal': {
+      id: '/_app/umsatzsteuer/zm/$quartal'
+      path: '/umsatzsteuer/zm/$quartal'
+      fullPath: '/umsatzsteuer/zm/$quartal'
+      preLoaderRoute: typeof AppUmsatzsteuerZmQuartalRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/api/archiv/auftragsdatei/$id': {
+      id: '/api/archiv/auftragsdatei/$id'
+      path: '/api/archiv/auftragsdatei/$id'
+      fullPath: '/api/archiv/auftragsdatei/$id'
+      preLoaderRoute: typeof ApiArchivAuftragsdateiIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/dokument/$art/$id': {
       id: '/api/dokument/$art/$id'
       path: '/api/dokument/$art/$id'
       fullPath: '/api/dokument/$art/$id'
       preLoaderRoute: typeof ApiDokumentArtIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/entwurf/angebot/$id': {
+      id: '/api/entwurf/angebot/$id'
+      path: '/api/entwurf/angebot/$id'
+      fullPath: '/api/entwurf/angebot/$id'
+      preLoaderRoute: typeof ApiEntwurfAngebotIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/entwurf/rechnung/$id': {
+      id: '/api/entwurf/rechnung/$id'
+      path: '/api/entwurf/rechnung/$id'
+      fullPath: '/api/entwurf/rechnung/$id'
+      preLoaderRoute: typeof ApiEntwurfRechnungIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/lohn/abrechnung/$id': {
+      id: '/api/lohn/abrechnung/$id'
+      path: '/api/lohn/abrechnung/$id'
+      fullPath: '/api/lohn/abrechnung/$id'
+      preLoaderRoute: typeof ApiLohnAbrechnungIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/rechnung/$id/$datei': {
@@ -1216,85 +2059,152 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRechnungIdDateiRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/steuerbescheinigung/$id/$nr': {
+      id: '/api/steuerbescheinigung/$id/$nr'
+      path: '/api/steuerbescheinigung/$id/$nr'
+      fullPath: '/api/steuerbescheinigung/$id/$nr'
+      preLoaderRoute: typeof ApiSteuerbescheinigungIdNrRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/lohn/bescheinigung/$id/$jahr': {
+      id: '/api/lohn/bescheinigung/$id/$jahr'
+      path: '/api/lohn/bescheinigung/$id/$jahr'
+      fullPath: '/api/lohn/bescheinigung/$id/$jahr'
+      preLoaderRoute: typeof ApiLohnBescheinigungIdJahrRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/lohn/lohnkonto/$id/$jahr/$format': {
+      id: '/api/lohn/lohnkonto/$id/$jahr/$format'
+      path: '/api/lohn/lohnkonto/$id/$jahr/$format'
+      fullPath: '/api/lohn/lohnkonto/$id/$jahr/$format'
+      preLoaderRoute: typeof ApiLohnLohnkontoIdJahrFormatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 interface AppRouteChildren {
+  AppAusschuettungenRoute: typeof AppAusschuettungenRoute
   AppAuswertungenRoute: typeof AppAuswertungenRoute
   AppBankRoute: typeof AppBankRoute
-  AppBuchungenRoute: typeof AppBuchungenRoute
+  AppCsvImportRoute: typeof AppCsvImportRoute
+  AppDarlehenRoute: typeof AppDarlehenRoute
   AppEinstellungenRoute: typeof AppEinstellungenRoute
   AppFinanzamtRoute: typeof AppFinanzamtRoute
   AppFristenRoute: typeof AppFristenRoute
   AppKasseRoute: typeof AppKasseRoute
+  AppLastschriftenRoute: typeof AppLastschriftenRoute
   AppPauschalenRoute: typeof AppPauschalenRoute
+  AppSteuerberatungRoute: typeof AppSteuerberatungRoute
+  AppSvMeldeportalRoute: typeof AppSvMeldeportalRoute
+  AppUeberweisungenRoute: typeof AppUeberweisungenRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAbschlussJahrRoute: typeof AppAbschlussJahrRoute
   AppAngeboteIdRoute: typeof AppAngeboteIdRoute
   AppAngeboteNeuRoute: typeof AppAngeboteNeuRoute
   AppAnlagenIdRoute: typeof AppAnlagenIdRoute
   AppAnlagenNeuRoute: typeof AppAnlagenNeuRoute
   AppBelegeIdRoute: typeof AppBelegeIdRoute
+  AppBuchungenNeuRoute: typeof AppBuchungenNeuRoute
+  AppDauerbelegeIdRoute: typeof AppDauerbelegeIdRoute
+  AppDauerbelegeNeuRoute: typeof AppDauerbelegeNeuRoute
   AppJahreserklaerungJahrRoute: typeof AppJahreserklaerungJahrRoute
   AppKontakteIdRoute: typeof AppKontakteIdRoute
   AppKontakteNeuRoute: typeof AppKontakteNeuRoute
   AppKontenKontoRoute: typeof AppKontenKontoRoute
   AppRechnungenIdRoute: typeof AppRechnungenIdRoute
   AppRechnungenNeuRoute: typeof AppRechnungenNeuRoute
+  AppSeitenIdRoute: typeof AppSeitenIdRoute
   AppUmsatzsteuerZeitraumRoute: typeof AppUmsatzsteuerZeitraumRoute
+  AppAbschlussIndexRoute: typeof AppAbschlussIndexRoute
   AppAngeboteIndexRoute: typeof AppAngeboteIndexRoute
   AppAnlagenIndexRoute: typeof AppAnlagenIndexRoute
   AppArchivIndexRoute: typeof AppArchivIndexRoute
   AppArtikelIndexRoute: typeof AppArtikelIndexRoute
   AppBelegeIndexRoute: typeof AppBelegeIndexRoute
+  AppBuchungenIndexRoute: typeof AppBuchungenIndexRoute
+  AppDauerbelegeIndexRoute: typeof AppDauerbelegeIndexRoute
   AppJahreserklaerungIndexRoute: typeof AppJahreserklaerungIndexRoute
   AppKontakteIndexRoute: typeof AppKontakteIndexRoute
   AppKontenIndexRoute: typeof AppKontenIndexRoute
+  AppLohnIndexRoute: typeof AppLohnIndexRoute
   AppRechnungenIndexRoute: typeof AppRechnungenIndexRoute
+  AppTextbausteineIndexRoute: typeof AppTextbausteineIndexRoute
   AppUmsatzsteuerIndexRoute: typeof AppUmsatzsteuerIndexRoute
+  AppArchivAuftragIdRoute: typeof AppArchivAuftragIdRoute
   AppArchivBelegIdRoute: typeof AppArchivBelegIdRoute
+  AppLohnAnmeldungZeitraumRoute: typeof AppLohnAnmeldungZeitraumRoute
+  AppLohnBescheinigungJahrRoute: typeof AppLohnBescheinigungJahrRoute
+  AppLohnMitarbeiterIdRoute: typeof AppLohnMitarbeiterIdRoute
+  AppLohnMitarbeiterNeuRoute: typeof AppLohnMitarbeiterNeuRoute
   AppRechnungenMahnwesenIdRoute: typeof AppRechnungenMahnwesenIdRoute
   AppRechnungenWiederkehrendIdRoute: typeof AppRechnungenWiederkehrendIdRoute
   AppRechnungenWiederkehrendNeuRoute: typeof AppRechnungenWiederkehrendNeuRoute
+  AppUmsatzsteuerZmQuartalRoute: typeof AppUmsatzsteuerZmQuartalRoute
+  AppLohnAnmeldungIndexRoute: typeof AppLohnAnmeldungIndexRoute
   AppRechnungenMahnwesenIndexRoute: typeof AppRechnungenMahnwesenIndexRoute
   AppRechnungenWiederkehrendIndexRoute: typeof AppRechnungenWiederkehrendIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAusschuettungenRoute: AppAusschuettungenRoute,
   AppAuswertungenRoute: AppAuswertungenRoute,
   AppBankRoute: AppBankRoute,
-  AppBuchungenRoute: AppBuchungenRoute,
+  AppCsvImportRoute: AppCsvImportRoute,
+  AppDarlehenRoute: AppDarlehenRoute,
   AppEinstellungenRoute: AppEinstellungenRoute,
   AppFinanzamtRoute: AppFinanzamtRoute,
   AppFristenRoute: AppFristenRoute,
   AppKasseRoute: AppKasseRoute,
+  AppLastschriftenRoute: AppLastschriftenRoute,
   AppPauschalenRoute: AppPauschalenRoute,
+  AppSteuerberatungRoute: AppSteuerberatungRoute,
+  AppSvMeldeportalRoute: AppSvMeldeportalRoute,
+  AppUeberweisungenRoute: AppUeberweisungenRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAbschlussJahrRoute: AppAbschlussJahrRoute,
   AppAngeboteIdRoute: AppAngeboteIdRoute,
   AppAngeboteNeuRoute: AppAngeboteNeuRoute,
   AppAnlagenIdRoute: AppAnlagenIdRoute,
   AppAnlagenNeuRoute: AppAnlagenNeuRoute,
   AppBelegeIdRoute: AppBelegeIdRoute,
+  AppBuchungenNeuRoute: AppBuchungenNeuRoute,
+  AppDauerbelegeIdRoute: AppDauerbelegeIdRoute,
+  AppDauerbelegeNeuRoute: AppDauerbelegeNeuRoute,
   AppJahreserklaerungJahrRoute: AppJahreserklaerungJahrRoute,
   AppKontakteIdRoute: AppKontakteIdRoute,
   AppKontakteNeuRoute: AppKontakteNeuRoute,
   AppKontenKontoRoute: AppKontenKontoRoute,
   AppRechnungenIdRoute: AppRechnungenIdRoute,
   AppRechnungenNeuRoute: AppRechnungenNeuRoute,
+  AppSeitenIdRoute: AppSeitenIdRoute,
   AppUmsatzsteuerZeitraumRoute: AppUmsatzsteuerZeitraumRoute,
+  AppAbschlussIndexRoute: AppAbschlussIndexRoute,
   AppAngeboteIndexRoute: AppAngeboteIndexRoute,
   AppAnlagenIndexRoute: AppAnlagenIndexRoute,
   AppArchivIndexRoute: AppArchivIndexRoute,
   AppArtikelIndexRoute: AppArtikelIndexRoute,
   AppBelegeIndexRoute: AppBelegeIndexRoute,
+  AppBuchungenIndexRoute: AppBuchungenIndexRoute,
+  AppDauerbelegeIndexRoute: AppDauerbelegeIndexRoute,
   AppJahreserklaerungIndexRoute: AppJahreserklaerungIndexRoute,
   AppKontakteIndexRoute: AppKontakteIndexRoute,
   AppKontenIndexRoute: AppKontenIndexRoute,
+  AppLohnIndexRoute: AppLohnIndexRoute,
   AppRechnungenIndexRoute: AppRechnungenIndexRoute,
+  AppTextbausteineIndexRoute: AppTextbausteineIndexRoute,
   AppUmsatzsteuerIndexRoute: AppUmsatzsteuerIndexRoute,
+  AppArchivAuftragIdRoute: AppArchivAuftragIdRoute,
   AppArchivBelegIdRoute: AppArchivBelegIdRoute,
+  AppLohnAnmeldungZeitraumRoute: AppLohnAnmeldungZeitraumRoute,
+  AppLohnBescheinigungJahrRoute: AppLohnBescheinigungJahrRoute,
+  AppLohnMitarbeiterIdRoute: AppLohnMitarbeiterIdRoute,
+  AppLohnMitarbeiterNeuRoute: AppLohnMitarbeiterNeuRoute,
   AppRechnungenMahnwesenIdRoute: AppRechnungenMahnwesenIdRoute,
   AppRechnungenWiederkehrendIdRoute: AppRechnungenWiederkehrendIdRoute,
   AppRechnungenWiederkehrendNeuRoute: AppRechnungenWiederkehrendNeuRoute,
+  AppUmsatzsteuerZmQuartalRoute: AppUmsatzsteuerZmQuartalRoute,
+  AppLohnAnmeldungIndexRoute: AppLohnAnmeldungIndexRoute,
   AppRechnungenMahnwesenIndexRoute: AppRechnungenMahnwesenIndexRoute,
   AppRechnungenWiederkehrendIndexRoute: AppRechnungenWiederkehrendIndexRoute,
 }
@@ -1305,10 +2215,14 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
   SetupRoute: SetupRoute,
+  ApiBelegvorlagenRoute: ApiBelegvorlagenRoute,
+  ApiBriefpapierRoute: ApiBriefpapierRoute,
   ApiLogoRoute: ApiLogoRoute,
   ApiMcpRoute: ApiMcpRoute,
+  EinladungTokenRoute: EinladungTokenRoute,
   ApiAltbelegIdRoute: ApiAltbelegIdRoute,
   ApiAngebotIdRoute: ApiAngebotIdRoute,
+  ApiAngebotsanhangIdRoute: ApiAngebotsanhangIdRoute,
   ApiArchivIdRoute: ApiArchivIdRoute,
   ApiAuswertungenJahrRoute: ApiAuswertungenJahrRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
@@ -1316,16 +2230,33 @@ const rootRouteChildren: RootRouteChildren = {
   ApiBelegIdRoute: ApiBelegIdRoute,
   ApiBelegeTeilenRoute: ApiBelegeTeilenRoute,
   ApiDatevJahrRoute: ApiDatevJahrRoute,
+  ApiDauerbelegIdRoute: ApiDauerbelegIdRoute,
   ApiExportJahrRoute: ApiExportJahrRoute,
   ApiFristenKalenderRoute: ApiFristenKalenderRoute,
+  ApiHinterlegungJahrRoute: ApiHinterlegungJahrRoute,
   ApiKasseJahrRoute: ApiKasseJahrRoute,
   ApiKontenJahrRoute: ApiKontenJahrRoute,
+  ApiLastschriftIdRoute: ApiLastschriftIdRoute,
   ApiMahnungIdRoute: ApiMahnungIdRoute,
+  ApiMandatIdRoute: ApiMandatIdRoute,
   ApiPostfachIdRoute: ApiPostfachIdRoute,
   ApiProtokollIdRoute: ApiProtokollIdRoute,
+  ApiRechnungsanhangIdRoute: ApiRechnungsanhangIdRoute,
+  ApiStandardanhangIdRoute: ApiStandardanhangIdRoute,
+  ApiSvProtokollIdRoute: ApiSvProtokollIdRoute,
+  ApiUeberweisungIdRoute: ApiUeberweisungIdRoute,
+  ApiUstvaIdRoute: ApiUstvaIdRoute,
+  ApiV1SplatRoute: ApiV1SplatRoute,
   ApiVastIdRoute: ApiVastIdRoute,
+  ApiArchivAuftragsdateiIdRoute: ApiArchivAuftragsdateiIdRoute,
   ApiDokumentArtIdRoute: ApiDokumentArtIdRoute,
+  ApiEntwurfAngebotIdRoute: ApiEntwurfAngebotIdRoute,
+  ApiEntwurfRechnungIdRoute: ApiEntwurfRechnungIdRoute,
+  ApiLohnAbrechnungIdRoute: ApiLohnAbrechnungIdRoute,
   ApiRechnungIdDateiRoute: ApiRechnungIdDateiRoute,
+  ApiSteuerbescheinigungIdNrRoute: ApiSteuerbescheinigungIdNrRoute,
+  ApiLohnBescheinigungIdJahrRoute: ApiLohnBescheinigungIdJahrRoute,
+  ApiLohnLohnkontoIdJahrFormatRoute: ApiLohnLohnkontoIdJahrFormatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

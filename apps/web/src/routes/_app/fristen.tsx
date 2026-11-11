@@ -2,11 +2,13 @@ import { tageBis } from "@haben/core";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
+import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { formatDate } from "../../lib/format.ts";
 import { NoticeBanner } from "../../components/NoticeBanner.tsx";
 import { useAction } from "../../lib/use-action.ts";
-import { createFristenAbo, getFristen, revokeFristenAbo } from "../../server/functions/fristen.ts";
+import { createFristenAbo, getFristen, reactivateFristenAbo, revokeFristenAbo } from "../../server/functions/fristen.ts";
 import styles from "../../styles/auswertungen.css?url";
+import { Field } from "../../components/Field.tsx";
 
 export const Route = createFileRoute("/_app/fristen")({
   loader: () => getFristen(),
@@ -19,10 +21,15 @@ type Frist = Data["fristen"][number];
 
 const ART_LABEL: Record<Frist["art"], string> = {
   ustva: "Voranmeldung",
+  zm: "Zusammenfassende Meldung",
+  kapest: "Kapitalertragsteuer",
+  lsta: "Lohnsteuer",
+  lstb: "Lohnsteuerbescheinigung",
   erklaerung: "Erklärung",
   vorauszahlung: "Vorauszahlung",
   einspruch: "Einspruch",
   zertifikat: "Zertifikat",
+  sv: "Sozialversicherung",
 };
 
 function wann(datum: string, today: string): string {
@@ -120,9 +127,9 @@ function FristenPage() {
         </div>
       </div>
       <p className="muted small" style={{ margin: 0, maxWidth: 760 }}>
-        Voranmeldungen, Jahreserklärungen, Vorauszahlungen, Einspruchsfristen aus dem <Link to="/finanzamt">ELSTER-Postfach</Link> und der
-        Ablauf des Zertifikats. Fällt eine Frist auf ein Wochenende oder einen Feiertag, gilt der nächste Werktag. Erledigt ist, was echt
-        übermittelt ist.
+        Voranmeldungen, Jahreserklärungen, Vorauszahlungen, Einspruchsfristen aus dem <Link to="/finanzamt">ELSTER-Postfach</Link> und der Ablauf des
+        Zertifikats, dazu Beitragsnachweise und Meldungen im <Link to="/sv-meldeportal">SV-Meldeportal</Link>. Fällt eine Steuerfrist auf ein Wochenende oder
+        einen Feiertag, gilt der nächste Werktag. Erledigt ist, was echt übermittelt oder als im Portal abgegeben vermerkt ist.
       </p>
       <div className="stack" style={{ gap: 16 }}>
         {ueberfaellig.length > 0 && <Gruppe titel="Überfällig" fristen={ueberfaellig} today={today} />}
@@ -148,14 +155,16 @@ function FristenPage() {
 
 /** Abo-Link für Kalender-Apps; den Link gibt es nur direkt nach dem Erzeugen */
 function KalenderAbo() {
-  const { abo } = Route.useLoaderData();
+  const { abo, aboStatus } = Route.useLoaderData();
+  const reactivate = useServerFn(reactivateFristenAbo);
+  const [takingOver, setTakingOver] = useState(false);
   const router = useRouter();
   const create = useServerFn(createFristenAbo);
   const revoke = useServerFn(revokeFristenAbo);
   const [url, setUrl] = useState<string | null>(null);
   const { busy, notice, run } = useAction();
   const [copied, setCopied] = useState(false);
-
+  const [rueckfrage, setRueckfrage] = useState<"neu" | "beenden" | null>(null);
 
   const neu = () =>
     run(async () => {
@@ -171,22 +180,65 @@ function KalenderAbo() {
         Erinnerungen im Kalender
       </h2>
       <p className="small muted" style={{ margin: 0, maxWidth: 760 }}>
-        Abonniere die offenen Fristen in deinem Kalender (iPhone, Android, Thunderbird, Outlook). Jede Frist ist ein ganztägiger Termin mit
-        Erinnerung drei Tage vorher und am Morgen des Tages; Erledigtes verschwindet beim nächsten Abgleich. Manche Kalender, etwa Google,
-        übernehmen die Erinnerungen aus Abos nicht; dort stellst du sie für den abonnierten Kalender selbst ein.
+        Abonniere die offenen Fristen in deinem Kalender (iPhone, Android, Thunderbird, Outlook). Jede Frist ist ein ganztägiger Termin mit Erinnerung drei Tage
+        vorher und am Morgen des Tages; Erledigtes verschwindet beim nächsten Abgleich. Manche Kalender, etwa Google, übernehmen die Erinnerungen aus Abos
+        nicht; dort stellst du sie für den abonnierten Kalender selbst ein.
       </p>
-      {url ? (
+      {aboStatus.exists && <p className="small muted">Verantwortlich: {aboStatus.responsibleName ?? aboStatus.responsibleId ?? "Noch nicht zugeordnet"}</p>}
+      <ConfirmDialog
+        open={takingOver}
+        title="Kalender-Abo übernehmen und reaktivieren?"
+        confirmLabel="Übernehmen und reaktivieren"
+        onClose={() => setTakingOver(false)}
+        onConfirm={() =>
+          void run(async () => {
+            await reactivate();
+            await router.invalidate();
+          }, "Kalender-Abo übernommen und reaktiviert.")
+        }
+      >
+        <p>Du übernimmst die Verantwortung. Der bisherige Kalender-Link bleibt erhalten.</p>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={rueckfrage === "beenden"}
+        title="Kalender-Abo beenden?"
+        confirmLabel="Abo beenden"
+        danger
+        onConfirm={() =>
+          void run(async () => {
+            await revoke();
+            await router.invalidate();
+          })
+        }
+        onClose={() => setRueckfrage(null)}
+      >
+        <p>Der Link wird sofort ungültig, abonnierte Kalender bekommen die Fristen nicht mehr. Ein neues Abo muss jeder Kalender wieder einrichten.</p>
+      </ConfirmDialog>
+      {aboStatus.exists && (aboStatus.disabledAt || !aboStatus.ownerConfirmed) ? (
         <>
-          <label className="field">
-            Abo-Link (wird nur jetzt angezeigt)
-            <input readOnly value={url} onFocus={(e) => e.currentTarget.select()} />
-          </label>
+          <p role="status">
+            {aboStatus.disabledAt
+              ? `Kalender-Abo deaktiviert: ${aboStatus.disabledReason === "inhaberrolle-entzogen" ? "Inhaberrolle entzogen" : "Verantwortung noch nicht zugeordnet"}.`
+              : "Kalender-Abo unbestätigt: Der Verantwortliche hat seine Inhaberrolle seit über 30 Tagen nicht bestätigt."}
+          </p>
           <div className="actions" style={{ flexWrap: "wrap" }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => void navigator.clipboard?.writeText(url).then(() => setCopied(true))}
-            >
+            {aboStatus.canTakeOver && (
+              <button type="button" className="btn" disabled={busy} onClick={() => setTakingOver(true)}>
+                Übernehmen und reaktivieren
+              </button>
+            )}
+            <button type="button" className="btn btn-danger" disabled={busy} onClick={() => setRueckfrage("beenden")}>
+              Abo beenden
+            </button>
+          </div>
+        </>
+      ) : url ? (
+        <>
+          <Field label="Abo-Link (wird nur jetzt angezeigt)">
+            {(control) => <input {...control} readOnly value={url} onFocus={(e) => e.currentTarget.select()} />}
+          </Field>
+          <div className="actions" style={{ flexWrap: "wrap" }}>
+            <button type="button" className="btn btn-primary" onClick={() => void navigator.clipboard?.writeText(url).then(() => setCopied(true))}>
               {copied ? "Kopiert" : "Link kopieren"}
             </button>
             <a className="btn" href={url.replace(/^https?:/, "webcal:")}>
@@ -203,18 +255,23 @@ function KalenderAbo() {
             Das Abo ist eingerichtet. Den Link zeigt Haben aus Sicherheitsgründen nur beim Erzeugen.
           </p>
           <div className="actions" style={{ flexWrap: "wrap" }}>
-            <button type="button" className="btn" disabled={busy} onClick={() => void neu()}>
+            <button type="button" className="btn" disabled={busy} onClick={() => setRueckfrage("neu")}>
               Neuen Link erzeugen
             </button>
-            <button type="button" className="btn btn-danger" disabled={busy} onClick={() =>
-                void run(async () => {
-                  await revoke();
-                  await router.invalidate();
-                })
-              }>
+            <button type="button" className="btn btn-danger" disabled={busy} onClick={() => setRueckfrage("beenden")}>
               Abo beenden
             </button>
           </div>
+          <ConfirmDialog
+            open={rueckfrage === "neu"}
+            title="Neuen Abo-Link erzeugen?"
+            confirmLabel="Neuen Link erzeugen"
+            danger
+            onConfirm={() => void neu()}
+            onClose={() => setRueckfrage(null)}
+          >
+            <p>Der bisherige Link wird sofort ungültig. Jeder Kalender muss danach den neuen Link abonnieren.</p>
+          </ConfirmDialog>
         </>
       ) : (
         <div className="actions">

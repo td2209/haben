@@ -43,6 +43,16 @@ const PATHS = {
       <circle cx="7.5" cy="7.5" r="1.5" />
     </>
   ),
+  textblock: <path d="M4 5h16M4 9h16M4 13h10M4 17h7M15 15l2 2 4-4" />,
+  // Person mit Lohnzettel
+  payroll: (
+    <>
+      <circle cx="8" cy="7" r="3" />
+      <path d="M2.5 19a5.5 5.5 0 0 1 11 0" />
+      <rect x="15" y="9" width="6.5" height="11" rx="1" />
+      <path d="M17 12.5h2.5M17 15.5h2.5" />
+    </>
+  ),
   contacts: (
     <>
       <circle cx="9" cy="8" r="3.5" />
@@ -62,8 +72,30 @@ const PATHS = {
     </>
   ),
   code: <path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16" />,
+  /** Dokumentation: aufgeschlagenes Buch */
+  docs: <path d="M12 6c-2-1.5-5-2-8-2v14c3 0 6 .5 8 2 2-1.5 5-2 8-2V4c-3 0-6 .5-8 2zM12 6v14" />,
+  /** Seite außerhalb von Haben: Fenster mit Pfeil nach außen */
+  external: <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />,
   logout: <path d="M14 4h5a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-5M10 16l-4-4 4-4M6 12h10" />,
   check: <path d="M5 12l5 5L20 7" />,
+  close: <path d="M6 6l12 12M18 6L6 18" />,
+  menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  "chevron-down": <path d="M6 9l6 6 6-6" />,
+  eye: (
+    <>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  "eye-off": (
+    <>
+      <path d="M9.9 5.8A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4M6.6 6.6C3.9 8.4 2.5 12 2.5 12S6 18.5 12 18.5c1.8 0 3.4-.6 4.7-1.4" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M4 4l16 16" />
+    </>
+  ),
+  pin: <path d="M9 3h6M10 3v6l-3 4h10l-3-4V3M12 13v8" />,
+  expand: <path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5" />,
+  plus: <path d="M12 5v14M5 12h14" />,
   alert: (
     <>
       <path d="M12 3l9.5 17h-19z" />

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Firmenlogo (Postgres)", () => {
   let logo: typeof import("./logo.ts");
@@ -24,7 +24,7 @@ describe.skipIf(!testDatabaseUrl)("Firmenlogo (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate company_logo, quote_lines, quotes, quote_number_counters, contact_versions, contacts, company cascade`;
+    await leeren(sql)`truncate company_logo, quote_lines, quotes, quote_number_counters, contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, steuernummer, bundesland, iban)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '198/113/10010', 'BY', 'DE89370400440532013000')`;
   });
@@ -47,12 +47,26 @@ describe.skipIf(!testDatabaseUrl)("Firmenlogo (Postgres)", () => {
 
   it("druckt das Logo in neu festgeschriebene Angebote", async () => {
     const contact = await contacts.createContact(actor, {
-      kundennummer: "", name: "Nordwerk GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-      email: "", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+      kundennummer: "",
+      name: "Nordwerk GmbH",
+      strasse: "Hafenstraße 5",
+      plz: "20457",
+      ort: "Hamburg",
+      land: "DE",
+      email: "",
+      ustId: "",
+      iban: "",
+      leitwegId: "",
+      defaultFormat: null,
     });
     const draft = () =>
       quotes.createQuoteDraft(actor, {
-        contactId: contact.id, issueDate: "2026-10-01", validUntil: "2026-10-31", serviceFrom: null, serviceTo: null, note: "",
+        contactId: contact.id,
+        issueDate: "2026-10-01",
+        validUntil: "2026-10-31",
+        serviceFrom: null,
+        serviceTo: null,
+        note: "",
         lines: [{ description: "Beratung", quantity: 1000, unit: "Std.", unitPrice: 10_000, taxRate: 1900 }],
       });
     const ohne = await quotes.finalizeQuote(actor, (await draft()).id);

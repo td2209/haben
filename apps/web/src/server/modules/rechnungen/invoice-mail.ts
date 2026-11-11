@@ -1,9 +1,25 @@
-import { DUNNING_LEVELS, formatEuro, invoiceTemplateKind, resolveMailTemplate, type DunningLevel, type MailTemplateKind } from "@haben/core";
-import { texts } from "@haben/einvoice";
+import {
+  DUNNING_LEVELS,
+  formatEuro,
+  formatPercent,
+  invoiceTemplateKind,
+  joinEmails,
+  MAX_EMAIL_RECIPIENTS,
+  resolveMailTemplate,
+  skontoFristen,
+  splitEmails,
+  legalInfo,
+  type DunningLevel,
+  type MailTemplateKind,
+} from "@haben/core";
+import { legalLines, texts, type Language } from "@haben/einvoice";
 import { and, desc, eq, or } from "drizzle-orm";
 import { z } from "zod";
-import { loadCompany } from "../stammdaten/index.ts";
+import { loadCompany, type Company } from "../stammdaten/index.ts";
 import { db, schema } from "../../db/index.ts";
+import { MAX_INVOICE_ATTACHMENTS } from "./attachment-limit.ts";
+import { attachmentsForMail, listInvoiceAttachments } from "./attachments.ts";
+import { listQuoteAttachments, quoteAttachmentsForMail } from "./quote-attachments.ts";
 import { invoiceDocumentTotals } from "./invoice-taxes.ts";
 import { invoiceTitle } from "./invoices.ts";
 import { escapeHtml, loadMailSettings, MailError, send } from "../mail/index.ts";
@@ -29,6 +45,22 @@ export function textToHtml(text: string): string {
     .join("\n");
 }
 
+/**
+ * E-Mails mit Rechnung, Angebot oder Mahnung sind Geschäftsbriefe (§ 35a Abs. 1 GmbHG). Bei GmbH und UG hängt Haben
+ * die Pflichtangaben beim Senden als Signatur an, damit sie beim Bearbeiten des Textes nicht verloren gehen; leer beim
+ * Einzelunternehmen.
+ */
+export function legalSignature(company: Company, language: Language = "de"): string {
+  const lines = legalLines(legalInfo(company), texts(language));
+  return lines.length > 0 ? ["-- ", company.name, ...lines].join("\n") : "";
+}
+
+/** Text der E-Mail als Klartext und HTML, mit der Signatur darunter */
+function mailBody(body: string, signature: string) {
+  const text = signature ? `${body}\n\n${signature}` : body;
+  return { text, html: textToHtml(text) };
+}
+
 const recipientsSchema = z
   .string()
   .trim()
@@ -36,18 +68,12 @@ const recipientsSchema = z
   .max(1000)
   .refine(
     (value) => {
-      const list = value.split(/[,;]/).map((v) => v.trim()).filter(Boolean);
-      return list.length > 0 && list.length <= 5 && list.every((v) => z.string().email().safeParse(v).success);
+      const list = splitEmails(value);
+      return list.length > 0 && list.length <= MAX_EMAIL_RECIPIENTS && list.every((v) => z.email().safeParse(v).success);
     },
     { message: "Bis zu fünf gültige E-Mail-Adressen, durch Komma getrennt" },
   )
-  .transform((value) =>
-    value
-      .split(/[,;]/)
-      .map((v) => v.trim())
-      .filter(Boolean)
-      .join(", "),
-  );
+  .transform((value) => joinEmails(splitEmails(value)));
 
 export const outgoingMailSchema = z.object({
   to: recipientsSchema,
@@ -64,6 +90,16 @@ export const outgoingMailSchema = z.object({
 
 export type OutgoingMail = z.input<typeof outgoingMailSchema>;
 
+/** Bei Rechnung (#272) und Angebot (#415) zusätzlich: welche Anhänge am Beleg mitgehen */
+export const invoiceMailSchema = outgoingMailSchema.extend({
+  attachmentIds: z.array(z.uuid()).max(MAX_INVOICE_ATTACHMENTS).default([]),
+});
+
+export type InvoiceMail = z.input<typeof invoiceMailSchema>;
+
+/** Zusätzliche Anhänge zur Auswahl im Formular */
+const choosable = (list: { id: string; filename: string; size: number }[]) => list.map(({ id, filename, size }) => ({ id, filename, size }));
+
 async function loadInvoice(id: string) {
   const [invoice] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, id));
   if (!invoice) throw new MailError("Rechnung nicht gefunden.");
@@ -71,13 +107,19 @@ async function loadInvoice(id: string) {
   return invoice;
 }
 
-/** E-Mail des Kunden: auf der Rechnung, sonst aktuell im Kontakt */
+/**
+ * Empfänger beim Kunden: alle Adressen aus dem Kontakt (etwa Rechnungseingang und Freigeber), sonst die Adresse
+ * auf der Rechnung. Auf der festgeschriebenen Rechnung steht nur die erste, weil die E-Rechnung nur eine kennt.
+ */
 async function customerEmail(invoice: { buyer: unknown; contactId: string | null }): Promise<string> {
-  const fromInvoice = (invoice.buyer as { email?: string } | null)?.email?.trim();
-  if (fromInvoice) return fromInvoice;
-  if (!invoice.contactId) return "";
+  const fromInvoice = (invoice.buyer as { email?: string } | null)?.email?.trim() ?? "";
+  if (!invoice.contactId) return fromInvoice;
   const [contact] = await db.select({ email: schema.contacts.email }).from(schema.contacts).where(eq(schema.contacts.id, invoice.contactId));
-  return contact?.email ?? "";
+  const fromContact = splitEmails(contact?.email);
+  if (fromContact.length === 0) return fromInvoice;
+  // Steht auf der Rechnung eine Adresse, die der Kontakt inzwischen nicht mehr hat, bleibt sie vorn
+  const list = fromInvoice && !fromContact.includes(fromInvoice) ? [fromInvoice, ...fromContact] : fromContact;
+  return joinEmails(list.slice(0, MAX_EMAIL_RECIPIENTS));
 }
 
 /** Betrag für die E-Mail in der Währung der Rechnung, wie auf dem PDF */
@@ -86,16 +128,24 @@ async function displayGross(invoice: typeof schema.invoices.$inferSelect): Promi
   return texts(invoice.language, invoice.currency).money(gross);
 }
 
+/** Skontostufen der Rechnung für {zahlbar}: Frist und Satz, ohne Betrag */
+function skontoTerms(invoice: typeof schema.invoices.$inferSelect) {
+  return invoice.kind === "rechnung" ? skontoFristen(invoice.skonto, invoice.issueDate, invoice.gross) : [];
+}
+
 function invoiceValues(invoice: typeof schema.invoices.$inferSelect, firma: string, betrag: string, language = invoice.language) {
+  const skonto = skontoTerms(invoice);
   if (language === "en") {
     const t = texts("en");
+    const discounts = skonto.map((s) => ` or by ${t.date(s.until)} less ${t.percent(s.percent)} cash discount`).join("");
     return {
       art: invoice.kind === "rechnung" && invoice.variant ? t.variants[invoice.variant] : t.titles[invoice.kind],
       nummer: invoice.number ?? "",
       datum: t.date(invoice.issueDate),
       betrag,
       faellig: t.date(invoice.dueDate),
-      zahlbar: invoice.kind === "rechnung" && invoice.gross > 0 ? `, payable by ${t.date(invoice.dueDate)}` : "",
+      zahlbar:
+        invoice.kind === "rechnung" && invoice.gross > 0 ? `, payable by ${t.date(invoice.dueDate)}${discounts ? ` without deduction${discounts}` : ""}` : "",
       kunde: (invoice.buyer as { name?: string } | null)?.name ?? "",
       firma,
     };
@@ -106,10 +156,17 @@ function invoiceValues(invoice: typeof schema.invoices.$inferSelect, firma: stri
     datum: germanDate(invoice.issueDate),
     betrag,
     faellig: germanDate(invoice.dueDate),
-    zahlbar: invoice.kind === "rechnung" && invoice.gross > 0 ? `, zahlbar bis zum ${germanDate(invoice.dueDate)}` : "",
+    zahlbar:
+      invoice.kind === "rechnung" && invoice.gross > 0
+        ? `, zahlbar bis zum ${germanDate(invoice.dueDate)}${skonto.length > 0 ? ` ohne Abzug${germanDiscounts(skonto)}` : ""}`
+        : "",
     kunde: (invoice.buyer as { name?: string } | null)?.name ?? "",
     firma,
   };
+}
+
+function germanDiscounts(skonto: ReturnType<typeof skontoTerms>): string {
+  return skonto.map((s) => ` oder bis zum ${germanDate(s.until)} abzüglich ${formatPercent(s.percent)} Skonto`).join("");
 }
 
 function invoiceAttachments(invoice: typeof schema.invoices.$inferSelect) {
@@ -132,28 +189,32 @@ export async function invoiceMailDraft(invoiceId: string) {
     to: await customerEmail(invoice),
     subject: fillTemplate(template.subject, values),
     body: fillTemplate(template.body, values),
+    signature: legalSignature(company, invoice.language),
     attachments: invoiceAttachments(invoice).map((a) => a.filename),
+    /** Zusätzliche Anhänge an der Rechnung zur Auswahl */
+    extraAttachments: choosable(await listInvoiceAttachments(invoiceId)),
     configured: Boolean(settings),
   };
 }
 
-export async function sendInvoiceMail(actor: string, invoiceId: string, input: OutgoingMail) {
-  const mail = outgoingMailSchema.parse(input);
-  const [invoice, settings] = await Promise.all([loadInvoice(invoiceId), loadMailSettings()]);
+/** Versand mit PDF (und bei XRechnung XML) und den ausgewählten Zusatzanhängen; das Protokoll nennt alle Dateinamen */
+export async function sendInvoiceMail(actor: string, invoiceId: string, input: InvoiceMail) {
+  const mail = invoiceMailSchema.parse(input);
+  const [invoice, settings, company] = await Promise.all([loadInvoice(invoiceId), loadMailSettings(), loadCompany()]);
   if (!settings) throw new MailError("Es ist kein E-Mail-Zugang eingerichtet (Einstellungen › E-Mail-Versand).");
+  const extra = await attachmentsForMail(invoiceId, mail.attachmentIds);
   return send(actor, {
     kind: "rechnung",
     to: mail.to,
     ...(mail.copyToMe ? { bcc: settings.fromAddress } : {}),
     subject: mail.subject,
-    text: mail.body,
-    html: textToHtml(mail.body),
-    attachments: invoiceAttachments(invoice),
+    ...mailBody(mail.body, legalSignature(company, invoice.language)),
+    attachments: [...invoiceAttachments(invoice), ...extra],
     invoiceId,
   });
 }
 
-/** Für wiederkehrende Rechnungen: mit der Vorlage an die Adresse des Kunden, ohne Formular */
+/** Für wiederkehrende Rechnungen: mit der Vorlage an die Adresse des Kunden, ohne Formular und ohne Zusatzanhänge */
 export async function sendInvoiceMailWithTemplate(actor: string, invoiceId: string) {
   const draft = await invoiceMailDraft(invoiceId);
   if (!draft.configured) throw new MailError("Es ist kein E-Mail-Zugang eingerichtet.");
@@ -189,6 +250,7 @@ export async function dunningMailDraft(dunningId: string) {
     to: await customerEmail(invoice),
     subject: fillTemplate(template.subject, values),
     body: fillTemplate(template.body, values),
+    signature: legalSignature(company),
     attachments: [dunningFilename(dunning, invoice.number!)],
     configured: Boolean(settings),
   };
@@ -196,15 +258,14 @@ export async function dunningMailDraft(dunningId: string) {
 
 export async function sendDunningMail(actor: string, dunningId: string, input: OutgoingMail) {
   const mail = outgoingMailSchema.parse(input);
-  const [{ dunning, invoice }, settings] = await Promise.all([loadDunning(dunningId), loadMailSettings()]);
+  const [{ dunning, invoice }, settings, company] = await Promise.all([loadDunning(dunningId), loadMailSettings(), loadCompany()]);
   if (!settings) throw new MailError("Es ist kein E-Mail-Zugang eingerichtet (Einstellungen › E-Mail-Versand).");
   return send(actor, {
     kind: "mahnung",
     to: mail.to,
     ...(mail.copyToMe ? { bcc: settings.fromAddress } : {}),
     subject: mail.subject,
-    text: mail.body,
-    html: textToHtml(mail.body),
+    ...mailBody(mail.body, legalSignature(company)),
     attachments: [{ filename: dunningFilename(dunning, invoice.number!), content: Buffer.from(dunning.pdf), contentType: "application/pdf" }],
     invoiceId: invoice.id,
     dunningId,
@@ -221,6 +282,7 @@ export async function mailsForInvoice(invoiceId: string) {
       subject: schema.mailLog.subject,
       ok: schema.mailLog.ok,
       error: schema.mailLog.error,
+      attachments: schema.mailLog.attachments,
       dunningId: schema.mailLog.dunningId,
       createdAt: schema.mailLog.createdAt,
     })
@@ -276,23 +338,27 @@ export async function quoteMailDraft(quoteId: string) {
     to: await customerEmail(quote),
     subject: fillTemplate(template.subject, values),
     body: fillTemplate(template.body, values),
+    signature: legalSignature(company, quote.language),
     attachments: [`Angebot-${quote.number}.pdf`],
+    /** Zusätzliche Anhänge am Angebot zur Auswahl */
+    extraAttachments: choosable(await listQuoteAttachments(quoteId)),
     configured: Boolean(settings),
   };
 }
 
-export async function sendQuoteMail(actor: string, quoteId: string, input: OutgoingMail) {
-  const mail = outgoingMailSchema.parse(input);
-  const [quote, settings] = await Promise.all([loadQuote(quoteId), loadMailSettings()]);
+/** Versand mit dem PDF und den ausgewählten Zusatzanhängen; das Protokoll nennt alle Dateinamen */
+export async function sendQuoteMail(actor: string, quoteId: string, input: InvoiceMail) {
+  const mail = invoiceMailSchema.parse(input);
+  const [quote, settings, company] = await Promise.all([loadQuote(quoteId), loadMailSettings(), loadCompany()]);
   if (!settings) throw new MailError("Es ist kein E-Mail-Zugang eingerichtet (Einstellungen › E-Mail-Versand).");
+  const extra = await quoteAttachmentsForMail(quoteId, mail.attachmentIds);
   return send(actor, {
     kind: "angebot",
     to: mail.to,
     ...(mail.copyToMe ? { bcc: settings.fromAddress } : {}),
     subject: mail.subject,
-    text: mail.body,
-    html: textToHtml(mail.body),
-    attachments: [{ filename: `Angebot-${quote.number}.pdf`, content: Buffer.from(quote.pdf!), contentType: "application/pdf" }],
+    ...mailBody(mail.body, legalSignature(company, quote.language)),
+    attachments: [{ filename: `Angebot-${quote.number}.pdf`, content: Buffer.from(quote.pdf!), contentType: "application/pdf" }, ...extra],
     quoteId,
   });
 }
@@ -306,6 +372,7 @@ export async function mailsForQuote(quoteId: string) {
       subject: schema.mailLog.subject,
       ok: schema.mailLog.ok,
       error: schema.mailLog.error,
+      attachments: schema.mailLog.attachments,
       createdAt: schema.mailLog.createdAt,
     })
     .from(schema.mailLog)

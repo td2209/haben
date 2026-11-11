@@ -1,3 +1,4 @@
+import { isKapitalgesellschaft } from "@haben/core";
 import { and, count, eq, gte, lt } from "drizzle-orm";
 import { listAssets } from "../buchhaltung/index.ts";
 import { listInvoices } from "../rechnungen/index.ts";
@@ -6,12 +7,14 @@ import { withActor } from "../../db/actor.ts";
 import { db, schema, type Db, type Tx } from "../../db/index.ts";
 import { UserError } from "../../errors.ts";
 
-/** Warum sich Kontenrahmen, Versteuerung oder Kleinunternehmer gerade nicht ändern lassen; null = frei */
+/** Warum sich Kontenrahmen, Versteuerung, Kleinunternehmer oder Rechtsform gerade nicht ändern lassen; null = frei */
 export interface SettingsLocks {
   kontenrahmen: string | null;
   versteuerung: string | null;
   /** Nur das Einschalten; ausschalten geht immer, weil der Status mitten im Jahr enden kann */
   kleinunternehmer: string | null;
+  /** Fest ab der ersten Buchung überhaupt, nicht nur im laufenden Jahr */
+  rechtsform: string | null;
 }
 
 /** Offene Rechnungen wie in der Rechnungsliste und im Bankabgleich (listInvoices, @haben/core lebenszyklus.ts), nur gezählt */
@@ -25,7 +28,9 @@ async function previousYearOpen(year: number, q: Db | Tx): Promise<string[]> {
   const [documents] = await q
     .select({ n: count() })
     .from(schema.documents)
-    .where(and(eq(schema.documents.status, "neu"), gte(schema.documents.documentDate, `${year - 1}-01-01`), lt(schema.documents.documentDate, `${year}-01-01`)));
+    .where(
+      and(eq(schema.documents.status, "neu"), gte(schema.documents.documentDate, `${year - 1}-01-01`), lt(schema.documents.documentDate, `${year}-01-01`)),
+    );
   const unbooked = documents?.n ?? 0;
   return [
     pendingAssets > 0 && `AfA für ${pendingAssets === 1 ? "eine Anlage" : `${pendingAssets} Anlagen`}`,
@@ -47,6 +52,8 @@ export async function settingsLocks(today: string, q: Db | Tx = db): Promise<Set
     .from(schema.journalEntries)
     .where(gte(schema.journalEntries.date, `${year}-01-01`));
   const booked = (entries?.n ?? 0) > 0;
+  const [anyEntry] = await q.select({ id: schema.journalEntries.id }).from(schema.journalEntries).limit(1);
+  const [firma] = await q.select({ rechtsform: schema.company.rechtsform }).from(schema.company).where(eq(schema.company.id, 1));
   const previousOpen = booked ? [] : await previousYearOpen(year, q);
   const openInvoices = await openInvoiceCount(today, q);
   const yearLock = booked
@@ -54,14 +61,21 @@ export async function settingsLocks(today: string, q: Db | Tx = db): Promise<Set
     : previousOpen.length > 0
       ? `Im Jahr ${year - 1} ist noch nicht alles gebucht (${previousOpen.join(", ")}). Erst das alte Jahr abschließen, dann umstellen.`
       : null;
+  // GmbH und UG tragen Bestandskonten vor; im neuen Kontenrahmen kämen die Vorträge nicht an (drizzle/0101)
+  const kapgLock =
+    anyEntry && firma && isKapitalgesellschaft(firma.rechtsform)
+      ? "Bei GmbH und UG ist der Kontenrahmen ab der ersten Buchung fest: Die Vorträge der Bestandskonten stehen im bisherigen Kontenrahmen. Einen Wechsel stellt die Steuerberatung mit neuer Eröffnungsbilanz um."
+      : null;
   return {
-    kontenrahmen: yearLock,
+    kontenrahmen: kapgLock ?? yearLock,
     versteuerung:
       yearLock ??
       (openInvoices > 0
         ? `${openInvoices} ${openInvoices === 1 ? "Rechnung ist" : "Rechnungen sind"} noch offen. Nach einem Wechsel würde ihre Umsatzsteuer doppelt oder gar nicht angemeldet; erst ausgleichen, dann umstellen.`
         : null),
     kleinunternehmer: yearLock,
+    // Privat und Gesellschafter-Verrechnungskonto gehören nicht in dieselben Bücher (drizzle/0096)
+    rechtsform: anyEntry ? "Es gibt schon Buchungen. Die Rechtsform lässt sich nur vor der ersten Buchung festlegen." : null,
   };
 }
 
@@ -70,6 +84,7 @@ export function lockedChange(current: Company, next: CompanyInput, locks: Settin
   if (next.kontenrahmen !== current.kontenrahmen && locks.kontenrahmen) return `Kontenrahmen: ${locks.kontenrahmen}`;
   if (next.versteuerung !== current.versteuerung && locks.versteuerung) return `Versteuerung: ${locks.versteuerung}`;
   if (next.kleinunternehmer && !current.kleinunternehmer && locks.kleinunternehmer) return `Kleinunternehmer: ${locks.kleinunternehmer}`;
+  if (next.rechtsform !== current.rechtsform && locks.rechtsform) return `Rechtsform: ${locks.rechtsform}`;
   return null;
 }
 
@@ -78,12 +93,27 @@ export function lockedChange(current: Company, next: CompanyInput, locks: Settin
  * Zugang (Oberfläche, später eine API oder der Scheduler) dieselbe Sperre bekommt. Den Kern der Jahressperre prüft
  * zusätzlich die Datenbank (drizzle/0065), auch für Änderungen an Haben vorbei.
  */
+/**
+ * Automatischer Abruf des Basiszinssatzes: ohne Angabe bleibt der Haken, wie er war. Wer den Satz von Hand ändert, hebt
+ * die Bestätigung durch die Bundesbank auf; der nächste Abruf prüft neu.
+ */
+function keptBaseRateState(current: Company, input: CompanyInput): Company["dunning"] {
+  return {
+    ...input.dunning,
+    autoBaseRate: input.dunning.autoBaseRate ?? current.dunning.autoBaseRate ?? false,
+    baseRateSince: input.dunning.baseRate === current.dunning.baseRate ? (current.dunning.baseRateSince ?? null) : null,
+  };
+}
+
 export async function saveCompany(actor: string, input: CompanyInput, today: string): Promise<void> {
   await withActor(actor, async (tx) => {
     await loadCompany(tx);
     const [current] = await tx.select().from(schema.company).where(eq(schema.company.id, 1)).for("update");
     const locked = lockedChange(current!, input, await settingsLocks(today, tx));
     if (locked) throw new UserError(locked);
-    await tx.update(schema.company).set({ ...input, updatedAt: new Date() }).where(eq(schema.company.id, 1));
+    await tx
+      .update(schema.company)
+      .set({ ...input, dunning: keptBaseRateState(current!, input), updatedAt: new Date() })
+      .where(eq(schema.company.id, 1));
   });
 }

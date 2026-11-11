@@ -3,7 +3,7 @@
  * das Zertifikat und die Datenschutzhinweise der Finanzverwaltung.
  *
  * Öffentliche Schnittstelle des Moduls: Andere Module, Server Functions und Routen importieren nur von hier
- * (Lint-Regel haben/modulgrenzen, eslint/modulgrenzen.js).
+ * (Modulgrenzen, scripts/modulgrenzen/regel.ts).
  */
 export { deactivateCertificate, saveCertificate } from "./certificate.ts";
 export {
@@ -20,4 +20,4 @@ export {
   zugang,
   type ElsterVorgang,
 } from "./elster-gateway.ts";
-export { confirmElsterDatenschutz, elsterClient, elsterMode, ericStatus, startEricInstall } from "./elster.ts";
+export { confirmElsterDatenschutz, elsterClient, elsterMode, ericKennt, ericStatus, startEricInstall } from "./elster.ts";

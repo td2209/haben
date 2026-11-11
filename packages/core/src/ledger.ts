@@ -1,5 +1,5 @@
 import { csvDecimal, toCsv, type Cents } from "./money.ts";
-import { ACCOUNTS, type Kontenrahmen } from "./posting.ts";
+import { ACCOUNTS, EXPENSE_CATEGORIES, type Kontenrahmen } from "./posting.ts";
 
 /** Kontenklassen nach der ersten Ziffer der Kontonummer */
 export const KONTENKLASSEN: Record<Kontenrahmen, Record<string, string>> = {
@@ -34,13 +34,18 @@ export type Kontoart = "ertrag" | "aufwand" | "bestand";
 
 /**
  * Art eines Kontos nach Kontenklasse: Erlöse, Aufwand oder Bestand (Bank, Forderungen, Steuern,
- * Privat). Klassen mit gemischtem Inhalt (SKR03 2, SKR04 7) ordnet die Seite des Saldos zu.
+ * Privat). Klassen mit gemischtem Inhalt (SKR03 2, SKR04 7) ordnet die Seite des Saldos zu. In SKR03 sind
+ * 3970–3989 Bestände an Roh-, Hilfs- und Betriebsstoffen und Waren, also Bestandskonten; 3990 „Verrechnete Stoffkosten“
+ * ist wieder Materialaufwand. Geprüft gegen die Bilanz- und GuV-Posten im DATEV-Kontenrahmen 2026 (Art.-Nr. 11174 und
+ * 11175): Bilanzposten genau bei Bestandskonten, ausgenommen die Konten der Ergebnisverwendung (SKR03 2795–2868,
+ * SKR04 7700–7751), die nach dem Jahresergebnis stehen.
  */
 export function kontoart(kontenrahmen: Kontenrahmen, account: string, saldo = 0): Kontoart {
   const klasse = account.charAt(0);
   const gemischt = saldo < 0 ? "ertrag" : "aufwand";
   if (kontenrahmen === "SKR03") {
     if (klasse === "8") return "ertrag";
+    if (klasse === "3" && Number(account) >= 3970 && Number(account) <= 3989) return "bestand";
     if (klasse === "3" || klasse === "4") return "aufwand";
     if (klasse === "2") return gemischt;
     return "bestand";
@@ -67,7 +72,7 @@ export function saldoAnzeige(kontenrahmen: Kontenrahmen, account: string, saldo:
 }
 
 export interface Kontenkennzahlen {
-  /** Bankkonto laut Buchungen ab Jahresbeginn (ohne Vortrag aus dem Vorjahr) */
+  /** Bankkonto laut Buchungen ab Jahresbeginn; in GmbH und UG mit Vortrag aus den Vorjahren */
   bank: Cents;
   forderungen: Cents;
   verbindlichkeiten: Cents;
@@ -83,7 +88,18 @@ export function kontenkennzahlen(rows: SaldenZeile[]): Kontenkennzahlen {
   const result: Kontenkennzahlen = { bank: 0, forderungen: 0, verbindlichkeiten: 0, umsatzsteuer: 0, ertraege: 0, aufwand: 0 };
   for (const r of rows) {
     const a = ACCOUNTS[r.kontenrahmen];
-    const steuer = [...Object.values(a.ust), ...Object.values(a.vorsteuer), a.ustRc, a.vorsteuerRc, a.ustVorauszahlung] as string[];
+    const steuer = [
+      ...Object.values(a.ust),
+      ...Object.values(a.vorsteuer),
+      a.ustRc,
+      a.vorsteuerRc,
+      ...Object.values(a.ustIge),
+      ...Object.values(a.vorsteuerIge),
+      // Entstandene Einfuhrumsatzsteuer (Kz 62) ist Vorsteuer wie die übrigen
+      EXPENSE_CATEGORIES.einfuhrumsatzsteuer[r.kontenrahmen],
+      a.ustVorauszahlung,
+      a.sondervorauszahlung,
+    ] as string[];
     if (r.account === a.bank) result.bank += r.saldo;
     else if (r.account === a.forderungen) result.forderungen += r.saldo;
     else if (r.account === a.verbindlichkeiten) result.verbindlichkeiten -= r.saldo;
@@ -104,10 +120,16 @@ export interface SaldenZeile {
   kontenrahmen: Kontenrahmen;
   account: string;
   name: string;
-  /** Saldo vor dem Zeitraum, ab Jahresbeginn; positiv = Soll */
+  /** Saldo vor dem Zeitraum: Vortrag und Bewegungen ab Jahresbeginn; positiv = Soll */
   eroeffnung: Cents;
+  /** EB-Wert: Saldenvortrag aus den Vorjahren und Eröffnungsbuchungen (GmbH, UG), sonst 0 */
+  vortrag: Cents;
+  /** Bewegungen im Zeitraum */
   soll: Cents;
   haben: Cents;
+  /** Bewegungen ab Jahresbeginn bis zum Ende des Zeitraums, ohne EB-Wert (Verkehrszahlen kumuliert) */
+  sollJahr: Cents;
+  habenJahr: Cents;
   /** eroeffnung + soll − haben */
   saldo: Cents;
 }
@@ -123,9 +145,26 @@ export interface KontenblattZeile {
   saldo: Cents;
 }
 
+/**
+ * Saldenliste als CSV, zugleich Summen- und Saldenliste: Die ersten Spalten wie bisher, dahinter EB-Wert und die
+ * Verkehrszahlen ab Jahresbeginn wie in der Summen- und Saldenliste der Steuerberatung.
+ */
 export function saldenlisteToCsv(rows: SaldenZeile[]): string {
+  const mitSeite = (cents: Cents) => csvDecimal(Math.abs(cents)) + (cents ? ` ${saldoSeite(cents)}` : "");
   return toCsv([
-    ["Konto", "Bezeichnung", "Kontenklasse", "Eröffnung (EUR)", "Soll (EUR)", "Haben (EUR)", "Saldo (EUR)", "S/H"],
+    [
+      "Konto",
+      "Bezeichnung",
+      "Kontenklasse",
+      "Eröffnung (EUR)",
+      "Soll (EUR)",
+      "Haben (EUR)",
+      "Saldo (EUR)",
+      "S/H",
+      "EB-Wert (EUR)",
+      "Soll kumuliert (EUR)",
+      "Haben kumuliert (EUR)",
+    ],
     ...rows.map((r) => [
       r.account,
       r.name,
@@ -135,6 +174,9 @@ export function saldenlisteToCsv(rows: SaldenZeile[]): string {
       r.haben,
       Math.abs(r.saldo),
       saldoSeite(r.saldo),
+      mitSeite(r.vortrag),
+      r.sollJahr,
+      r.habenJahr,
     ]),
   ]);
 }

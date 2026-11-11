@@ -1,4 +1,5 @@
 import { altersvorsorgeQuote, arbeitslohnErgebnis, type Arbeitslohn } from "./arbeitnehmer.ts";
+import { kirchensteuerSatzBasispunkte } from "./lohnsteuer/kirchensteuer.ts";
 import type { Cents } from "./money.ts";
 import type { Bundesland } from "./steuernummer.ts";
 
@@ -132,7 +133,7 @@ export function solidaritaetszuschlag(est: Cents, year: number, zusammen = false
 
 /** 8 % in Baden-Württemberg und Bayern, sonst 9 % */
 export function kirchensteuerSatz(bundesland: Bundesland | null): number {
-  return bundesland === "BW" || bundesland === "BY" ? 0.08 : 0.09;
+  return kirchensteuerSatzBasispunkte(bundesland) / 10_000;
 }
 
 /** Religionsschlüssel, für die Kirchensteuer erhoben wird (11 = keine Religionszugehörigkeit, 10 = sonstige) */
@@ -220,7 +221,16 @@ function vorsorgeAbzug(year: number, personen: { v: PrognoseVorsorge; an?: Arbei
     sum(
       ...personen.map(({ v, an }) => {
         const kvAn = lstb(an, (b) => b.kvArbeitnehmer);
-        return sum(v.gkv, v.gpv, v.pkv, v.ppv, Math.floor(kvAn * 0.96), lstb(an, (b) => b.pvArbeitnehmer)) - (v.pkvErstattung ?? 0);
+        return (
+          sum(
+            v.gkv,
+            v.gpv,
+            v.pkv,
+            v.ppv,
+            Math.floor(kvAn * 0.96),
+            lstb(an, (b) => b.pvArbeitnehmer),
+          ) - (v.pkvErstattung ?? 0)
+        );
       }),
     ),
   );
@@ -228,7 +238,11 @@ function vorsorgeAbzug(year: number, personen: { v: PrognoseVorsorge; an?: Arbei
     sonstige,
     ...personen.map(({ v, an }) => {
       const kvAn = lstb(an, (b) => b.kvArbeitnehmer);
-      return sum(v.gkvZusatz, kvAn - Math.floor(kvAn * 0.96), lstb(an, (b) => b.avArbeitnehmer));
+      return sum(
+        v.gkvZusatz,
+        kvAn - Math.floor(kvAn * 0.96),
+        lstb(an, (b) => b.avArbeitnehmer),
+      );
     }),
   );
   const hoechst = sum(...personen.map(({ an }) => (an && an.bescheinigungen.length > 0 ? 1_900_00 : 2_800_00)));

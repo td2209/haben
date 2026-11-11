@@ -17,6 +17,7 @@ export const Route = createFileRoute("/_app/archiv/beleg/$id")({
 
 const PAYMENT_STATUS: Record<string, string> = {
   balanced: "ausgeglichen",
+  cancelled: "storniert",
   openRevenue: "offene Forderung",
   openExpense: "offene Verbindlichkeit",
   // aus sevDesk
@@ -24,14 +25,20 @@ const PAYMENT_STATUS: Record<string, string> = {
   partlyPaid: "teilweise bezahlt",
 };
 
-const SOURCE = { lexoffice: { name: "Lexoffice", product: "Lexware Office" }, sevdesk: { name: "sevDesk", product: "sevDesk" } } as const;
+const SOURCE = {
+  lexoffice: { name: "Lexoffice", product: "Lexware Office" },
+  sevdesk: { name: "sevDesk", product: "sevDesk" },
+  buchhaltungsbutler: { name: "BuchhaltungsButler", product: "BuchhaltungsButler" },
+  accountable: { name: "Accountable", product: "Accountable" },
+  import: { name: "JSON-Import", product: "Quellprogramm" },
+} as const;
 
 function LegacyVoucherPage() {
   const { voucher, files } = Route.useLoaderData();
   const [selected, setSelected] = useState(files.find((f) => f.role === "pdf")?.id ?? files[0]?.id ?? null);
   const file = files.find((f) => f.id === selected) ?? null;
   const src = file ? `/api/altbeleg/${file.id}` : null;
-  const source = SOURCE[voucher.source];
+  const source = voucher.source === "import" ? { name: voucher.sourceName || "JSON-Import", product: "Quellprogramm" } : SOURCE[voucher.source];
   return (
     <>
       <div className="page-head">
@@ -79,7 +86,9 @@ function LegacyVoucherPage() {
         </section>
         <div className="stack">
           <section className="card stack" aria-labelledby="facts-heading">
-            <h2 id="facts-heading" style={{ margin: 0 }}>Angaben</h2>
+            <h2 id="facts-heading" style={{ margin: 0 }}>
+              Angaben
+            </h2>
             <dl className="facts">
               <dt>Kontakt</dt>
               <dd>
@@ -119,14 +128,23 @@ function LegacyVoucherPage() {
                 {voucher.currency !== "EUR" ? ` (${voucher.currency})` : ""}
               </dd>
             </dl>
-            {voucher.categories.length > 0 && (
-              <div className="small muted">Kategorie: {voucher.categories.map((c) => c.name || c.categoryId).join(", ")}</div>
+            {voucher.categories.length > 0 && <div className="small muted">Kategorie: {voucher.categories.map((c) => c.name || c.categoryId).join(", ")}</div>}
+            {voucher.remark && (
+              <p className="small" style={{ margin: 0 }}>
+                {voucher.remark}
+              </p>
             )}
-            {voucher.remark && <p className="small" style={{ margin: 0 }}>{voucher.remark}</p>}
           </section>
           {voucher.payment && (
             <section className="card stack" aria-labelledby="payment-heading">
-              <h2 id="payment-heading" style={{ margin: 0 }}>Zahlungen</h2>
+              <h2 id="payment-heading" style={{ margin: 0 }}>
+                Zahlungen
+              </h2>
+              {voucher.paymentHistoryIssue && (
+                <p className="banner banner-info" role="status">
+                  {voucher.paymentHistoryIssue}
+                </p>
+              )}
               <div className="small">
                 {PAYMENT_STATUS[voucher.payment.status] ?? voucher.payment.status}
                 {voucher.payment.openAmount ? `, offen ${formatEuro(voucher.payment.openAmount)}` : ""}
@@ -134,14 +152,14 @@ function LegacyVoucherPage() {
               {voucher.payment.items.map((item, i) => (
                 <div key={i} className="history-row small">
                   <span>{formatDate(item.date)}</span>
-                  <span className="muted">{item.type}</span>
+                  <span className="muted">{item.account ?? item.type}</span>
                   <span className="mono">{formatEuro(item.amount)}</span>
                 </div>
               ))}
             </section>
           )}
           <p className="small muted" style={{ margin: 0 }}>
-            Übernommen am {formatDateTime(voucher.createdAt)} · {source.name}-ID {voucher.lexofficeId}
+            Übernommen am {formatDateTime(voucher.createdAt)} · {source.name}-ID {voucher.externalId}
           </p>
         </div>
       </div>

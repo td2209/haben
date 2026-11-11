@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
   let invoices: typeof import("./invoices.ts");
@@ -39,7 +39,8 @@ describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate journal_lines, journal_entries, invoice_lines, invoices, invoice_number_counters, contact_versions, contacts, exchange_rates, company cascade`;
+    await leeren(sql)`truncate journal_lines, journal_entries, invoice_lines, invoices, invoice_number_counters, contact_versions, contacts, exchange_rates,
+      company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, telefon, steuernummer, ust_id, bundesland, iban, bic, bank)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '+49 941 123456',
               '198/113/10010', 'DE123456789', 'BY', 'DE89370400440532013000', 'COBADEFFXXX', 'Commerzbank')`;
@@ -59,6 +60,34 @@ describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
     contactId = contact.id;
   });
 
+  it("speichert die Beschreibung einer Position, schreibt sie ins XML und übernimmt sie ins Storno", async () => {
+    const created = await invoices.createDraft(actor, {
+      ...draft(),
+      lines: [{ ...line(9500, 1900, 10_000), detail: "  Konzeption und Umsetzung\nlaut Rahmenvertrag RV-2026-17  " }, line(5000)],
+    });
+    const stored = await sql`select position, description, detail from invoice_lines where invoice_id = ${created.id} order by position`;
+    expect(stored.map((r) => r.detail)).toEqual(["Konzeption und Umsetzung\nlaut Rahmenvertrag RV-2026-17", ""]);
+    const final = await invoices.finalizeInvoice(actor, created.id);
+    expect(final.xml).toContain("Konzeption und Umsetzung");
+    const storno = await invoices.cancelInvoice(actor, final.id, "2026-10-05");
+    const [first] = await sql`select detail from invoice_lines where invoice_id = ${storno.id} and position = 1`;
+    expect(first!.detail).toBe("Konzeption und Umsetzung\nlaut Rahmenvertrag RV-2026-17");
+    await expect(sql`update invoice_lines set detail = 'x' where invoice_id = ${final.id}`).rejects.toThrow(/festgeschrieben/);
+  });
+
+  it("Einleitung und Hinweis stehen festgeschrieben in XML und Siegel; die Rechnung lässt sich danach nicht mehr ändern", async () => {
+    const created = await invoices.createDraft(actor, { ...draft(), intro: "Bestellnummer 4500123456\nProjekt Phoenix", note: "Vielen Dank." });
+    expect(created.intro).toBe("Bestellnummer 4500123456\nProjekt Phoenix");
+    const final = await invoices.finalizeInvoice(actor, created.id);
+    expect(final.xml).toContain("Bestellnummer 4500123456");
+    expect(final.xml!.indexOf("Bestellnummer 4500123456")).toBeLessThan(final.xml!.indexOf("Vielen Dank."));
+    const [seal] = await sql`select columns from seals where table_name = 'invoices' and row_id = ${final.id}`;
+    expect(seal!.columns.invoices).toContain("intro");
+    await expect(sql`update invoices set intro = 'geändert' where id = ${final.id}`).rejects.toThrow(/festgeschrieben/);
+    // Ohne Einleitung bleibt das Feld leer
+    expect((await invoices.createDraft(actor, draft())).intro).toBe("");
+  });
+
   it("Fremdwährung: USt-Kurs des Leistungsmonats, Steuer in Euro in PDF und XML, gebucht in Euro; Storno mit demselben Kurs", async () => {
     // Mit deutscher Umsatzsteuer nur bei Soll-Versteuerung (siehe nächster Test)
     await sql`update company set versteuerung = 'soll'`;
@@ -66,7 +95,9 @@ describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
     const usd = { ...draft(), currency: "USD" };
     const waiting = await invoices.createDraft(actor, usd);
     expect(waiting).toMatchObject({ currency: "USD", exchangeRate: null, net: 0, gross: 0 });
-    expect((await invoices.finalizeIssues(waiting.id)).some((i) => /Umrechnungskurs für USD 09\/2026 fehlt|09\/2026 noch nicht veröffentlicht/.test(i))).toBe(true);
+    expect((await invoices.finalizeIssues(waiting.id)).some((i) => /Umrechnungskurs für USD 09\/2026 fehlt|09\/2026 noch nicht veröffentlicht/.test(i))).toBe(
+      true,
+    );
 
     const stammdaten = await import("../stammdaten/index.ts");
     await stammdaten.storeExchangeRates(actor, [{ currency: "USD", month: "2026-09", rate: "1.0812" }], "bmf");
@@ -77,8 +108,13 @@ describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
     expect(final.xml).toContain("<ram:InvoiceCurrencyCode>USD</ram:InvoiceCurrencyCode>");
     expect(final.xml).toContain('<ram:TaxTotalAmount currencyID="EUR">166.94</ram:TaxTotalAmount>');
     expect(final.xml).toContain("<ram:GrandTotalAmount>1130.50</ram:GrandTotalAmount>");
-    const booked = await sql`select l.account, l.debit, l.credit from journal_lines l join journal_entries e on e.id = l.entry_id where e.source_id = ${final.id} order by l.account`;
-    expect(booked.map((l) => [l.account, l.debit - l.credit])).toEqual([["1400", 104_559], ["1776", -16_694], ["8400", -87_865]]);
+    const booked =
+      await sql`select l.account, l.debit, l.credit from journal_lines l join journal_entries e on e.id = l.entry_id where e.source_id = ${final.id} order by l.account`;
+    expect(booked.map((l) => [l.account, l.debit - l.credit])).toEqual([
+      ["1400", 104_559],
+      ["1776", -16_694],
+      ["8400", -87_865],
+    ]);
 
     // Storno: Kurs der Rechnung, nicht der des Stornomonats
     await stammdaten.storeExchangeRates(actor, [{ currency: "USD", month: "2026-10", rate: "1.2" }], "bmf");
@@ -114,7 +150,7 @@ describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
   });
 
   it("Festschreiben vergibt lückenlose Nummern, erzeugt PDF und XML und bucht", async () => {
-    await invoices.setNextNumber(actor, 2026, 34);
+    await invoices.setNextNumber(actor, "2026-03-02", 34);
     const first = await invoices.createDraft(actor, draft());
     const second = await invoices.createDraft(actor, draft());
 
@@ -226,7 +262,7 @@ describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
     const detail = await contacts.getContact(contactId);
     expect(detail?.versions.map((v) => v.version)).toEqual([2, 1]);
     const again = await invoices.getInvoice(final.id);
-    expect((again?.invoice.buyer as { strasse: string }).strasse).toBe("Hafenstraße 5");
+    expect((again!.invoice.buyer as { strasse: string }).strasse).toBe("Hafenstraße 5");
     await expect(sql`delete from contacts`).rejects.toThrow(/nur ergänzt/);
   }, 30_000);
 
@@ -242,8 +278,17 @@ describe.skipIf(!testDatabaseUrl)("Rechnungen (Postgres)", () => {
     expect(a1).toMatchObject({ number: "2026-001", variant: "abschlag", gross: 357_000 });
     expect(a1.xml).toContain("<ram:TypeCode>326</ram:TypeCode>");
     const other = await contacts.createContact(actor, {
-      kundennummer: "", name: "Alpenblick Media AG", strasse: "Isartorplatz 1", plz: "80331", ort: "München", land: "DE",
-      email: "", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+      kundennummer: "",
+      name: "Alpenblick Media AG",
+      strasse: "Isartorplatz 1",
+      plz: "80331",
+      ort: "München",
+      land: "DE",
+      email: "",
+      ustId: "",
+      iban: "",
+      leitwegId: "",
+      defaultFormat: null,
     });
     const b1 = await final({ ...draft([line(50_000)]), contactId: other.id, variant: "abschlag" });
 

@@ -33,6 +33,10 @@ const invoice = (fields: Record<string, unknown>) =>
   });
 
 describe("Grundbausteine", () => {
+  it("erfindet ohne Einzelzahlungsdaten weder Zahlung noch Ersatzdatum", () => {
+    const { payment } = mapSevInvoice(invoice({ payDate: null }), []);
+    expect(payment).toMatchObject({ openAmount: 0, paidDate: null, items: [] });
+  });
   it("liest Beträge als Text oder Zahl", () => {
     expect(sevNumber("119.00")).toBe(119);
     expect(sevNumber("19,5")).toBe(19.5);
@@ -44,10 +48,17 @@ describe("Grundbausteine", () => {
 
 describe("mapSevContact", () => {
   it("nimmt Firmennamen, sonst Vor- und Nachname, mit Adresse, Land und Haupt-E-Mail", () => {
-    const org = sevContactSchema.parse({ id: 7, name: "Berliner Kindl GmbH", customerNumber: "1001", vatNumber: "DE123456789" });
+    const org = sevContactSchema.parse({ id: 7, name: "Berliner Kindl GmbH", category: { id: "3" }, customerNumber: "1001", vatNumber: "DE123456789" });
     const person = sevContactSchema.parse({ id: "8", surename: "Erika", familyname: "Mustermann" });
     const addresses = firstByContact([
-      { id: 1, contact: { id: "7", objectName: "Contact" }, street: "Hauptstr. 1", zip: "10115", city: "Berlin", country: { id: 1, objectName: "StaticCountry", code: "de" } },
+      {
+        id: 1,
+        contact: { id: "7", objectName: "Contact" },
+        street: "Hauptstr. 1",
+        zip: "10115",
+        city: "Berlin",
+        country: { id: 1, objectName: "StaticCountry", code: "de" },
+      },
     ]);
     const mails = firstByContact([
       { id: 1, contact: { id: 7 }, type: "EMAIL", value: "info@example.com", main: false },
@@ -57,6 +68,7 @@ describe("mapSevContact", () => {
       sevdeskId: "7",
       name: "Berliner Kindl GmbH",
       kundennummer: "1001",
+      role: "customer",
       strasse: "Hauptstr. 1",
       plz: "10115",
       ort: "Berlin",
@@ -66,6 +78,20 @@ describe("mapSevContact", () => {
       steuernummer: "",
     });
     expect(mapSevContact(person)).toMatchObject({ name: "Erika Mustermann", land: "DE", kundennummer: null });
+  });
+
+  it.each([
+    ["2", "supplier", null],
+    [2, "supplier", null],
+    ["3", "customer", "1001"],
+    [3, "customer", "1001"],
+    ["4", null, "1001"],
+    ["28", null, "1001"],
+    ["999", null, "1001"],
+    [null, null, "1001"],
+  ])("ordnet Kategorie %s eindeutig zu und übernimmt die Nummer außer bei Lieferanten", (categoryId, role, kundennummer) => {
+    const raw = sevContactSchema.parse({ id: "7", customerNumber: " 1001 ", category: categoryId === null ? null : { id: categoryId } });
+    expect(mapSevContact(raw)).toMatchObject({ role, kundennummer });
   });
 
   it("erkennt Ansprechpartner einer Organisation", () => {
@@ -104,14 +130,12 @@ describe("mapSevInvoice", () => {
       status: "balanced",
       openAmount: 0,
       paidDate: "2024-03-12",
-      items: [{ type: "manualPayment", date: "2024-03-12", amount: 22600 }],
+      items: [],
     });
   });
 
   it("nimmt bei einem Satz die Summen des Belegs", () => {
-    const { voucher } = mapSevInvoice(invoice({ sumNet: "100", sumTax: "19", sumGross: "119" }), [
-      { id: 1, taxRate: 19, sumNet: "99.99", sumTax: "19.00" },
-    ]);
+    const { voucher } = mapSevInvoice(invoice({ sumNet: "100", sumTax: "19", sumGross: "119" }), [{ id: 1, taxRate: 19, sumNet: "99.99", sumTax: "19.00" }]);
     expect(voucher.taxes).toEqual([{ rate: 1900, net: 10000, tax: 1900 }]);
   });
 
@@ -120,13 +144,13 @@ describe("mapSevInvoice", () => {
     expect(open.voucher.status).toBe("open");
     expect(open.payment).toEqual({ status: "open", openAmount: 22600, paidDate: null, items: [] });
     const part = mapSevInvoice(invoice({ status: "750", paidAmount: "100.00", payDate: "2024-04-01" }), []);
-    expect(part.payment).toMatchObject({ status: "partlyPaid", openAmount: 12600, items: [{ date: "2024-04-01", amount: 10000 }] });
+    expect(part.payment).toMatchObject({ status: "partlyPaid", openAmount: 12600, items: [] });
   });
 
   it("macht aus Storno eine negative Gutschrift und aus AR eine Abschlagsrechnung", () => {
     const storno = mapSevInvoice(invoice({ invoiceType: "SR", sumNet: "200", sumTax: "26", sumGross: "226" }), []);
     expect(storno.voucher).toMatchObject({ type: "creditnote", net: -20000, tax: -2600, gross: -22600, dueDate: null });
-    expect(storno.payment.items).toEqual([{ type: "manualPayment", date: "2024-03-12", amount: -22600 }]);
+    expect(storno.payment.items).toEqual([]);
     expect(mapSevInvoice(invoice({ invoiceType: "AR" }), []).voucher.type).toBe("downpaymentinvoice");
   });
 
@@ -153,7 +177,7 @@ describe("mapSevCreditNote", () => {
     const { voucher, payment } = mapSevCreditNote(note, [{ id: 1, taxRate: "19", sumNet: "10", sumTax: "1.9" }]);
     expect(voucher).toMatchObject({ lexofficeId: "creditnote/5", type: "creditnote", net: -1000, tax: -190, gross: -1190, contactName: "Kunde AG" });
     expect(voucher.taxes).toEqual([{ rate: 1900, net: -1000, tax: -190 }]);
-    expect(payment).toMatchObject({ openAmount: 0, items: [{ date: "2024-05-02", amount: -1190 }] });
+    expect(payment).toMatchObject({ openAmount: 0, paidDate: null, items: [] });
   });
 });
 
@@ -170,11 +194,21 @@ describe("mapSevVoucher", () => {
     sumTax: "19.00",
     sumGross: "119.00",
     paidAmount: 0,
-    creditDebit: "D",
+    creditDebit: "C",
     voucherType: "VOU",
     currency: "EUR",
     paymentDeadline: "2024-02-24T00:00:00+01:00",
   };
+
+  it.each([
+    ["ohne supplierName", { supplierName: null, supplierNameAtSave: " Bürohaus GmbH " }, "Bürohaus GmbH"],
+    ["bei leerem supplierName", { supplierName: "  ", supplierNameAtSave: "Bürohaus GmbH" }, "Bürohaus GmbH"],
+    ["mit supplierName vorrangig", { supplierName: "Eigener Name", supplierNameAtSave: "Bürohaus GmbH" }, "Eigener Name"],
+    ["ohne beide Namen leer", { supplierName: null, supplierNameAtSave: null }, ""],
+  ])("liest den Lieferanten aus supplierNameAtSave: %s", (_fall, namen, erwartet) => {
+    const { voucher } = mapSevVoucher(sevVoucherSchema.parse({ ...base, ...namen }), []);
+    expect(voucher.contactName).toBe(erwartet);
+  });
 
   it("bildet Ausgaben mit Kategorien, Datei und offenem Betrag ab", () => {
     const { voucher, payment } = mapSevVoucher(sevVoucherSchema.parse(base), [
@@ -201,14 +235,36 @@ describe("mapSevVoucher", () => {
   });
 
   it("erkennt Einnahmen und Gutschriften", () => {
-    expect(mapSevVoucher(sevVoucherSchema.parse({ ...base, creditDebit: "C" }), []).voucher.type).toBe("salesinvoice");
+    expect(mapSevVoucher(sevVoucherSchema.parse({ ...base, creditDebit: "D" }), []).voucher.type).toBe("salesinvoice");
     const credit = mapSevVoucher(sevVoucherSchema.parse({ ...base, sumNet: "-10", sumTax: "-1.90", sumGross: "-11.90" }), []);
-    expect(credit.voucher).toMatchObject({ type: "purchasecreditnote", gross: -1190, taxes: [{ rate: 0, net: -1000, tax: -190 }] });
+    expect(credit.voucher).toMatchObject({ type: "purchasecreditnote", gross: -1190, taxes: [{ rate: 1900, net: -1000, tax: -190 }] });
   });
 
   it("lässt Entwürfe und Vorlagen wiederkehrender Belege aus", () => {
     expect(isSevVoucherImportable(sevVoucherSchema.parse({ ...base, status: "50" }))).toBe(false);
     expect(isSevVoucherImportable(sevVoucherSchema.parse({ ...base, voucherType: "RV" }))).toBe(false);
     expect(isSevVoucherImportable(sevVoucherSchema.parse(base))).toBe(true);
+  });
+});
+
+describe("mapSevInvoice ohne Positionen", () => {
+  const head = { id: "9", invoiceNumber: "RE-1", invoiceDate: "2025-03-10", status: "1000", invoiceType: "RE", paidAmount: 0 };
+  const taxesFor = (sumNet: string, sumTax: string, sumGross: string) =>
+    mapSevInvoice(sevInvoiceSchema.parse({ ...head, sumNet, sumTax, sumGross }), []).voucher.taxes;
+
+  it.each([
+    ["19 %", "119", "22.61", "141.61", 1900, 11_900, 2_261],
+    ["7 %", "100", "7", "107", 700, 10_000, 700],
+    ["Rundung auf einen Cent", "0.99", "0.19", "1.18", 1900, 99, 19],
+    ["nächstliegender Satz bei kleinem Betrag", "0.10", "0.01", "0.11", 700, 10, 1],
+    ["vom Brutto gerechnet, mehr als ein halber Cent Abstand", "1.71", "0.33", "2.04", 1900, 171, 33],
+    ["regulärer Satz vor dem Satz von 2020", "0.20", "0.01", "0.21", 700, 20, 1],
+    ["16 % aus 2020, wenn kein regulärer Satz passt", "100", "16", "116", 1600, 10_000, 1_600],
+  ])("nimmt den Satz aus dem Kopf: %s", (_name, net, tax, gross, rate, netCents, taxCents) => {
+    expect(taxesFor(net, tax, gross)).toEqual([{ rate, net: netCents, tax: taxCents }]);
+  });
+
+  it("lässt 0, wenn der Kopf keinen bekannten Satz trägt", () => {
+    expect(taxesFor("100", "12.34", "112.34")).toEqual([{ rate: 0, net: 10_000, tax: 1_234 }]);
   });
 });

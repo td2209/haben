@@ -1,20 +1,25 @@
+import { currentYear } from "@haben/core";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { z } from "zod/mini";
 import { ArchiveFiles } from "../../../components/archiv/ArchiveFiles.tsx";
 import { DatevBookings } from "../../../components/archiv/DatevBookings.tsx";
-import { LegacyVouchers } from "../../../components/archiv/LegacyVouchers.tsx";
+import { EXACT_SEARCH, LegacyVouchers } from "../../../components/archiv/LegacyVouchers.tsx";
 import { Migration } from "../../../components/archiv/Migration.tsx";
-import { getDatevBookings, getLegacyVouchers, getMigration } from "../../../server/functions/archive.ts";
+import { OrderDocuments } from "../../../components/archiv/OrderDocuments.tsx";
+import { getDatevBookings, getLegacyVouchers, getMigration, getOrderDocuments } from "../../../server/functions/archive.ts";
 import styles from "../../../styles/archiv.css?url";
 
 const searchSchema = z.object({
-  ansicht: z.optional(z.enum(["umzug", "belege", "buchungen", "dateien"])),
+  ansicht: z.optional(z.enum(["umzug", "belege", "auftraege", "buchungen", "dateien"])),
+  dokumentart: z.optional(z.enum(["AN", "AB", "LI"])),
   jahr: z.optional(z.int().check(z.minimum(2000), z.maximum(2100))),
   richtung: z.optional(z.enum(["alle", "einnahme", "ausgabe"])),
   suche: z.optional(z.string().check(z.maxLength(100))),
   ohneDatei: z.optional(z.boolean()),
   ohneBeleg: z.optional(z.boolean()),
   seite: z.optional(z.int().check(z.minimum(0))),
+  /** Stichtag der Übernahme offener Posten (letzter Tag der alten Buchhaltung) */
+  stichtag: z.optional(z.string().check(z.regex(/^\d{4}-\d{2}-\d{2}$/))),
 });
 
 export type ArchiveSearch = z.infer<typeof searchSchema>;
@@ -24,9 +29,13 @@ export const Route = createFileRoute("/_app/archiv/")({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps }) => {
     const view = deps.ansicht ?? "umzug";
-    const migration = await getMigration();
-    const years = migration.years.map((y) => y.year);
-    const year = deps.jahr ?? years[0] ?? new Date().getFullYear() - 1;
+    const migration = await getMigration({ data: { stichtag: deps.stichtag } });
+    const years = [...new Set([...migration.years.map((y) => y.year), ...migration.orderArchive.years])].sort((a, b) => b - a);
+    const year = deps.jahr ?? years[0] ?? currentYear() - 1;
+    if (view === "auftraege") {
+      const orders = await getOrderDocuments({ data: { year, search: deps.suche ?? "", kind: deps.dokumentart } });
+      return { view, year, years, migration, orders } as const;
+    }
     if (view === "belege") {
       const vouchers = await getLegacyVouchers({
         data: { year, direction: deps.richtung ?? "alle", search: deps.suche ?? "", ohneDatei: deps.ohneDatei ?? false },
@@ -48,6 +57,7 @@ export const Route = createFileRoute("/_app/archiv/")({
 const VIEWS = [
   { value: "umzug", label: "Umzug" },
   { value: "belege", label: "Belege" },
+  { value: "auftraege", label: "Auftragsdokumente" },
   { value: "buchungen", label: "DATEV-Buchungen" },
   { value: "dateien", label: "Originaldateien" },
 ] as const;
@@ -66,7 +76,9 @@ function ArchivePage() {
           {VIEWS.map((view) => (
             <Link
               key={view.value}
-              to="/archiv" activeProps={{}}
+              to="/archiv"
+              activeProps={{}}
+              activeOptions={EXACT_SEARCH}
               search={{ ansicht: view.value === "umzug" ? undefined : view.value, jahr: search.jahr }}
               className={data.view === view.value ? "chip active" : "chip"}
               aria-current={data.view === view.value ? "page" : undefined}
@@ -78,6 +90,7 @@ function ArchivePage() {
       </div>
       {data.view === "umzug" && <Migration data={data.migration} />}
       {data.view === "belege" && <LegacyVouchers year={data.year} years={data.years} rows={data.vouchers} search={search} />}
+      {data.view === "auftraege" && <OrderDocuments year={data.year} years={data.years} rows={data.orders} search={search} />}
       {data.view === "buchungen" && <DatevBookings year={data.year} years={data.years} data={data.bookings} search={search} />}
       {data.view === "dateien" && <ArchiveFiles files={data.migration.files} kinds={data.migration.kinds} />}
     </>

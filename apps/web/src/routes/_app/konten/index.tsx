@@ -1,4 +1,4 @@
-import { formatEuro, kontenkennzahlen, kontenklasse } from "@haben/core";
+import { currentYear, formatEuro, kontenkennzahlen, kontenklasse } from "@haben/core";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { z } from "zod/mini";
@@ -6,6 +6,7 @@ import { SaldoBetrag, ZEITRAEUME, lastDayBefore } from "../../../components/Ledg
 import { formatDate } from "../../../lib/format.ts";
 import { getSaldenliste } from "../../../server/functions/ledger.ts";
 import styles from "../../../styles/auswertungen.css?url";
+import { Field } from "../../../components/Field.tsx";
 
 const search = z.object({
   jahr: z.optional(z.int()),
@@ -15,7 +16,7 @@ const search = z.object({
 export const Route = createFileRoute("/_app/konten/")({
   validateSearch: search,
   loaderDeps: ({ search }) => search,
-  loader: ({ deps }) => getSaldenliste({ data: { year: deps.jahr ?? new Date().getFullYear(), period: deps.zeitraum ?? "jahr" } }),
+  loader: ({ deps }) => getSaldenliste({ data: { year: deps.jahr ?? currentYear(), period: deps.zeitraum ?? "jahr" } }),
   head: () => ({ meta: [{ title: "Konten · Haben" }], links: [{ rel: "stylesheet", href: styles }] }),
   component: KontenPage,
 });
@@ -26,9 +27,7 @@ function Kpi({ label, value, hint }: { label: string; value: number; hint: strin
   return (
     <div className="card">
       <div className="kpi-label">{label}</div>
-      <div className="kpi-value" style={{ fontSize: 22 }}>
-        {formatEuro(value)}
-      </div>
+      <div className="kpi-value">{formatEuro(value)}</div>
       <div className="small muted">{hint}</div>
     </div>
   );
@@ -82,26 +81,28 @@ function KontenPage() {
           <h1>Konten {year}</h1>
         </div>
         <div className="actions" style={{ alignItems: "end", flexWrap: "wrap" }}>
-          <label className="field">
-            Jahr
-            <select value={year} onChange={(e) => navigate({ to: "/konten", search: { jahr: Number(e.target.value), zeitraum } })}>
-              {years.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            Zeitraum
-            <select value={zeitraum} onChange={(e) => navigate({ to: "/konten", search: { jahr: year, zeitraum: e.target.value } })}>
-              {ZEITRAEUME.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <Field label="Jahr">
+            {(control) => (
+              <select {...control} value={year} onChange={(e) => navigate({ to: "/konten", search: { jahr: Number(e.target.value), zeitraum } })}>
+                {years.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Zeitraum">
+            {(control) => (
+              <select {...control} value={zeitraum} onChange={(e) => navigate({ to: "/konten", search: { jahr: year, zeitraum: e.target.value } })}>
+                {ZEITRAEUME.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
           <a className="btn" href={`/api/konten/${year}?zeitraum=${zeitraum}`}>
             CSV
           </a>
@@ -112,20 +113,26 @@ function KontenPage() {
         <Kpi label="Bank" value={k.bank} hint={`laut Buchungen am ${formatDate(until)}`} />
         <Kpi label="Offene Forderungen" value={k.forderungen} hint="Rechnungen noch nicht bezahlt" />
         <Kpi label="Offene Verbindlichkeiten" value={k.verbindlichkeiten} hint="Belege noch nicht bezahlt" />
-        <Kpi label={k.umsatzsteuer >= 0 ? "Umsatzsteuer-Zahllast" : "Umsatzsteuer-Erstattung"} value={Math.abs(k.umsatzsteuer)} hint="fällig, nach Vorsteuer und Vorauszahlungen" />
+        <Kpi
+          label={k.umsatzsteuer >= 0 ? "Umsatzsteuer-Zahllast" : "Umsatzsteuer-Erstattung"}
+          value={Math.abs(k.umsatzsteuer)}
+          hint="fällig, nach Vorsteuer und Vorauszahlungen"
+        />
         <Kpi label="Erlöse − Aufwand" value={k.ertraege - k.aufwand} hint={`${formatEuro(k.ertraege)} − ${formatEuro(k.aufwand)} im Zeitraum`} />
       </div>
 
       <section className="card" aria-label="Saldenliste">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
           <p className="small muted" style={{ margin: 0, maxWidth: 640 }}>
-            {formatDate(data.from)} bis {formatDate(until)}. Erlöse und Aufwand als Betrag, Bestandskonten mit Guthaben oder Schuld; S und H
-            zeigen die Buchhaltungsseite. Eröffnung = Saldo ab Jahresbeginn bis zum Beginn des Zeitraums, ohne Vortrag aus dem Vorjahr.
+            {formatDate(data.from)} bis {formatDate(until)}. Erlöse und Aufwand als Betrag, Bestandskonten mit Guthaben oder Schuld; S und H zeigen die
+            Buchhaltungsseite.{" "}
+            {data.vortrag
+              ? "Eröffnung = Saldenvortrag aus den Vorjahren und Eröffnungsbuchungen, dazu der Saldo ab Jahresbeginn bis zum Beginn des Zeitraums."
+              : "Eröffnung = Saldo ab Jahresbeginn bis zum Beginn des Zeitraums, ohne Vortrag aus dem Vorjahr."}
           </p>
-          <label className="field" style={{ minWidth: 240 }}>
-            Konto suchen
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nummer oder Name" />
-          </label>
+          <Field label="Konto suchen" style={{ minWidth: 240 }}>
+            {(control) => <input {...control} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nummer oder Name" />}
+          </Field>
         </div>
         {data.rows.length === 0 ? (
           <p className="muted" style={{ margin: 0 }}>

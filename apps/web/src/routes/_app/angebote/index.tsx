@@ -3,6 +3,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { QuoteStatus } from "../../../components/QuoteStatus.tsx";
 import { formatDate } from "../../../lib/format.ts";
 import { getQuotes } from "../../../server/functions/quotes.ts";
+import { Icon } from "../../../components/Icon.tsx";
 
 export const Route = createFileRoute("/_app/angebote/")({
   loader: () => getQuotes(),
@@ -28,8 +29,8 @@ function QuotesPage() {
       </div>
       {offen.length > 0 && (
         <p className="muted" style={{ marginTop: 0 }}>
-          {offen.length} {offen.length === 1 ? "Angebot wartet" : "Angebote warten"} auf Antwort, zusammen{" "}
-          {formatEuro(offen.reduce((s, q) => s + q.net, 0))} netto.
+          {offen.length} {offen.length === 1 ? "Angebot wartet" : "Angebote warten"} auf Antwort, zusammen {formatEuro(offen.reduce((s, q) => s + q.net, 0))}{" "}
+          netto.
         </p>
       )}
       <section className="card" aria-label="Angebotsliste">
@@ -55,8 +56,9 @@ function QuotesPage() {
                 <div>
                   <QuoteStatus status={quote.listStatus} />
                   {quote.mailed && (
-                    <span className="small muted" title="per E-Mail versendet" style={{ marginLeft: 6 }}>
-                      ✉<span className="visually-hidden"> per E-Mail versendet</span>
+                    <span className="small muted" title="per E-Mail versendet" style={{ marginLeft: 8, verticalAlign: "middle" }}>
+                      <Icon name="mail" size={14} />
+                      <span className="visually-hidden"> per E-Mail versendet</span>
                     </span>
                   )}
                 </div>

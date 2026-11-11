@@ -56,16 +56,47 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Gehärtet: Dateisystem schreibgeschützt bis auf die Volumes unten und /tmp, keine Capabilities, keine neuen Rechte
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     environment:
       DATABASE_URL: postgres://haben:${DB_PASSWORD}@db:5432/haben
+      # Betriebsart: false lokale Anmeldung, true ausschließlich OpenID Connect mit Rollen aus Gruppen (docs/installation.md)
+      OIDC_ONLY: ${OIDC_ONLY:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-}
+      OIDC_DISPLAY_NAME: ${OIDC_DISPLAY_NAME:-}
+      OIDC_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM:-groups}
+      OIDC_GROUP_INHABER: ${OIDC_GROUP_INHABER:-}
+      OIDC_GROUP_STEUERBERATUNG: ${OIDC_GROUP_STEUERBERATUNG:-}
       BETTER_AUTH_URL: https://${DOMAIN:?DOMAIN fehlt in .env}
       BETTER_AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET fehlt in .env}
       HABEN_ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY fehlt in .env}
       ERIC_HOME: ${ERIC_HOME:-}
       ERIC_AUTO_INSTALL: ${ERIC_AUTO_INSTALL:-}
       ERIC_SHA256: ${ERIC_SHA256:-}
+      # ELSTER auf arm64: startet den ERiC-Worker emuliert als x86_64 (docs/installation.md, „ELSTER auf arm64“)
+      ERIC_WORKER_COMMAND: ${ERIC_WORKER_COMMAND:-}
       ELSTER_HERSTELLER_ID: ${ELSTER_HERSTELLER_ID:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Oder ein OpenAI-kompatibler Dienst (z. B. Ollama, OpenRouter); dann geht kein Beleg an Anthropic
+      EXTRACTION_PROVIDER: ${EXTRACTION_PROVIDER:-}
+      EXTRACTION_BASE_URL: ${EXTRACTION_BASE_URL:-}
+      EXTRACTION_MODEL: ${EXTRACTION_MODEL:-}
+      EXTRACTION_API_KEY: ${EXTRACTION_API_KEY:-}
+      EXTRACTION_TIMEOUT_SECONDS: ${EXTRACTION_TIMEOUT_SECONDS:-}
+      EXTRACTION_MAX_PAGES: ${EXTRACTION_MAX_PAGES:-}
+      EXTRACTION_INPUT: ${EXTRACTION_INPUT:-}
+      EXTRACTION_EXTRA_BODY: ${EXTRACTION_EXTRA_BODY:-}
+      LAYOUTS_MAX_COUNT: ${LAYOUTS_MAX_COUNT:-}
+      LAYOUTS_MAX_MB: ${LAYOUTS_MAX_MB:-}
+      LAYOUTS_PACKAGES_URL: ${LAYOUTS_PACKAGES_URL:-}
       ENABLE_BANKING_APP_ID: ${ENABLE_BANKING_APP_ID:-}
       ENABLE_BANKING_KEY_FILE: /run/secrets/enablebanking.pem
     volumes:
@@ -77,8 +108,13 @@ services:
       - eric:/var/lib/haben/eric
       # Alternativ ERiC von Hand: nach /opt/eric entpacken, Zeile einkommentieren, ERIC_HOME=/opt/eric in .env
       # - /opt/eric:/opt/eric:ro
+      # ELSTER auf arm64: x86_64-Laufzeit aus deploy/eric-x86_64/einrichten.sh, Zeile einkommentieren, ERIC_WORKER_COMMAND in .env
+      # - /opt/haben-x86_64:/opt/haben-x86_64:ro
       # Automatischer Kontoabruf: privater Schlüssel der Enable-Banking-Anwendung, Zeile einkommentieren
       # - ./enablebanking.pem:/run/secrets/enablebanking.pem:ro
+    # KI-Dienst (z. B. Ollama) direkt auf dem Server: unter Linux kennt der Container host.docker.internal nur so
+    # extra_hosts:
+    #   - host.docker.internal:host-gateway
 
   # Tägliches Backup von Datenbank und Belegen mit restic
   backup:

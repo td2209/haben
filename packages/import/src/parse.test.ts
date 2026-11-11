@@ -1,17 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import {
-  checkBalanceContinuity,
-  detectStatementFormat,
-  parseDotAmount,
-  parseGermanAmount,
-  parseStatement,
-  StatementParseError,
-} from "./index.ts";
+import { checkBalanceContinuity, detectStatementFormat, parseDotAmount, parseGermanAmount, parseStatement, StatementParseError } from "./index.ts";
 import { parseCsv } from "./csv.ts";
 
-const fixture = (name: string) =>
-  new Uint8Array(readFileSync(new URL(`../test-fixtures/${name}`, import.meta.url)));
+const fixture = (name: string) => new Uint8Array(readFileSync(new URL(`../test-fixtures/${name}`, import.meta.url)));
 
 describe("parseCsv", () => {
   it("öffnet Anführungszeichen nur am Feldanfang", () => {
@@ -238,11 +230,14 @@ describe("CAMT.053", () => {
       counterpartyIban: "DE89370400440532013000",
       purpose: "RE 2026-030 Leistungen Juli",
       bankReference: "2026090200001",
+      // Die Referenz der Bank steht in bankReference, die des Auftraggebers geht trotzdem nicht verloren
+      endToEndId: "RE2026030",
       type: "Gutschrift",
       valueDate: "2026-09-02",
     });
     expect(s.transactions[1]).toMatchObject({
       purpose: "Miete Coworking September",
+      endToEndId: undefined,
       counterpartyIban: "DE75512108001245126199",
       bankReference: "2026091500007",
       type: "Überweisung",

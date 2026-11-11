@@ -1,8 +1,9 @@
 import { useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useId, useRef, useState, type DragEvent } from "react";
+import { useId, useState, type DragEvent } from "react";
 import { errorMessage } from "../lib/format.ts";
 import { uploadDocuments } from "../server/functions/documents.ts";
+import { UploadButton } from "./UploadButton.tsx";
 
 const ACCEPT = "application/pdf,image/jpeg,image/png,image/webp,image/heic,.xml,application/xml,text/xml";
 
@@ -10,8 +11,6 @@ const ACCEPT = "application/pdf,image/jpeg,image/png,image/webp,image/heic,.xml,
 export function DocumentUpload({ aiAvailable }: { aiAvailable: boolean }) {
   const router = useRouter();
   const upload = useServerFn(uploadDocuments);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const cameraInput = useRef<HTMLInputElement>(null);
   const hintId = useId();
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -39,8 +38,6 @@ export function DocumentUpload({ aiAvailable }: { aiAvailable: boolean }) {
       setMessages([{ tone: "danger", text: errorMessage(error) }]);
     } finally {
       setBusy(false);
-      if (fileInput.current) fileInput.current.value = "";
-      if (cameraInput.current) cameraInput.current.value = "";
     }
   }
 
@@ -61,11 +58,23 @@ export function DocumentUpload({ aiAvailable }: { aiAvailable: boolean }) {
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
       >
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <svg
+          width="28"
+          height="28"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
           <path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
         </svg>
         <div style={{ fontWeight: 500 }}>
-          {busy ? "Wird abgelegt …" : (
+          {busy ? (
+            "Wird abgelegt …"
+          ) : (
             <>
               <span className="pointer-fine">Belege hierher ziehen</span>
               <span className="camera-only-text">Beleg fotografieren oder Datei wählen</span>
@@ -77,34 +86,21 @@ export function DocumentUpload({ aiAvailable }: { aiAvailable: boolean }) {
           {aiAvailable ? ", andere Belege liest die KI vor; du bestätigst immer selbst." : "; andere Belege füllst du von Hand aus."}
         </p>
         <div className="actions" style={{ justifyContent: "center" }}>
-          <button type="button" className="btn btn-primary" onClick={() => fileInput.current?.click()} disabled={busy}>
+          <UploadButton
+            className="btn btn-primary"
+            multiple
+            accept={ACCEPT}
+            disabled={busy}
+            inputLabel="Dateien auswählen"
+            aria-describedby={hintId}
+            onFiles={send}
+          >
             Dateien auswählen
-          </button>
-          <button type="button" className="btn camera-only" onClick={() => cameraInput.current?.click()} disabled={busy}>
+          </UploadButton>
+          <UploadButton className="btn camera-only" accept="image/*" capture="environment" disabled={busy} inputLabel="Foto aufnehmen" onFiles={send}>
             Foto aufnehmen
-          </button>
+          </UploadButton>
         </div>
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          accept={ACCEPT}
-          className="visually-hidden"
-          aria-label="Dateien auswählen"
-          aria-describedby={hintId}
-          tabIndex={-1}
-          onChange={(event) => void send([...(event.target.files ?? [])])}
-        />
-        <input
-          ref={cameraInput}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="visually-hidden"
-          aria-label="Foto aufnehmen"
-          tabIndex={-1}
-          onChange={(event) => void send([...(event.target.files ?? [])])}
-        />
       </div>
       {messages.length > 0 && (
         <ul className="upload-messages" role="status">

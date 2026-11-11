@@ -1,13 +1,26 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 function dkbCsv(rows: string[][]) {
   const header = `"Girokonto";"DE12 1203 0000 1234 5678 90"\n""\n`;
   const columns = `"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"\n`;
-  return new TextEncoder().encode(header + columns + rows.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n") + "\n");
+  return new TextEncoder().encode(`${header + columns + rows.map((r) => r.map((c) => `"${c}"`).join(";")).join("\n")}\n`);
 }
-const row = (date: string, purpose: string, amount: string) => [date, date, "Gebucht", "Nordwerk", "Testfirma", purpose, amount.startsWith("-") ? "Ausgang" : "Eingang", "DE02100100100006820101", amount, "", "", ""];
+const row = (date: string, purpose: string, amount: string) => [
+  date,
+  date,
+  "Gebucht",
+  "Nordwerk",
+  "Testfirma",
+  purpose,
+  amount.startsWith("-") ? "Ausgang" : "Eingang",
+  "DE02100100100006820101",
+  amount,
+  "",
+  "",
+  "",
+];
 
 /**
  * „Offen“ ist eine Regel (@haben/core, lebenszyklus.ts), genutzt von Rechnungsliste, Bankabgleich, offenen Posten,
@@ -40,22 +53,37 @@ describe.skipIf(!testDatabaseUrl)("offener Betrag überall gleich (Postgres)", (
   });
 
   beforeEach(async () => {
-    await sql`truncate allocations, bank_transactions, bank_imports, bank_accounts, journal_lines, journal_entries, invoice_lines, invoices,
+    await leeren(sql)`truncate allocations, bank_transactions, bank_imports, bank_accounts, journal_lines, journal_entries, invoice_lines, invoices,
       invoice_number_counters, contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, steuernummer, ust_id, bundesland, iban, bic, bank)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '198/113/10010', 'DE123456789', 'BY',
               'DE89370400440532013000', 'COBADEFFXXX', 'Commerzbank')`;
     contactId = (
       await contacts.createContact(actor, {
-        kundennummer: "10001", name: "Nordwerk Software GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-        email: "", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+        kundennummer: "10001",
+        name: "Nordwerk Software GmbH",
+        strasse: "Hafenstraße 5",
+        plz: "20457",
+        ort: "Hamburg",
+        land: "DE",
+        email: "",
+        ustId: "",
+        iban: "",
+        leitwegId: "",
+        defaultFormat: null,
       })
     ).id;
   });
 
   async function invoice(net: number, issueDate = "2026-05-02") {
     const draft = await invoices.createDraft(actor, {
-      contactId, issueDate, serviceFrom: null, serviceTo: null, paymentTermDays: 14, format: "zugferd", note: "",
+      contactId,
+      issueDate,
+      serviceFrom: null,
+      serviceTo: null,
+      paymentTermDays: 14,
+      format: "zugferd",
+      note: "",
       lines: [{ description: "Beratung", quantity: 1000, unit: "Std." as const, unitPrice: net, taxRate: 1900 as const }],
     });
     return invoices.finalizeInvoice(actor, draft.id);
@@ -131,5 +159,16 @@ describe.skipIf(!testDatabaseUrl)("offener Betrag überall gleich (Postgres)", (
     // Ausgezahlt: weg
     await pay(storno.id, -11_90, "15.06.26");
     expect((await reports.openPositions(today)).receivables).toEqual([]);
+  }, 60_000);
+
+  it("Übersicht-Kachel „Offene Forderungen“ zeigt dieselbe Summe wie die Tabelle in den Auswertungen, auf die sie verlinkt", async () => {
+    await invoice(100_00); // 119 € offen
+    // Bezahlt, dann storniert: 11,90 € sind zu erstatten
+    const paid = await invoice(10_00);
+    await pay(paid.id, 11_90, "03.06.26");
+    await invoices.cancelInvoice(actor, paid.id, "2026-06-10");
+    const { receivablesTotal } = await reports.openPositions(today);
+    expect(receivablesTotal).toBe(119_00 - 11_90);
+    expect((await invoices.invoiceSummary(today)).openTotal).toBe(receivablesTotal);
   }, 60_000);
 });

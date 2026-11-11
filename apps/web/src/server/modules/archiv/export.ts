@@ -1,15 +1,29 @@
 import { createHash } from "node:crypto";
-import { and, asc, between, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, between, desc, eq, getTableColumns, gt, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { bankAccountIncludedSql } from "../../db/bank-open.ts";
+import { effectivePayment } from "./payment-history.ts";
+import { effectiveContactName, effectiveDirection, effectiveTaxes, effectiveType } from "./sevdesk-richtung.ts";
 import { Zip, ZipDeflate, ZipPassThrough } from "fflate";
 import pkg from "../../../../package.json" with { type: "json" };
-import { ASSET_KINDS, ASSET_METHODS, csvDecimal, formatExchangeRate, PAUSCHALE_LABEL, WRITE_OFF_KINDS } from "@haben/core";
+import {
+  ASSET_KINDS,
+  ASSET_METHODS,
+  csvDecimal,
+  formatDegressiveRate,
+  formatExchangeRate,
+  isKapitalgesellschaft,
+  PAUSCHALE_LABEL,
+  WRITE_OFF_KINDS,
+} from "@haben/core";
 import { listAssets } from "../buchhaltung/index.ts";
 import { db, schema } from "../../db/index.ts";
-import { accountName } from "../buchhaltung/index.ts";
+import { accountName, openingCash } from "../buchhaltung/index.ts";
 import { loadFile } from "../../storage.ts";
 import { cashBookCsv } from "../bank/index.ts";
+import { splitsByDocument } from "../belege/index.ts";
 import { chainHead, formatPruefwert } from "../auswertungen/index.ts";
 import { today } from "../../today.ts";
+import { externalImportArchive } from "./external-import-archive.ts";
 
 /**
  * Jahresarchiv als ZIP: alle Rechnungen, Belege, Buchungen, Bankumsätze, Voranmeldungen,
@@ -36,7 +50,7 @@ export function csvField(value: CsvValue): string {
 }
 
 export function csvLine(values: CsvValue[]): string {
-  return values.map(csvField).join(";") + "\r\n";
+  return `${values.map(csvField).join(";")}\r\n`;
 }
 
 const encoder = new TextEncoder();
@@ -139,7 +153,8 @@ export async function* zipArchive(files: AsyncIterable<ArchiveFile>, mtime: Date
   const checksums: string[] = [];
   const add = async function* (file: ArchiveFile): AsyncGenerator<Uint8Array> {
     // fflate kennt kein ZIP64: lieber abbrechen als ein still kaputtes Archiv ausliefern
-    if (++entries > 0xffff || written >= 0xffffffff) throw new Error("Das Jahresarchiv überschreitet 4 GB oder 65.535 Dateien; das kann das ZIP-Format ohne ZIP64 nicht.");
+    if (++entries > 0xffff || written >= 0xffffffff)
+      throw new Error("Das Jahresarchiv überschreitet 4 GB oder 65.535 Dateien; das kann das ZIP-Format ohne ZIP64 nicht.");
     const entry = file.compress ? new ZipDeflate(file.path, { level: 6 }) : new ZipPassThrough(file.path);
     entry.mtime = mtime;
     zip.add(entry);
@@ -160,7 +175,7 @@ export async function* zipArchive(files: AsyncIterable<ArchiveFile>, mtime: Date
   };
 
   for await (const file of files) yield* add(file);
-  yield* add({ path: CHECKSUM_FILE, content: encoder.encode(checksums.join("\n") + "\n"), compress: true });
+  yield* add({ path: CHECKSUM_FILE, content: encoder.encode(`${checksums.join("\n")}\n`), compress: true });
   if (written >= 0xffffffff) throw new Error("Das Jahresarchiv überschreitet 4 GB; das kann das ZIP-Format ohne ZIP64 nicht.");
   zip.end();
   yield* drain();
@@ -211,13 +226,27 @@ const SOURCE_LABELS: Record<string, string> = {
   pauschale: "Pauschale",
   kasse: "Kasse",
   ausbuchung: "Ausbuchung",
+  manuell: "Manuell",
+  eroeffnung: "Eröffnung",
+  ausschuettung: "Ausschüttung",
+  lohn: "Lohn",
 };
 const ALLOCATION_LABELS: Record<(typeof schema.allocationKindEnum.enumValues)[number], string> = {
   invoice: "Rechnung",
   document: "Beleg",
   privat: "Privat",
+  spende: "Spende (Zuwendungen, Spenden)",
   geldtransit: "Geldtransit",
   ustVorauszahlung: "USt-Vorauszahlung",
+  sondervorauszahlung: "USt-Sondervorauszahlung",
+  kapest: "Kapitalertragsteuer",
+  lohn: "Lohn/Gehalt",
+  lohnsteuer: "Lohnsteuer",
+  sozialversicherung: "SV-Beiträge",
+  steuer: "Steuerzahlung",
+  zinsertrag: "Zinserträge",
+  darlehen: "Darlehen",
+  kategorie: "Direkt auf Kategorie",
   gebuehren: "Bankgebühren",
   mahnerloes: "Mahngebühren und Zinsen",
   kursdifferenz: "Kursdifferenz",
@@ -239,9 +268,10 @@ export async function exportYears(now = new Date()): Promise<number[]> {
     select extract(year from issue_date)::int as y from invoices where status = 'final'
     union select extract(year from coalesce(document_date, (uploaded_at at time zone 'Europe/Berlin')::date))::int from documents
     union select extract(year from date)::int from journal_entries
-    union select extract(year from booking_date)::int from bank_transactions
+    union select extract(year from booking_date)::int from bank_transactions where bank_account_id not in (select id from bank_accounts where excluded_at is not null)
     union select year::int from vat_returns
     union select extract(year from date)::int from lexoffice_vouchers
+    union select extract(year from date)::int from legacy_order_documents
     union select extract(year from date)::int from datev_bookings
     union select year::int from archive_files where year is not null`);
   const current = Number(today(now).slice(0, 4));
@@ -254,6 +284,7 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
   const problems: string[] = [];
 
   yield { path: "LIESMICH.txt", content: encoder.encode(readme(year, now, company)), compress: true };
+  yield* externalImportArchive(year);
 
   // Rechnungen ------------------------------------------------------------
   const invoices = await db
@@ -279,13 +310,7 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       variant: schema.invoices.variant,
     })
     .from(schema.invoices)
-    .where(
-      and(
-        eq(schema.invoices.status, "final"),
-        gte(schema.invoices.issueDate, yearStart(year)),
-        lte(schema.invoices.issueDate, yearEnd(year)),
-      ),
-    )
+    .where(and(eq(schema.invoices.status, "final"), gte(schema.invoices.issueDate, yearStart(year)), lte(schema.invoices.issueDate, yearEnd(year))))
     .orderBy(asc(schema.invoices.issueDate), asc(schema.invoices.number));
 
   const referenced = [...new Set(invoices.map((i) => i.correctsId).filter((id): id is string => id !== null))];
@@ -302,10 +327,7 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
   const usedInvoicePaths = new Set<string>();
   const invoiceRows: CsvValue[][] = [];
   for (const invoice of invoices) {
-    const [files] = await db
-      .select({ pdf: schema.invoices.pdf, xml: schema.invoices.xml })
-      .from(schema.invoices)
-      .where(eq(schema.invoices.id, invoice.id));
+    const [files] = await db.select({ pdf: schema.invoices.pdf, xml: schema.invoices.xml }).from(schema.invoices).where(eq(schema.invoices.id, invoice.id));
     const stem = `rechnungen/${safeName(invoice.number ?? invoice.id, 60)}`;
     let pdfPath = "";
     let xmlPath = "";
@@ -344,13 +366,32 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
     path: "rechnungen/rechnungen.csv",
     content: csv(
       [
-        "Nummer", "Art", "Datum", "Fällig", "Leistung von", "Leistung bis", "Kunde", "Netto", "USt", "Brutto", "Währung", "Kurs (1 EUR =)", "Format",
-        "Festgeschrieben", "SHA-256 PDF", "SHA-256 XML", "Storno/Korrektur von", "Datei PDF", "Datei XML", "ID",
+        "Nummer",
+        "Art",
+        "Datum",
+        "Fällig",
+        "Leistung von",
+        "Leistung bis",
+        "Kunde",
+        "Netto",
+        "USt",
+        "Brutto",
+        "Währung",
+        "Kurs (1 EUR =)",
+        "Format",
+        "Festgeschrieben",
+        "SHA-256 PDF",
+        "SHA-256 XML",
+        "Storno/Korrektur von",
+        "Datei PDF",
+        "Datei XML",
+        "ID",
       ],
       invoiceRows,
     ),
     compress: true,
   };
+  yield* attachmentArchive(INVOICE_ATTACHMENTS, await invoiceAttachmentRows(invoices), problems);
 
   // Angebote (Handelsbriefe, nur wenn vorhanden) -------------------------
   const quotes = await db
@@ -406,6 +447,7 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       ),
       compress: true,
     };
+    yield* attachmentArchive(QUOTE_ATTACHMENTS, await quoteAttachmentRows(quotes), problems);
   }
 
   // Belege ----------------------------------------------------------------
@@ -436,15 +478,28 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       privateShare: schema.documents.privateShare,
       lockedAt: schema.documents.lockedAt,
       uploadedAt: schema.documents.uploadedAt,
+      // Storno (#237): der Beleg bleibt gebucht, die Gegenbuchung steht im Journal
+      cancelledOn: schema.documentCancellations.date,
+      cancellationReason: schema.documentCancellations.reason,
     })
     .from(schema.documents)
+    .leftJoin(schema.documentCancellations, eq(schema.documentCancellations.documentId, schema.documents.id))
     .where(sql`${documentDay}::date between ${yearStart(year)}::date and ${yearEnd(year)}::date`)
     .orderBy(asc(documentDay), asc(schema.documents.uploadedAt), asc(schema.documents.id));
 
   const amounts = documents.length
-    ? await db.select().from(schema.documentAmounts).where(inArray(schema.documentAmounts.documentId, documents.map((d) => d.id)))
+    ? await db
+        .select()
+        .from(schema.documentAmounts)
+        .where(
+          inArray(
+            schema.documentAmounts.documentId,
+            documents.map((d) => d.id),
+          ),
+        )
     : [];
   const amountsByDocument = groupBy(amounts, (a) => a.documentId);
+  const splits = await splitsByDocument(documents.map((d) => d.id));
   const usedDocumentPaths = new Set<string>();
   const documentPaths = new Map<string, string>();
   const documentRows: CsvValue[][] = [];
@@ -468,7 +523,8 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       doc.supplierName,
       doc.supplierUstId,
       doc.invoiceNumber,
-      doc.category,
+      // Aufgeteilt (#271): Kategorie, Satz und Netto je Zeile, z. B. „wareneinkauf 19 % 100,00 | software 19 % 50,00“
+      doc.category ?? (splits.get(doc.id) ?? []).map((l) => `${l.category} ${l.taxRate / 100} % ${money(l.net)}`).join(" | "),
       money(rate(1900)?.net),
       money(rate(1900)?.tax),
       money(rate(700)?.net),
@@ -482,9 +538,18 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       // Fremdwährung: Kurs (1 EUR = …) und Bruttobetrag laut Beleg; die Beträge davor sind in Euro umgerechnet
       doc.exchangeRate ? formatExchangeRate(doc.exchangeRate) : null,
       doc.currency === "EUR" ? null : money(docAmounts.reduce((s, a) => s + (a.originalNet ?? 0) + (doc.reverseCharge ? 0 : (a.originalTax ?? 0)), 0)),
-      doc.payment === "privat" ? "privat" : doc.payment === "kasse" ? "Kasse" : "Bank",
+      // In GmbH und UG hat der Gesellschafter ausgelegt (Verrechnungskonto), im Einzelunternehmen der Inhaber privat
+      doc.payment === "privat"
+        ? company && isKapitalgesellschaft(company.rechtsform)
+          ? "Gesellschafter"
+          : "privat"
+        : doc.payment === "kasse"
+          ? "Kasse"
+          : "Bank",
       doc.status,
       iso(doc.lockedAt),
+      doc.cancelledOn,
+      doc.cancellationReason,
       doc.extractedBy,
       doc.dueDate,
       doc.note,
@@ -499,9 +564,36 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
     path: "belege/belege.csv",
     content: csv(
       [
-        "Datum", "Lieferant", "USt-IdNr.", "Rechnungsnummer", "Kategorie", "Netto 19 %", "Vorsteuer 19 %", "Netto 7 %",
-        "Vorsteuer 7 %", "Netto 0 %", "Netto", "Vorsteuer", "Brutto", "Privatanteil %", "Währung", "Kurs (1 EUR =)", "Brutto in Währung", "Zahlung", "Status", "Gebucht am", "Quelle",
-        "Fällig", "Notiz", "SHA-256", "Originaldateiname", "Datei im Archiv", "Hochgeladen", "ID",
+        "Datum",
+        "Lieferant",
+        "USt-IdNr.",
+        "Rechnungsnummer",
+        "Kategorie",
+        "Netto 19 %",
+        "Vorsteuer 19 %",
+        "Netto 7 %",
+        "Vorsteuer 7 %",
+        "Netto 0 %",
+        "Netto",
+        "Vorsteuer",
+        "Brutto",
+        "Privatanteil %",
+        "Währung",
+        "Kurs (1 EUR =)",
+        "Brutto in Währung",
+        "Zahlung",
+        "Status",
+        "Gebucht am",
+        "Storniert am",
+        "Storno-Grund",
+        "Quelle",
+        "Fällig",
+        "Notiz",
+        "SHA-256",
+        "Originaldateiname",
+        "Datei im Archiv",
+        "Hochgeladen",
+        "ID",
       ],
       documentRows,
     ),
@@ -518,7 +610,12 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
     ? await db
         .select()
         .from(schema.journalLines)
-        .where(inArray(schema.journalLines.entryId, entries.map((e) => e.id)))
+        .where(
+          inArray(
+            schema.journalLines.entryId,
+            entries.map((e) => e.id),
+          ),
+        )
         .orderBy(asc(schema.journalLines.credit), asc(schema.journalLines.account))
     : [];
   const linesByEntry = groupBy(journalLines, (l) => l.entryId);
@@ -535,6 +632,7 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       line.debit ? money(line.debit) : "",
       line.credit ? money(line.credit) : "",
       line.taxCode,
+      line.basis === null ? "" : money(line.basis),
       entry.reversesId,
       iso(entry.lockedAt),
       iso(entry.createdAt),
@@ -544,8 +642,21 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
     path: "buchungen/journal.csv",
     content: csv(
       [
-        "Datum", "Buchungs-ID", "Beschreibung", "Quelle", "Quell-ID", "Kontenrahmen", "Konto", "Kontoname", "Soll", "Haben",
-        "Steuerschlüssel", "Gegenbuchung zu", "Festgeschrieben", "Erfasst",
+        "Datum",
+        "Buchungs-ID",
+        "Beschreibung",
+        "Quelle",
+        "Quell-ID",
+        "Kontenrahmen",
+        "Konto",
+        "Kontoname",
+        "Soll",
+        "Haben",
+        "Steuerschlüssel",
+        "Bemessungsgrundlage",
+        "Gegenbuchung zu",
+        "Festgeschrieben",
+        "Erfasst",
       ],
       journalRows,
     ),
@@ -564,6 +675,10 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       a.acquisitionDate,
       money(a.cost),
       a.usefulLifeMonths,
+      // Verzeichnis nach § 7a Abs. 8 EStG für die degressive AfA: Satz und Wechsel zur linearen
+      a.degressiveRate === null ? "" : formatDegressiveRate(a.degressiveRate),
+      a.linearFromYear,
+      a.memoValue,
       a.openingDate,
       a.openingBookValue === null ? "" : money(a.openingBookValue),
       money(a.year?.opening ?? 0),
@@ -584,10 +699,31 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
     path: "anlagen/anlagenverzeichnis.csv",
     content: csv(
       [
-        "Bezeichnung", "Art", "Abschreibung", "Anlagekonto", "Anschaffung", "Anschaffungskosten", "Nutzungsdauer (Monate)",
-        "Übernommen zum", "Buchwert bei Übernahme", "Buchwert Jahresanfang", "Zugang", "AfA", "Abgang (Restbuchwert)",
-        "Buchwert Jahresende", "Abgangsdatum", "Privatnutzung Satz", "Bruttolistenpreis", "Privatnutzung Entnahme",
-        "Privatnutzung Umsatzsteuer", "AfA gebucht", "Beleg-ID", "ID",
+        "Bezeichnung",
+        "Art",
+        "Abschreibung",
+        "Anlagekonto",
+        "Anschaffung",
+        "Anschaffungskosten",
+        "Nutzungsdauer (Monate)",
+        "Degressiver Satz",
+        "Linear ab",
+        "Erinnerungswert",
+        "Übernommen zum",
+        "Buchwert bei Übernahme",
+        "Buchwert Jahresanfang",
+        "Zugang",
+        "AfA",
+        "Abgang (Restbuchwert)",
+        "Buchwert Jahresende",
+        "Abgangsdatum",
+        "Privatnutzung Satz",
+        "Bruttolistenpreis",
+        "Privatnutzung Entnahme",
+        "Privatnutzung Umsatzsteuer",
+        "AfA gebucht",
+        "Beleg-ID",
+        "ID",
       ],
       assetRows,
     ),
@@ -621,40 +757,75 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
     };
   }
 
-  // Kassenbuch: mit Anfangsbestand und Bestand nach jeder Zeile
-  if ((await db.select({ id: schema.cashEntries.id }).from(schema.cashEntries).limit(1)).length > 0) {
+  // Kassenbuch: mit Anfangsbestand und Bestand nach jeder Zeile; auch wenn nur die Eröffnung einen Bestand bringt
+  if ((await db.select({ id: schema.cashEntries.id }).from(schema.cashEntries).limit(1)).length > 0 || (await openingCash()).length > 0) {
     yield { path: "kasse/kassenbuch.csv", content: encoder.encode(await cashBookCsv(year)), compress: true };
   }
 
   // Bank ------------------------------------------------------------------
-  const accounts = await db.select().from(schema.bankAccounts).orderBy(asc(schema.bankAccounts.iban));
+  // Ein ausgeschlossenes Konto (#462) gehört nicht zu dieser Firma und fehlt im Archiv
+  const accounts = await db.select().from(schema.bankAccounts).where(isNull(schema.bankAccounts.excludedAt)).orderBy(asc(schema.bankAccounts.iban));
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const transactions = await db
     .select()
     .from(schema.bankTransactions)
-    .where(and(gte(schema.bankTransactions.bookingDate, yearStart(year)), lte(schema.bankTransactions.bookingDate, yearEnd(year))))
+    .where(
+      and(
+        gte(schema.bankTransactions.bookingDate, yearStart(year)),
+        lte(schema.bankTransactions.bookingDate, yearEnd(year)),
+        bankAccountIncludedSql("bank_account_id"),
+      ),
+    )
     .orderBy(asc(schema.bankTransactions.bookingDate), asc(schema.bankTransactions.createdAt), asc(schema.bankTransactions.id));
   const transactionById = new Map(transactions.map((t) => [t.id, t]));
   const allocations = transactions.length
     ? await db
         .select()
         .from(schema.allocations)
-        .where(inArray(schema.allocations.transactionId, transactions.map((t) => t.id)))
+        .where(
+          inArray(
+            schema.allocations.transactionId,
+            transactions.map((t) => t.id),
+          ),
+        )
         .orderBy(asc(schema.allocations.createdAt), asc(schema.allocations.id))
     : [];
   const imports = await db
     .select()
     .from(schema.bankImports)
     .where(
-      sql`exists (select 1 from bank_transactions t where t.import_id = ${schema.bankImports.id}
+      and(
+        sql`(exists (select 1 from bank_transactions t where t.import_id = ${schema.bankImports.id}
             and t.booking_date between ${yearStart(year)}::date and ${yearEnd(year)}::date)
-          or (${schema.bankImports.periodFrom} <= ${yearEnd(year)}::date and ${schema.bankImports.periodTo} >= ${yearStart(year)}::date)`,
+          or (${schema.bankImports.periodFrom} <= ${yearEnd(year)}::date and ${schema.bankImports.periodTo} >= ${yearStart(year)}::date))`,
+        bankAccountIncludedSql("bank_account_id"),
+      ),
     )
     .orderBy(asc(schema.bankImports.createdAt));
   const importById = new Map(imports.map((i) => [i.id, i]));
 
   const allocatedByTransaction = new Map<string, number>();
   for (const a of allocations) allocatedByTransaction.set(a.transactionId, (allocatedByTransaction.get(a.transactionId) ?? 0) + a.amount);
+  // Verrechnungen gegenläufiger Umsätze (#457), an denen ein Umsatz des Jahres beteiligt ist; samt Gegenzeilen. Die Umsätze
+  // des Jahres wählt SQL über das Buchungsdatum: Als Liste von IDs, zweimal, sprengten sie ab 32.768 Umsätzen die
+  // Grenze von 65.534 Parametern
+  const yearTransactionIds = sql`(select t.id from bank_transactions t where t.booking_date between ${yearStart(year)}::date and ${yearEnd(year)}::date)`;
+  const neutralizations = transactions.length
+    ? await db
+        .select()
+        .from(schema.bankNeutralizations)
+        .where(
+          or(
+            sql`${schema.bankNeutralizations.transactionId} in ${yearTransactionIds}`,
+            sql`${schema.bankNeutralizations.counterTransactionId} in ${yearTransactionIds}`,
+          ),
+        )
+        .orderBy(asc(schema.bankNeutralizations.createdAt), asc(schema.bankNeutralizations.id))
+    : [];
+  const reversedNeutralizations = new Set(neutralizations.flatMap((n) => (n.reversesId ? [n.reversesId] : [])));
+  const neutralized = new Set(
+    neutralizations.filter((n) => !n.reversesId && !reversedNeutralizations.has(n.id)).flatMap((n) => [n.transactionId, n.counterTransactionId]),
+  );
 
   const usedBankPaths = new Set<string>();
   for (const [accountId, rows] of groupBy(transactions, (t) => t.bankAccountId)) {
@@ -663,8 +834,20 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
       path: uniquePath(usedBankPaths, `bank/${safeName(account?.iban ?? account?.name ?? accountId, 40)}/umsaetze.csv`),
       content: csv(
         [
-          "Buchungsdatum", "Wertstellung", "Betrag", "Währung", "Gegenpartei", "Gegen-IBAN", "Verwendungszweck", "Umsatztyp",
-          "Bankreferenz", "Zugeordnet", "Offen", "Importdatei", "Umsatz-ID",
+          "Buchungsdatum",
+          "Wertstellung",
+          "Betrag",
+          "Währung",
+          "Gegenpartei",
+          "Gegen-IBAN",
+          "Verwendungszweck",
+          "Umsatztyp",
+          "Bankreferenz",
+          "Zugeordnet",
+          "Offen",
+          "Verrechnet",
+          "Importdatei",
+          "Umsatz-ID",
         ],
         rows.map((t) => {
           const allocated = allocatedByTransaction.get(t.id) ?? 0;
@@ -679,7 +862,8 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
             t.type,
             t.bankReference,
             money(allocated),
-            money(t.amount - allocated),
+            money(neutralized.has(t.id) ? 0 : t.amount - allocated),
+            neutralized.has(t.id),
             importById.get(t.importId)?.filename ?? t.importId,
             t.id,
           ];
@@ -722,24 +906,71 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
     ),
     compress: true,
   };
+  if (neutralizations.length > 0) {
+    // Gegenumsatz außerhalb des Jahres: nachladen, damit Datum und Betrag beider Seiten in der Zeile stehen
+    const missing = [...new Set(neutralizations.flatMap((n) => [n.transactionId, n.counterTransactionId]))].filter((id) => !transactionById.has(id));
+    const outside = missing.length > 0 ? await db.select().from(schema.bankTransactions).where(inArray(schema.bankTransactions.id, missing)) : [];
+    const byId = new Map([...transactionById, ...outside.map((t) => [t.id, t] as const)]);
+    yield {
+      path: "bank/verrechnungen.csv",
+      content: csv(
+        [
+          "Konto",
+          "Buchungsdatum",
+          "Betrag",
+          "Gegenumsatz Buchungsdatum",
+          "Gegenumsatz Betrag",
+          "Notiz",
+          "Hebt auf",
+          "Angelegt",
+          "Umsatz-ID",
+          "Gegenumsatz-ID",
+          "Verrechnungs-ID",
+        ],
+        neutralizations.map((n) => {
+          const t = byId.get(n.transactionId);
+          const c = byId.get(n.counterTransactionId);
+          return [
+            t ? (accountById.get(t.bankAccountId)?.iban ?? accountById.get(t.bankAccountId)?.name) : "",
+            t?.bookingDate,
+            money(t?.amount),
+            c?.bookingDate,
+            money(c?.amount),
+            n.note,
+            n.reversesId,
+            iso(n.createdAt),
+            n.transactionId,
+            n.counterTransactionId,
+            n.id,
+          ];
+        }),
+      ),
+      compress: true,
+    };
+  }
   // Ausbuchungen des Jahres (Skonto, Forderungsausfall, erhaltenes Skonto) nach Datum der Ausbuchung
   const writeOffs = await db
-    .select()
+    .select({ writeOff: schema.writeOffs, cashNumber: schema.cashEntries.number })
     .from(schema.writeOffs)
+    // Skonto zu einer Bareinnahme: die Zeile im Kassenbuch (kasse/kassenbuch.csv), wie die Umsatz-ID bei der Bank
+    .leftJoin(schema.cashEntries, eq(schema.cashEntries.id, schema.writeOffs.cashEntryId))
     .where(and(gte(schema.writeOffs.date, yearStart(year)), lte(schema.writeOffs.date, yearEnd(year))))
     .orderBy(asc(schema.writeOffs.date), asc(schema.writeOffs.createdAt), asc(schema.writeOffs.id));
   if (writeOffs.length > 0) {
-    const missing = [...new Set(writeOffs.map((w) => w.invoiceId).filter((id): id is string => id !== null && !invoiceNumbers.has(id)))];
+    const missing = [...new Set(writeOffs.map(({ writeOff: w }) => w.invoiceId).filter((id): id is string => id !== null && !invoiceNumbers.has(id)))];
     if (missing.length > 0) {
-      for (const row of await db.select({ id: schema.invoices.id, number: schema.invoices.number }).from(schema.invoices).where(inArray(schema.invoices.id, missing))) {
+      for (const row of await db
+        .select({ id: schema.invoices.id, number: schema.invoices.number })
+        .from(schema.invoices)
+        .where(inArray(schema.invoices.id, missing))) {
         invoiceNumbers.set(row.id, row.number);
       }
     }
     yield {
       path: "bank/ausbuchungen.csv",
       content: csv(
-        ["Datum", "Art", "Rechnung", "Beleg", "Betrag", "Hebt auf", "Angelegt", "Umsatz-ID", "Rechnungs-ID", "Beleg-ID", "Ausbuchungs-ID"],
-        writeOffs.map((w) => [
+        ["Datum", "Art", "Rechnung", "Beleg", "Betrag", "Hebt auf", "Angelegt", "Umsatz-ID", "Rechnungs-ID", "Beleg-ID", "Ausbuchungs-ID", "Kassenbuch-Nr."],
+        writeOffs.map(({ writeOff: w, cashNumber }) => [
           w.date,
           WRITE_OFF_KINDS[w.kind],
           w.invoiceId ? (invoiceNumbers.get(w.invoiceId) ?? "") : "",
@@ -751,6 +982,7 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
           w.invoiceId,
           w.documentId,
           w.id,
+          cashNumber,
         ]),
       ),
       compress: true,
@@ -759,7 +991,21 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
   yield {
     path: "bank/importe.csv",
     content: csv(
-      ["Konto", "Datei", "SHA-256", "Format", "Zeitraum von", "Zeitraum bis", "Anfangssaldo", "Endsaldo", "Neu", "Übersprungen", "Hinweise", "Importiert", "Import-ID"],
+      [
+        "Konto",
+        "Datei",
+        "SHA-256",
+        "Format",
+        "Zeitraum von",
+        "Zeitraum bis",
+        "Anfangssaldo",
+        "Endsaldo",
+        "Neu",
+        "Übersprungen",
+        "Hinweise",
+        "Importiert",
+        "Import-ID",
+      ],
       imports.map((i) => [
         accountById.get(i.bankAccountId)?.iban ?? accountById.get(i.bankAccountId)?.name,
         i.filename,
@@ -799,15 +1045,32 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
           hasPdf: sql<boolean>`${schema.vatReturnSubmissions.protocolPdf} is not null`,
         })
         .from(schema.vatReturnSubmissions)
-        .where(inArray(schema.vatReturnSubmissions.vatReturnId, vatReturns.map((r) => r.id)))
+        .where(
+          inArray(
+            schema.vatReturnSubmissions.vatReturnId,
+            vatReturns.map((r) => r.id),
+          ),
+        )
         .orderBy(asc(schema.vatReturnSubmissions.createdAt))
+    : [];
+  // Abgaben außerhalb von Haben: das Übermittlungsprotokoll aus Mein ELSTER liegt im Dokumentenspeicher
+  const filings = vatReturns.length
+    ? await db
+        .select()
+        .from(schema.vatReturnFilings)
+        .where(
+          inArray(
+            schema.vatReturnFilings.vatReturnId,
+            vatReturns.map((r) => r.id),
+          ),
+        )
     : [];
   for (const [month, returns] of groupBy(vatReturns, (r) => r.month)) {
     const dir = `umsatzsteuer/${year}-${String(month).padStart(2, "0")}`;
     const submissionRows: CsvValue[][] = [];
     for (const [index, vatReturn] of returns.entries()) {
       const suffix = returns.length > 1 ? `-${index + 1}` : "";
-      yield { path: `${dir}/anmeldung${suffix}.json`, content: encoder.encode(JSON.stringify(vatReturn, null, 2) + "\n"), compress: true };
+      yield { path: `${dir}/anmeldung${suffix}.json`, content: encoder.encode(`${JSON.stringify(vatReturn, null, 2)}\n`), compress: true };
       for (const submission of submissions.filter((s) => s.vatReturnId === vatReturn.id)) {
         const stem = `${today(submission.createdAt)}_${submission.kind}_${submission.id.slice(0, 8)}`;
         const [files] = await db
@@ -824,7 +1087,11 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
           names.push(`${stem}_protokoll.pdf`);
           yield { path: `${dir}/${stem}_protokoll.pdf`, content: new Uint8Array(files.protocolPdf), compress: false };
         } else names.push("");
-        for (const [key, label] of [["requestXml", "anfrage"], ["responseXml", "antwort"], ["serverResponseXml", "server-antwort"]] as const) {
+        for (const [key, label] of [
+          ["requestXml", "anfrage"],
+          ["responseXml", "antwort"],
+          ["serverResponseXml", "server-antwort"],
+        ] as const) {
           const text = files?.[key] ?? "";
           if (text) {
             names.push(`${stem}_${label}.xml`);
@@ -843,6 +1110,32 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
           submission.id,
         ]);
       }
+      for (const filing of filings.filter((f) => f.vatReturnId === vatReturn.id)) {
+        const name = `${filing.filedOn}_vermerk_${filing.id.slice(0, 8)}_protokoll.pdf`;
+        let bytes: Buffer | null = null;
+        try {
+          bytes = await loadFile(filing.sha256);
+        } catch (error) {
+          problems.push(
+            `Protokoll der Voranmeldung ${dir.slice("umsatzsteuer/".length)} (${filing.filename}): Datei nicht lesbar – ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        if (bytes) yield { path: `${dir}/${name}`, content: new Uint8Array(bytes), compress: false };
+        submissionRows.push([
+          iso(filing.createdAt),
+          `Abgabe vermerkt (außerhalb von Haben, abgegeben ${filing.filedOn})`,
+          true,
+          0,
+          `Kz 83 ${money(filing.kz83)}; Protokoll ${filing.filename}, SHA-256 ${filing.sha256}`,
+          filing.transferTicket,
+          bytes ? name : "",
+          "",
+          "",
+          "",
+          `anmeldung${suffix}.json`,
+          filing.id,
+        ]);
+      }
     }
     yield {
       path: `${dir}/übermittlungen.csv`,
@@ -856,24 +1149,55 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
 
   // Altbestand aus Lexoffice und sevDesk ----------------------------------------
   yield* legacyFiles(year, problems);
+  yield* orderFiles(year, problems);
 
   // Stammdaten ------------------------------------------------------------
   const contacts = await db.select().from(schema.contacts).orderBy(asc(schema.contacts.name), asc(schema.contacts.id));
   yield {
     path: "stammdaten/kontakte.csv",
     content: csv(
-      ["Kundennummer", "Name", "Straße", "PLZ", "Ort", "Land", "E-Mail", "USt-IdNr.", "IBAN", "Leitweg-ID", "Rechnungsformat", "Version", "Archiviert", "Angelegt", "Geändert", "ID"],
+      [
+        "Kundennummer",
+        "Name",
+        "Straße",
+        "PLZ",
+        "Ort",
+        "Land",
+        "E-Mail",
+        "Telefon",
+        "USt-IdNr.",
+        "IBAN",
+        "Leitweg-ID",
+        "Rechnungsformat",
+        "Version",
+        "Archiviert",
+        "Angelegt",
+        "Geändert",
+        "ID",
+      ],
       contacts.map((c) => [
-        c.kundennummer, c.name, c.strasse, c.plz, c.ort, c.land, c.email, c.ustId, c.iban, c.leitwegId, c.defaultFormat,
-        c.version, iso(c.archivedAt), iso(c.createdAt), iso(c.updatedAt), c.id,
+        c.kundennummer,
+        c.name,
+        c.strasse,
+        c.plz,
+        c.ort,
+        c.land,
+        c.email,
+        c.telefon,
+        c.ustId,
+        c.iban,
+        c.leitwegId,
+        c.defaultFormat,
+        c.version,
+        iso(c.archivedAt),
+        iso(c.createdAt),
+        iso(c.updatedAt),
+        c.id,
       ]),
     ),
     compress: true,
   };
-  const versions = await db
-    .select()
-    .from(schema.contactVersions)
-    .orderBy(asc(schema.contactVersions.contactId), asc(schema.contactVersions.version));
+  const versions = await db.select().from(schema.contactVersions).orderBy(asc(schema.contactVersions.contactId), asc(schema.contactVersions.version));
   yield {
     path: "stammdaten/kontakt-versionen.csv",
     content: csv(
@@ -884,12 +1208,15 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
   };
   yield {
     path: "stammdaten/bankkonten.csv",
-    content: csv(["Name", "IBAN", "Angelegt", "ID"], accounts.map((a) => [a.name, a.iban, iso(a.createdAt), a.id])),
+    content: csv(
+      ["Name", "IBAN", "Angelegt", "ID"],
+      accounts.map((a) => [a.name, a.iban, iso(a.createdAt), a.id]),
+    ),
     compress: true,
   };
   // Ohne den Hash des Kalender-Tokens: der gehört zum Zugang, nicht zu den Stammdaten
   const firma = company && { ...company, calendarTokenHash: undefined };
-  yield { path: "stammdaten/firma.json", content: encoder.encode(JSON.stringify(firma, null, 2) + "\n"), compress: true };
+  yield { path: "stammdaten/firma.json", content: encoder.encode(`${JSON.stringify(firma, null, 2)}\n`), compress: true };
 
   // Änderungsprotokoll, seitenweise gelesen ----------------------------------
   yield { path: "protokoll/audit.csv", content: auditCsv(year), compress: true };
@@ -900,7 +1227,13 @@ async function* yearFiles(year: number, now: Date): AsyncGenerator<ArchiveFile> 
   }
 }
 
-const LEGACY_SOURCE_LABELS = { lexoffice: "Lexoffice", sevdesk: "sevDesk" } as const;
+const LEGACY_SOURCE_LABELS = {
+  lexoffice: "Lexoffice",
+  sevdesk: "sevDesk",
+  buchhaltungsbutler: "BuchhaltungsButler",
+  accountable: "Accountable",
+  import: "JSON-Import",
+} as const;
 
 const LEGACY_TYPE_LABELS: Record<string, string> = {
   invoice: "Rechnung",
@@ -912,10 +1245,78 @@ const LEGACY_TYPE_LABELS: Record<string, string> = {
   purchasecreditnote: "Ausgabe-Gutschrift",
 };
 
-/** Aus Lexoffice oder sevDesk übernommene Belege, DATEV-Buchungen und Originalexporte des Jahres; der Ordner heißt für beide lexoffice/ */
+/** Auftragskopien bleiben im Export von steuerwirksamen Altbelegen getrennt. */
+async function* orderFiles(year: number, problems: string[]): AsyncGenerator<ArchiveFile> {
+  const documents = await db
+    .select()
+    .from(schema.legacyOrderDocuments)
+    .where(between(schema.legacyOrderDocuments.date, yearStart(year), yearEnd(year)))
+    .orderBy(asc(schema.legacyOrderDocuments.date), asc(schema.legacyOrderDocuments.id));
+  if (!documents.length) return;
+  const files = await db
+    .select()
+    .from(schema.legacyOrderFiles)
+    .where(
+      inArray(
+        schema.legacyOrderFiles.orderId,
+        documents.map((d) => d.id),
+      ),
+    )
+    .orderBy(asc(schema.legacyOrderFiles.createdAt), asc(schema.legacyOrderFiles.id));
+  const byDocument = groupBy(files, (f) => f.orderId);
+  const rows: CsvValue[][] = [];
+  for (const document of documents) {
+    const base = `sevdesk/auftraege/${document.date}_${safeName(document.number || document.externalId)}_${document.id.slice(0, 8)}`;
+    yield { path: `${base}/quelle.json`, content: encoder.encode(JSON.stringify(document.raw, null, 2)), compress: true };
+    const attached = byDocument.get(document.id) ?? [];
+    yield { path: `${base}/dateien.json`, content: encoder.encode(JSON.stringify(attached, null, 2)), compress: true };
+    const attempts = await db
+      .select()
+      .from(schema.legacyOrderPdfAttempts)
+      .where(eq(schema.legacyOrderPdfAttempts.orderId, document.id))
+      .orderBy(schema.legacyOrderPdfAttempts.createdAt);
+    if (attempts.length) yield { path: `${base}/pdf-abrufe.json`, content: encoder.encode(JSON.stringify(attempts, null, 2)), compress: true };
+    if (!attached.length) problems.push(`sevdesk-Auftragsdokument ${document.number || document.externalId}: PDF fehlt.`);
+    for (const file of attached) {
+      const path = `${base}/${file.id.slice(0, 8)}_${safeName(file.filename, 100, "dokument.pdf")}`;
+      try {
+        yield { path, content: new Uint8Array(await loadFile(file.sha256)), compress: false };
+      } catch {
+        problems.push(`sevdesk-Auftragsdokument ${document.number || document.externalId}: PDF ${file.filename} nicht lesbar.`);
+      }
+    }
+    rows.push([
+      document.date,
+      document.kind,
+      document.number,
+      document.contactName,
+      document.status,
+      document.currency,
+      money(document.net),
+      money(document.tax),
+      money(document.gross),
+      document.externalId,
+      attached.map((f) => f.sha256).join(" | "),
+      attached.map((f) => `${f.origin}: ${f.filename}`).join(" | "),
+    ]);
+  }
+  yield {
+    path: "sevdesk/auftraege.csv",
+    content: csv(["Datum", "Art", "Nummer", "Kontakt", "Quellstatus", "Währung", "Netto", "Steuer", "Brutto", "Quell-ID", "SHA-256", "Dateien"], rows),
+    compress: true,
+  };
+}
+
 async function* legacyFiles(year: number, problems: string[]): AsyncGenerator<ArchiveFile> {
   const vouchers = await db
-    .select()
+    .select({
+      ...getTableColumns(schema.lexofficeVouchers),
+      type: effectiveType("lexoffice_vouchers"),
+      direction: effectiveDirection("lexoffice_vouchers"),
+      contactName: effectiveContactName("lexoffice_vouchers"),
+      taxes: effectiveTaxes("lexoffice_vouchers"),
+      payment: effectivePayment("lexoffice_vouchers"),
+    })
     .from(schema.lexofficeVouchers)
     .where(between(schema.lexofficeVouchers.date, yearStart(year), yearEnd(year)))
     .orderBy(asc(schema.lexofficeVouchers.date), asc(schema.lexofficeVouchers.number), asc(schema.lexofficeVouchers.id));
@@ -923,7 +1324,12 @@ async function* legacyFiles(year: number, problems: string[]): AsyncGenerator<Ar
     ? await db
         .select()
         .from(schema.lexofficeVoucherFiles)
-        .where(inArray(schema.lexofficeVoucherFiles.voucherId, vouchers.map((v) => v.id)))
+        .where(
+          inArray(
+            schema.lexofficeVoucherFiles.voucherId,
+            vouchers.map((v) => v.id),
+          ),
+        )
         .orderBy(asc(schema.lexofficeVoucherFiles.createdAt), asc(schema.lexofficeVoucherFiles.id))
     : [];
   const filesByVoucher = groupBy(files, (f) => f.voucherId);
@@ -941,7 +1347,9 @@ async function* legacyFiles(year: number, problems: string[]): AsyncGenerator<Ar
         yield { path, content: new Uint8Array(await loadFile(file.sha256)), compress: ext === "xml" };
         paths.push(path.slice("lexoffice/".length));
       } catch (error) {
-        problems.push(`${LEGACY_SOURCE_LABELS[voucher.source]}-Beleg ${voucher.number || voucher.id}: Datei ${file.filename} nicht lesbar – ${error instanceof Error ? error.message : String(error)}`);
+        problems.push(
+          `${LEGACY_SOURCE_LABELS[voucher.source]}-Beleg ${voucher.number || voucher.id}: Datei ${file.filename} nicht lesbar – ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
     rows.push([
@@ -970,8 +1378,57 @@ async function* legacyFiles(year: number, problems: string[]): AsyncGenerator<Ar
     yield {
       path: "lexoffice/belege.csv",
       content: csv(
-        ["Datum", "Art", "Richtung", "Nummer", "Kontakt", "Netto", "Steuer", "Brutto", "Währung", "Status in der Quelle", "Fällig", "Bezahlt am", "Steuersätze (JSON)", "Kategorien (JSON)", "Notiz", "Dateien", "SHA-256", "Lexoffice-ID", "Quelle"],
+        [
+          "Datum",
+          "Art",
+          "Richtung",
+          "Nummer",
+          "Kontakt",
+          "Netto",
+          "Steuer",
+          "Brutto",
+          "Währung",
+          "Status in der Quelle",
+          "Fällig",
+          "Bezahlt am",
+          "Steuersätze (JSON)",
+          "Kategorien (JSON)",
+          "Notiz",
+          "Dateien",
+          "SHA-256",
+          "Lexoffice-ID",
+          "Quelle",
+        ],
         rows,
+      ),
+      compress: true,
+    };
+  }
+
+  // Einzelzahlungen nach Zahlungsdatum, also im Jahr des Geldflusses; der Beleg kann in einem anderen Jahr liegen
+  const payments = await db
+    .select({ payment: schema.legacyVoucherPayments, number: schema.lexofficeVouchers.number, voucher: schema.lexofficeVouchers.lexofficeId })
+    .from(schema.legacyVoucherPayments)
+    .innerJoin(schema.lexofficeVouchers, eq(schema.lexofficeVouchers.id, schema.legacyVoucherPayments.voucherId))
+    .where(between(schema.legacyVoucherPayments.date, yearStart(year), yearEnd(year)))
+    .orderBy(asc(schema.legacyVoucherPayments.date), asc(schema.lexofficeVouchers.number), asc(schema.legacyVoucherPayments.externalId));
+  if (payments.length > 0) {
+    yield {
+      path: "lexoffice/zahlungen.csv",
+      content: csv(
+        ["Datum", "Belegnummer", "Betrag", "Konto", "Konto-ID", "Umsatz-ID", "Zuordnungs-ID", "Beleg-ID der Quelle", "Quelle", "Abgerufen am"],
+        payments.map(({ payment: p, number, voucher }) => [
+          p.date,
+          number,
+          money(p.amount),
+          p.accountName ?? "",
+          p.accountId ?? "",
+          p.transactionId ?? "",
+          p.externalId,
+          voucher,
+          LEGACY_SOURCE_LABELS[p.source],
+          p.createdAt.toISOString(),
+        ]),
       ),
       compress: true,
     };
@@ -987,10 +1444,35 @@ async function* legacyFiles(year: number, problems: string[]): AsyncGenerator<Ar
     yield {
       path: "lexoffice/datev-buchungen.csv",
       content: csv(
-        ["Datum", "Umsatz", "Soll/Haben", "Währung", "Konto", "Gegenkonto", "BU-Schlüssel", "Belegfeld 1", "Belegfeld 2", "Buchungstext", "Beleglink", "Datei", "Zeile"],
+        [
+          "Datum",
+          "Umsatz",
+          "Soll/Haben",
+          "Währung",
+          "Konto",
+          "Gegenkonto",
+          "BU-Schlüssel",
+          "Belegfeld 1",
+          "Belegfeld 2",
+          "Buchungstext",
+          "Beleglink",
+          "Datei",
+          "Zeile",
+        ],
         bookings.map(({ booking: b, filename }) => [
-          b.date, money(b.amount), b.side, b.currency, b.account, b.contraAccount, b.buKey, b.voucherField1, b.voucherField2, b.text,
-          b.documentLink, filename, b.row,
+          b.date,
+          money(b.amount),
+          b.side,
+          b.currency,
+          b.account,
+          b.contraAccount,
+          b.buKey,
+          b.voucherField1,
+          b.voucherField2,
+          b.text,
+          b.documentLink,
+          filename,
+          b.row,
         ]),
       ),
       compress: true,
@@ -1026,14 +1508,25 @@ function withoutSecrets(table: string, value: unknown): unknown {
   return Object.fromEntries(entries);
 }
 
-const yearOfAudit = (year: number) =>
-  sql`${schema.auditLog.at} >= ${berlinStart(year)} and ${schema.auditLog.at} < ${berlinStart(year + 1)}`;
+const yearOfAudit = (year: number) => sql`${schema.auditLog.at} >= ${berlinStart(year)} and ${schema.auditLog.at} < ${berlinStart(year + 1)}`;
 
 /** In der Reihenfolge der Hash-Kette; Nr. ist die laufende ID, Ketten-Nr. die Position in der Kette */
 async function* auditCsv(year: number): AsyncGenerator<Uint8Array> {
   yield encoder.encode(
     BOM +
-      csvLine(["Zeitpunkt", "Benutzer", "Tabelle", "Zeilen-ID", "Aktion", "Alter Wert (JSON)", "Neuer Wert (JSON)", "Nr.", "Ketten-Nr.", "Vorgänger-Hash", "Hash"]),
+      csvLine([
+        "Zeitpunkt",
+        "Benutzer",
+        "Tabelle",
+        "Zeilen-ID",
+        "Aktion",
+        "Alter Wert (JSON)",
+        "Neuer Wert (JSON)",
+        "Nr.",
+        "Ketten-Nr.",
+        "Vorgänger-Hash",
+        "Hash",
+      ]),
   );
   let after = 0;
   for (;;) {
@@ -1093,6 +1586,68 @@ async function pruefwertText(year: number, now: Date): Promise<string> {
   ].join("\n");
 }
 
+type AttachmentRow = { id: string; ownerNumber: string; filename: string; size: number; sha256: string };
+
+/** Wo die Anhänge einer Belegart im Archiv liegen und wie die Spalte des Belegs in anhaenge.csv heißt */
+type AttachmentArchive = { dir: string; noun: string; of: string };
+const INVOICE_ATTACHMENTS: AttachmentArchive = { dir: "rechnungen/anhaenge", noun: "Rechnung", of: "der Rechnung" };
+const QUOTE_ATTACHMENTS: AttachmentArchive = { dir: "angebote/anhaenge", noun: "Angebot", of: "des Angebots" };
+
+/** Anhänge der Rechnungen des Archivs (#272), in der Reihenfolge, in der sie angehängt wurden */
+async function invoiceAttachmentRows(invoices: { id: string; number: string | null }[]): Promise<AttachmentRow[]> {
+  if (invoices.length === 0) return [];
+  const t = schema.invoiceAttachments;
+  const numbers = new Map(invoices.map((i) => [i.id, i.number ?? i.id]));
+  const rows = await db
+    .select()
+    .from(t)
+    .where(inArray(t.invoiceId, [...numbers.keys()]))
+    .orderBy(asc(t.createdAt), asc(t.id));
+  return rows.map((a) => ({ ...a, ownerNumber: numbers.get(a.invoiceId)! }));
+}
+
+/** Anhänge der festgeschriebenen Angebote des Archivs (#415) */
+async function quoteAttachmentRows(quotes: { id: string; number: string | null }[]): Promise<AttachmentRow[]> {
+  if (quotes.length === 0) return [];
+  const t = schema.quoteAttachments;
+  const numbers = new Map(quotes.map((q) => [q.id, q.number ?? q.id]));
+  const rows = await db
+    .select()
+    .from(t)
+    .where(inArray(t.quoteId, [...numbers.keys()]))
+    .orderBy(asc(t.createdAt), asc(t.id));
+  return rows.map((a) => ({ ...a, ownerNumber: numbers.get(a.quoteId)! }));
+}
+
+/**
+ * Zusätzliche Anhänge festgeschriebener Rechnungen (#272) unter rechnungen/anhaenge/ bzw. Angebote (#415) unter
+ * angebote/anhaenge/, nur wenn vorhanden, mit anhaenge.csv: Beleg, ursprünglicher Dateiname, Datei im Archiv, SHA-256.
+ */
+async function* attachmentArchive(where: AttachmentArchive, attachments: AttachmentRow[], problems: string[]): AsyncGenerator<ArchiveFile> {
+  if (attachments.length === 0) return;
+  const used = new Set<string>();
+  const rows: CsvValue[][] = [];
+  for (const attachment of attachments) {
+    const number = attachment.ownerNumber;
+    const path = uniquePath(used, `${where.dir}/${safeName(number, 60)}_${safeName(attachment.filename.replace(/\.pdf$/i, ""), 80, "Anhang")}.pdf`);
+    let bytes: Buffer | null = null;
+    try {
+      bytes = await loadFile(attachment.sha256);
+    } catch (error) {
+      problems.push(
+        `Anhang ${attachment.id} (${attachment.filename}) ${where.of} ${number}: Datei nicht lesbar – ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (bytes) yield { path, content: new Uint8Array(bytes), compress: false };
+    rows.push([number, attachment.filename, bytes ? path.slice(where.dir.length + 1) : "", attachment.size, attachment.sha256, attachment.id]);
+  }
+  yield {
+    path: `${where.dir}/anhaenge.csv`,
+    content: csv([where.noun, "Dateiname", "Datei", "Größe (Bytes)", "SHA-256", "ID"], rows),
+    compress: true,
+  };
+}
+
 function readme(year: number, now: Date, company: typeof schema.company.$inferSelect | undefined): string {
   const created = new Intl.DateTimeFormat("de-DE", { dateStyle: "long", timeStyle: "medium", timeZone: "Europe/Berlin" }).format(now);
   return `Haben – Jahresarchiv ${year}
@@ -1115,15 +1670,20 @@ INHALT
 rechnungen/              Festgeschriebene Ausgangsrechnungen als PDF und E-Rechnungs-XML
                          (bei ZUGFeRD steckt das XML zusätzlich im PDF), dazu
                          rechnungen.csv mit Beträgen und SHA-256 aus der Festschreibung.
-                         Entwürfe ohne Rechnungsnummer sind nicht enthalten.
+                         Entwürfe ohne Rechnungsnummer sind nicht enthalten. Nur wenn
+                         vorhanden: zusätzliche Anhänge der Rechnungen unter anhaenge/,
+                         Name: Nummer_Dateiname, mit anhaenge.csv.
 angebote/                Nur wenn vorhanden: festgeschriebene Angebote des Jahres als PDF,
                          angebote.csv mit Antwort des Kunden und daraus entstandener
-                         Rechnung.
+                         Rechnung. Nur wenn vorhanden: zusätzliche Anhänge der Angebote
+                         unter anhaenge/, Name: Nummer_Dateiname, mit anhaenge.csv.
 belege/                  Eingangsrechnungen und Quittungen als Originaldatei,
                          Name: Datum_Lieferant_Kurz-ID; belege.csv mit Beträgen je
-                         Steuersatz, Status, SHA-256 und ursprünglichem Dateinamen.
+                         Steuersatz, Status, Storno (Datum und Grund), SHA-256 und
+                         ursprünglichem Dateinamen.
 buchungen/journal.csv    Journal, eine Zeile je Buchungszeile (Konto, Soll, Haben,
-                         Steuerschlüssel); Stornos verweisen auf die Ursprungsbuchung.
+                         Steuerschlüssel, Bemessungsgrundlage bei Ist-Versteuerung an
+                         der Zahlung); Stornos verweisen auf die Ursprungsbuchung.
 anlagen/anlagenverzeichnis.csv
                          Anlagenverzeichnis des Jahres: Anschaffung, Buchwert am
                          Jahresanfang, Zugang, AfA, Abgang und Buchwert am Jahresende.
@@ -1132,26 +1692,35 @@ pauschalen/pauschalen.csv
                          Fahrten, Verpflegungsmehraufwand) mit ihren Angaben als
                          Eigenbeleg; Stornos als Gegenzeile.
 kasse/kassenbuch.csv     Nur wenn vorhanden: Kassenbuch des Jahres mit fortlaufender
-                         Nummer, Anfangsbestand und Bestand nach jeder Zeile.
+                         Nummer, Anfangsbestand und Bestand nach jeder Zeile; bei
+                         Bareinnahmen auf Rechnungen die Rechnungsnummer.
 bank/<IBAN>/umsaetze.csv Importierte Kontoumsätze je Konto (Zahlungsdienstleister unter ihrem Namen).
 bank/zuordnungen.csv     Zuordnungen der Umsätze zu Rechnungen, Belegen und Buchungen
                          ohne Beleg; aufgehobene Zuordnungen als Gegenzeile.
+bank/verrechnungen.csv   Nur wenn vorhanden: miteinander verrechnete gegenläufige Umsätze
+                         (etwa Kartenprüfung und Rückbuchung) mit Notiz, ohne Buchung;
+                         aufgehobene als Gegenzeile.
 bank/ausbuchungen.csv    Nur wenn vorhanden: ausgebuchte Reste von Rechnungen und Belegen
-                         (Skonto, Forderungsausfall); aufgehobene als Gegenzeile.
+                         (Skonto, Forderungsausfall); aufgehobene als Gegenzeile; bei
+                         Skonto zu einer Bareinnahme die Nummer im Kassenbuch.
 bank/importe.csv         Importierte Kontoauszugsdateien mit SHA-256, Zeitraum und Salden.
                          Die Auszugsdateien selbst speichert Haben nicht.
 umsatzsteuer/<JJJJ-MM>/  Voranmeldung mit den gespeicherten Kennzahlen (anmeldung.json),
                          jede Prüfung und Übermittlung (übermittlungen.csv) mit
-                         ERiC-Protokoll (PDF) und gesendetem bzw. empfangenem XML.
+                         ERiC-Protokoll (PDF) und gesendetem bzw. empfangenem XML;
+                         bei einer Abgabe außerhalb von Haben der Vermerk mit dem
+                         Übermittlungsprotokoll aus Mein ELSTER (PDF).
 stammdaten/              Kontakte (aktueller Stand und alle Versionen), Bankkonten und
                          Firmendaten. Das ELSTER-Zertifikat ist absichtlich nicht enthalten.
 lexoffice/               Nur bei übernommenem Altbestand: Rechnungen und Belege aus
-                         Lexware Office oder sevDesk (Spalte Quelle; bei sevDesk steht in
-                         Lexoffice-ID die sevDesk-Art und -ID, z. B. invoice/123) mit
-                         Originaldateien (belege.csv), die Zeilen des
+                         Lexware Office, sevDesk oder BuchhaltungsButler (Spalte Quelle;
+                         bei sevDesk steht in Lexoffice-ID die sevDesk-Art und -ID, z. B. invoice/123) mit
+                         Originaldateien (belege.csv), Einzelzahlungen aus sevDesk
+                         (zahlungen.csv), die Zeilen des
                          DATEV-Buchungsstapels (datev-buchungen.csv) und die unveränderten
                          Originalexporte des Jahres (originale/: DATEV, IDEA,
-                         ELSTER-Protokolle, Kontoauszüge).
+                         ELSTER-Protokolle, Kontoauszüge, Finanzberichte der
+                         App-Stores).
 protokoll/audit.csv      Änderungsprotokoll des Jahres mit altem und neuem Wert, in der
                          Reihenfolge der Hash-Kette mit Vorgänger-Hash und Hash je Eintrag.
 protokoll/pruefwert.txt  Prüfwert (Kopf der Hash-Kette) beim Erstellen des Archivs und am

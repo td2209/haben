@@ -1,15 +1,19 @@
-import { invoicesSentByMail, mailsForInvoice } from "../modules/rechnungen/index.ts";
+import { notFound } from "@tanstack/react-router";
+import { invoicesSentByMail, listInvoiceAttachments, mailsForInvoice } from "../modules/rechnungen/index.ts";
 import { createServerFn } from "@tanstack/react-start";
 import { asc, eq, or } from "drizzle-orm";
 import { z } from "zod";
-import { listAccounts, listWriteOffs } from "../modules/bank/index.ts";
+import { invoicePaymentList, listAccounts, listWriteOffs } from "../modules/bank/index.ts";
+import { openPositions } from "../modules/auswertungen/index.ts";
 import { editorContext } from "../modules/stammdaten/index.ts";
-import { authMiddleware } from "../middleware.ts";
+import { authMiddleware, readMiddleware } from "../middleware.ts";
 import {
   cancelInvoice,
   createCorrection,
   createDraft,
   deleteDraft,
+  documentPreview,
+  documentPreviewSchema,
   draftSchema,
   finalizeInvoice,
   finalizeIssues,
@@ -26,7 +30,7 @@ import {
 import { db, schema } from "../db/index.ts";
 import { dunningsFor } from "../modules/rechnungen/index.ts";
 import { today } from "../today.ts";
-import { UserError } from "../errors.ts";
+import { detailId } from "./schemas.ts";
 
 /** Ohne PDF und XML, die gehen über die Download-Routen */
 function withoutFiles<T extends { pdf: unknown; xml: unknown }>({ pdf, xml, ...rest }: T) {
@@ -34,18 +38,34 @@ function withoutFiles<T extends { pdf: unknown; xml: unknown }>({ pdf, xml, ...r
 }
 
 export const getInvoices = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async () => {
+  .middleware([readMiddleware])
+  .handler(async ({ context }) => {
     const [invoices, mailed] = await Promise.all([listInvoices(today()), invoicesSentByMail()]);
-    return invoices.map((invoice) => ({ ...invoice, mailed: mailed.has(invoice.id) }));
+    // Entwürfe sind Arbeitsstand des Inhabers, für die Steuerberatung zählt nur Festgeschriebenes
+    const visible = context.user.role === "inhaber" ? invoices : invoices.filter((invoice) => invoice.status !== "draft");
+    return visible.map((invoice) => ({ ...invoice, mailed: mailed.has(invoice.id) }));
   });
+
+/** Blatt der Vorschau aus dem Stand des Formulars, für Rechnung und Angebot; gespeichert wird nichts */
+export const renderDocumentPreview = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(documentPreviewSchema)
+  .handler(({ data }) => documentPreview(data));
 
 export const getInvoiceSummary = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async () => {
-    const accounts = await listAccounts();
+    const now = today();
+    const [accounts, open] = await Promise.all([listAccounts(), openPositions(now)]);
     return {
-      ...(await invoiceSummary(today())),
+      ...(await invoiceSummary(now)),
+      // Offene Verbindlichkeiten wie in den Auswertungen: gebuchte, über die Bank zu zahlende Belege
+      payables: {
+        total: open.payablesTotal,
+        count: open.payables.length,
+        overdueCount: open.payables.filter((p) => p.daysOverdue > 0).length,
+        nextDue: open.payables[0]?.dueDate ?? null,
+      },
       bank: accounts.map((a) => ({
         id: a.id,
         name: a.name,
@@ -89,11 +109,11 @@ export const getNewInvoice = createServerFn({ method: "GET" })
   .handler(async () => ({ draft: await newDraftDefaults(today()), ...(await invoiceEditorContext()) }));
 
 export const getInvoiceDetail = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .validator(z.uuid())
-  .handler(async ({ data }) => {
+  .middleware([readMiddleware])
+  .validator(detailId)
+  .handler(async ({ data, context }) => {
     const result = await getInvoice(data);
-    if (!result) throw new UserError("Rechnung nicht gefunden.");
+    if (!result || (context.user.role !== "inhaber" && result.invoice.status === "draft")) throw notFound();
     const issues = result.invoice.status === "draft" ? await finalizeIssues(data) : [];
     // Mahnungen und ob die Rechnung gerade überfällig ist (offen und Fälligkeit vorbei)
     const listed = result.invoice.status === "final" ? (await listInvoices(today(), data))[0] : undefined;
@@ -101,6 +121,7 @@ export const getInvoiceDetail = createServerFn({ method: "GET" })
       ...result,
       invoice: withoutFiles(result.invoice),
       issues,
+      attachments: (await listInvoiceAttachments(data)).map(({ id, filename, size }) => ({ id, filename, size })),
       dunnings: await dunningsFor([data]),
       mails: result.invoice.status === "final" ? await mailsForInvoice(data) : [],
       overdue: listed?.listStatus === "ueberfaellig",
@@ -110,11 +131,15 @@ export const getInvoiceDetail = createServerFn({ method: "GET" })
           await db
             .select({ id: schema.quotes.id, number: schema.quotes.number })
             .from(schema.quotes)
-            .where(result.invoice.quoteId ? or(eq(schema.quotes.id, result.invoice.quoteId), eq(schema.quotes.invoiceId, data)) : eq(schema.quotes.invoiceId, data))
+            .where(
+              result.invoice.quoteId ? or(eq(schema.quotes.id, result.invoice.quoteId), eq(schema.quotes.invoiceId, data)) : eq(schema.quotes.invoiceId, data),
+            )
         )[0] ?? null,
       open: listed?.open ?? 0,
       listStatus: listed?.listStatus ?? null,
       writeOffs: result.invoice.status === "final" ? await listWriteOffs({ invoiceId: data }) : [],
+      /** Zahlungen über die Bank und bar im Kassenbuch */
+      payments: result.invoice.status === "final" ? await invoicePaymentList(data) : [],
       /** Vorschlag für das Datum einer Ausbuchung, nach deutscher Zeit */
       today: today(),
       ...(await abschlagLinks(data)),
@@ -126,9 +151,7 @@ export const saveInvoiceDraft = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(z.object({ id: z.uuid().nullable(), draft: draftSchema }))
   .handler(async ({ data, context }) => {
-    const saved = data.id
-      ? await updateDraft(context.user.id, data.id, data.draft)
-      : await createDraft(context.user.id, data.draft);
+    const saved = data.id ? await updateDraft(context.user.id, data.id, data.draft) : await createDraft(context.user.id, data.draft);
     return { id: saved.id };
   });
 
@@ -164,14 +187,19 @@ export const correctFinalInvoice = createServerFn({ method: "POST" })
     return { id: draft.id };
   });
 
+/** Nummernkreise für Rechnungen und Angebote, heute: im Jahr oder durchlaufend */
 export const getNumbering = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(() => numbering(Number(today().slice(0, 4))));
+  .handler(async () => {
+    const date = today();
+    const [invoice, quote] = await Promise.all([numbering(date, "rechnung"), numbering(date, "angebot")]);
+    return { invoice, quote };
+  });
 
 export const saveNextNumber = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(z.object({ next: z.number().int().min(1).max(99_999) }))
+  .validator(z.object({ kind: z.enum(["rechnung", "angebot"]).default("rechnung"), next: z.number().int().min(1).max(999_999) }))
   .handler(async ({ data, context }) => {
-    await setNextNumber(context.user.id, Number(today().slice(0, 4)), data.next);
+    await setNextNumber(context.user.id, today(), data.next, data.kind);
     return { ok: true };
   });

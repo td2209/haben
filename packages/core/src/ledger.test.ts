@@ -17,17 +17,50 @@ describe("Konten", () => {
   });
 
   it("schreibt Saldenliste und Kontenblatt als CSV", () => {
-    const saldenliste = saldenlisteToCsv([{ kontenrahmen: "SKR03", account: "8400", name: "Erlöse 19 % USt", eroeffnung: -10_000, soll: 0, haben: 50_000, saldo: -60_000 }]);
-    expect(saldenliste.startsWith("﻿Konto;Bezeichnung;Kontenklasse")).toBe(true);
-    expect(saldenliste).toContain("8400;Erlöse 19 % USt;Erlöskonten;100,00 H;0,00;500,00;600,00;H\r\n");
-    const blatt = kontenblattToCsv(0, [{ date: "2026-01-05", description: "Rechnung; RE-1", gegenkonten: ["1200", "1776"], soll: 0, haben: 50_000, saldo: -50_000 }]);
-    expect(blatt).toContain(';Eröffnung;;;;0,00;\r\n');
+    const saldenliste = saldenlisteToCsv([
+      {
+        kontenrahmen: "SKR03",
+        account: "8400",
+        name: "Erlöse 19 % USt",
+        eroeffnung: -10_000,
+        vortrag: 0,
+        soll: 0,
+        haben: 50_000,
+        sollJahr: 0,
+        habenJahr: 60_000,
+        saldo: -60_000,
+      },
+      {
+        kontenrahmen: "SKR03",
+        account: "0730",
+        name: "Verbindlichkeiten gegenüber Gesellschaftern",
+        eroeffnung: -30_000,
+        vortrag: -25_000,
+        soll: 1_000,
+        haben: 0,
+        sollJahr: 1_000,
+        habenJahr: 5_000,
+        saldo: -29_000,
+      },
+    ]);
+    expect(saldenliste.startsWith("﻿Konto;Bezeichnung;Kontenklasse;Eröffnung (EUR);Soll (EUR);Haben (EUR);Saldo (EUR);S/H;EB-Wert (EUR);")).toBe(true);
+    // Die ersten Spalten wie bisher, dahinter EB-Wert und Verkehrszahlen ab Jahresbeginn
+    expect(saldenliste).toContain("8400;Erlöse 19 % USt;Erlöskonten;100,00 H;0,00;500,00;600,00;H;0,00;0,00;600,00\r\n");
+    expect(saldenliste).toContain(
+      "0730;Verbindlichkeiten gegenüber Gesellschaftern;Anlage- und Kapitalkonten;300,00 H;10,00;0,00;290,00;H;250,00 H;10,00;50,00\r\n",
+    );
+    const blatt = kontenblattToCsv(0, [
+      { date: "2026-01-05", description: "Rechnung; RE-1", gegenkonten: ["1200", "1776"], soll: 0, haben: 50_000, saldo: -50_000 },
+    ]);
+    expect(blatt).toContain(";Eröffnung;;;;0,00;\r\n");
     expect(blatt).toContain('2026-01-05;"Rechnung; RE-1";1200, 1776;;500,00;500,00;H');
   });
 
   it("entschärft Formeln in Textfeldern, nicht in Beträgen", () => {
-    const blatt = kontenblattToCsv(-500, [{ date: "2026-01-05", description: "=HYPERLINK(\"x\")", gegenkonten: ["@1200"], soll: 0, haben: 50_000, saldo: -50_000 }]);
-    expect(blatt).toContain(';Eröffnung;;;;5,00;H\r\n');
+    const blatt = kontenblattToCsv(-500, [
+      { date: "2026-01-05", description: '=HYPERLINK("x")', gegenkonten: ["@1200"], soll: 0, haben: 50_000, saldo: -50_000 },
+    ]);
+    expect(blatt).toContain(";Eröffnung;;;;5,00;H\r\n");
     expect(blatt).toContain('2026-01-05;"\'=HYPERLINK(""x"")";\'@1200;;500,00;500,00;H');
     expect(euerToCsv({ ...computeEuer(2026, []), gewinn: -1_234 })).toContain("Ergebnis;Verlust;-12,34\r\n");
   });
@@ -46,7 +79,18 @@ describe("Konten", () => {
   });
 
   it("rechnet Kennzahlen für die Kacheln", () => {
-    const row = (account: string, soll: number, haben: number) => ({ kontenrahmen: "SKR03" as const, account, name: "", eroeffnung: 0, soll, haben, saldo: soll - haben });
+    const row = (account: string, soll: number, haben: number) => ({
+      kontenrahmen: "SKR03" as const,
+      account,
+      name: "",
+      eroeffnung: 0,
+      vortrag: 0,
+      soll,
+      haben,
+      sollJahr: soll,
+      habenJahr: haben,
+      saldo: soll - haben,
+    });
     const k = kontenkennzahlen([
       row("1200", 119_000, 5_950),
       row("1400", 119_000, 119_000),
@@ -59,5 +103,24 @@ describe("Konten", () => {
       row("8400", 0, 100_000),
     ]);
     expect(k).toEqual({ bank: 113_050, forderungen: 0, verbindlichkeiten: 5_950, umsatzsteuer: 19_000 - 950 - 10_000, ertraege: 100_000, aufwand: 5_000 });
+  });
+
+  it.each([
+    ["SKR03", "1588"],
+    ["SKR04", "1433"],
+  ] as const)("%s: entstandene Einfuhrumsatzsteuer (%s) mindert die Umsatzsteuer wie Vorsteuer", (kr, konto) => {
+    const row = (account: string, soll: number) => ({
+      kontenrahmen: kr,
+      account,
+      name: "",
+      eroeffnung: 0,
+      vortrag: 0,
+      soll,
+      haben: 0,
+      sollJahr: soll,
+      habenJahr: 0,
+      saldo: soll,
+    });
+    expect(kontenkennzahlen([row(konto, 380_00)]).umsatzsteuer).toBe(-380_00);
   });
 });

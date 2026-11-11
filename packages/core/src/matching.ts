@@ -1,4 +1,8 @@
-import type { Cents } from "./money.ts";
+import { kategorieFehler, type KategorieAngabe } from "./direkt-kategorie.ts";
+import { formatEuro, type Cents } from "./money.ts";
+import type { VatPeriod } from "./period.ts";
+import { formatPercent, skontoGezogen, type SkontoZahlfrist } from "./skonto.ts";
+import { purposeNamesPeriod, saeumnisMonate, saeumniszuschlag } from "./ustva-posten.ts";
 
 export interface MatchTransaction {
   bookingDate: string;
@@ -7,10 +11,15 @@ export interface MatchTransaction {
   counterpartyName: string;
   counterpartyIban?: string | null;
   purpose: string;
+  /** Referenz der Bank; manche Exporte tragen hier die EndToEndId (DKB: Kundenreferenz) */
+  bankReference?: string | null;
+  /** EndToEndId der Überweisung, soweit der Auszug sie nennt (CAMT) */
+  endToEndId?: string | null;
 }
 
 export interface OpenItem {
-  type: "invoice" | "document";
+  /** ustva: Zahllast oder Erstattung einer abgegebenen Voranmeldung (id ist die Voranmeldung) */
+  type: "invoice" | "document" | "ustva";
   id: string;
   /** Rechnungsnummer (eigene oder des Lieferanten) */
   number: string;
@@ -22,6 +31,17 @@ export interface OpenItem {
   partyIbans: string[];
   /** Währung der Rechnung bzw. des Belegs; open ist immer in Euro umgerechnet */
   currency?: string;
+  /** EndToEndIds der SEPA-Überweisungen, die Haben für den Beleg erzeugt hat */
+  references?: string[];
+  /** Nur bei eigenen, noch ganz offenen Rechnungen in Euro: das angebotene Skonto je Stufe */
+  skonto?: SkontoZahlfrist[];
+  /** Nur bei Voranmeldungen: der Zeitraum, den die Finanzkasse im Verwendungszweck nennt */
+  period?: VatPeriod;
+  /**
+   * Nur bei Voranmeldungen: letzter Tag der Schonfrist für den Säumniszuschlag (`schonfristEnde`, mit den Feiertagen im
+   * Bundesland des Finanzamts); fehlt er, zählen nur die bundesweiten Feiertage
+   */
+  schonfristEnde?: string;
 }
 
 /** Bis zu dieser Abweichung (in Prozent des offenen Betrags) gilt eine Zahlung auf Fremdwährung als passend */
@@ -38,6 +58,16 @@ export interface Suggestion {
    * die Abweichung als Kursdifferenz buchen.
    */
   exchangeDifference?: Cents;
+  /**
+   * Zahlung in der Frist genau um das Skonto einer Stufe gekürzt: dieser Rest (offen − Zahlung), den der Abgleich mit
+   * der Zahlung als gewährtes Skonto ausbucht
+   */
+  skonto?: Cents;
+}
+
+/** Stufe, um deren Skonto die Zahlung gekürzt ist (skontoGezogen) */
+function skontoTaken(tx: Pick<MatchTransaction, "amount" | "bookingDate">, item: OpenItem): SkontoZahlfrist | undefined {
+  return skontoGezogen(item.skonto, tx.bookingDate, tx.amount);
 }
 
 const compact = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -69,8 +99,18 @@ export function purposeContainsNumber(purpose: string, number: string): boolean 
 }
 
 /**
+ * Referenz einer Überweisung aus Haben im Umsatz: als EndToEndId, als Referenz der Bank oder im Verwendungszweck
+ * („EREF: HABEN-…“), unabhängig von Groß- und Kleinschreibung und Trennzeichen.
+ */
+export function transactionHasReference(tx: Pick<MatchTransaction, "purpose" | "bankReference" | "endToEndId">, reference: string): boolean {
+  const needle = compact(reference);
+  if (needle.length < 8) return false;
+  return [tx.endToEndId, tx.bankReference, tx.purpose].some((value) => value && compact(value).includes(needle));
+}
+
+/**
  * Vorschläge für einen Bankumsatz mit Begründung: Betrag, Rechnungsnummer im Verwendungszweck,
- * bekannte IBAN, Name; bei Belegen Betrag und Datum ± 5 Tage.
+ * bekannte IBAN, Name; bei Belegen Betrag und Datum ± 5 Tage und die Referenz einer Überweisung aus Haben.
  */
 export function suggestMatches(tx: MatchTransaction, items: OpenItem[], limit = 3): Suggestion[] {
   const iban = tx.counterpartyIban?.replace(/\s/g, "").toUpperCase();
@@ -79,15 +119,24 @@ export function suggestMatches(tx: MatchTransaction, items: OpenItem[], limit = 
 
   for (const item of items) {
     if (item.open === 0 || Math.sign(item.open) !== Math.sign(tx.amount)) continue;
+    if (item.type === "ustva") {
+      const vat = vatPostenSuggestion(tx, item);
+      if (vat) suggestions.push(vat);
+      continue;
+    }
     const reasons: string[] = [];
     let score = 0;
 
     const exact = item.open === tx.amount;
     const foreign = item.currency !== undefined && item.currency !== "EUR";
     const nearRate = foreign && !exact && Math.abs(tx.amount - item.open) <= Math.abs(item.open) * EXCHANGE_TOLERANCE;
+    const skonto = exact ? undefined : skontoTaken(tx, item);
     if (exact) {
       score += 50;
       reasons.push("Betrag stimmt exakt");
+    } else if (skonto) {
+      score += 50;
+      reasons.push(`Betrag stimmt mit ${formatPercent(skonto.percent)} Skonto (${formatEuro(skonto.amount)}), in der Frist`);
     } else if (nearRate) {
       score += 30;
       reasons.push(`Betrag passt bis auf eine Kursdifferenz (${item.currency})`);
@@ -95,13 +144,18 @@ export function suggestMatches(tx: MatchTransaction, items: OpenItem[], limit = 
       score += 5;
       reasons.push("Teilbetrag des offenen Betrags");
     }
+    const reference = item.references?.find((r) => transactionHasReference(tx, r));
+    if (reference) {
+      score += 60;
+      reasons.push(`Überweisung aus Haben (${reference})`);
+    }
     if (purposeContainsNumber(tx.purpose, item.number)) {
       score += 40;
       reasons.push("Rechnungsnummer im Verwendungszweck");
     }
     if (iban && item.partyIbans.some((i) => i.replace(/\s/g, "").toUpperCase() === iban)) {
       score += 30;
-      reasons.push("IBAN bekannt vom Kontakt");
+      reasons.push(item.type === "document" ? "IBAN des Lieferanten" : "IBAN bekannt vom Kontakt");
     }
     const partyWords = words(item.partyName);
     if ([...partyWords].some((w) => txWords.has(w))) {
@@ -118,10 +172,56 @@ export function suggestMatches(tx: MatchTransaction, items: OpenItem[], limit = 
     // Ohne passenden Betrag nur mit starkem weiteren Hinweis vorschlagen
     if (score < 40) continue;
     const amount = Math.abs(tx.amount) <= Math.abs(item.open) ? tx.amount : item.open;
-    suggestions.push({ item, score, reasons, amount, ...(nearRate ? { exchangeDifference: tx.amount - item.open } : {}) });
+    suggestions.push({
+      item,
+      score,
+      reasons,
+      amount,
+      ...(nearRate ? { exchangeDifference: tx.amount - item.open } : {}),
+      ...(skonto ? { skonto: item.open - tx.amount } : {}),
+    });
   }
 
   return suggestions.sort((a, b) => b.score - a.score || a.item.date.localeCompare(b.item.date)).slice(0, limit);
+}
+
+/**
+ * Voranmeldung als offener Posten: nur bei einer Zahlung des bzw. an das Finanzamt oder mit Umsatzsteuer im
+ * Verwendungszweck, nie bei einer anderen Steuer oder der Sondervorauszahlung. Punkte wie bei Rechnungen: Betrag 50,
+ * Zeitraum im Verwendungszweck 40 (statt der Rechnungsnummer), Finanzamt als Gegenpartei 15. Übersteigt die Lastschrift
+ * die Zahllast genau um einen Säumniszuschlag (§ 240 AO), wird nur die Zahllast zugeordnet; der Rest bleibt für den Beleg.
+ */
+function vatPostenSuggestion(tx: MatchTransaction, item: OpenItem): Suggestion | null {
+  const finanzamt = TAX_OFFICE.test(tx.counterpartyName);
+  if (!finanzamt && !VAT_PURPOSE.test(tx.purpose)) return null;
+  if (OTHER_TAX_PURPOSE.test(tx.purpose) || SVZ_PURPOSE.test(tx.purpose)) return null;
+  const reasons: string[] = [];
+  let score = 0;
+  if (item.open === tx.amount) {
+    score += 50;
+    reasons.push("Betrag stimmt exakt");
+  } else if (Math.abs(tx.amount) < Math.abs(item.open)) {
+    score += 5;
+    reasons.push("Teilbetrag des offenen Betrags");
+  } else if (tx.amount < 0 && item.dueDate) {
+    const monate = saeumnisMonate(item.dueDate, tx.bookingDate, item.schonfristEnde);
+    const zuschlag = saeumniszuschlag(-item.open, monate);
+    if (zuschlag > 0 && -tx.amount === -item.open + zuschlag) {
+      score += 40;
+      reasons.push(`Zahllast und ${formatEuro(zuschlag)} Säumniszuschlag (§ 240 AO, ${monate} ${monate === 1 ? "Monat" : "Monate"})`);
+    }
+  }
+  if (item.period && purposeNamesPeriod(tx.purpose, item.period)) {
+    score += 40;
+    reasons.push("Zeitraum im Verwendungszweck");
+  }
+  if (finanzamt) {
+    score += 15;
+    reasons.push("Finanzamt als Gegenpartei");
+  }
+  if (score < 40) return null;
+  const amount = Math.abs(tx.amount) <= Math.abs(item.open) ? tx.amount : item.open;
+  return { item, score, reasons, amount };
 }
 
 /** Wofür ein Bankkonto dient; steuert Vorschläge für Buchungen ohne Rechnung */
@@ -138,7 +238,12 @@ export const PAYMENT_PROVIDERS = {
   stripe: { label: "Stripe", pattern: /stripe/i },
   shopify: { label: "Shopify Payments", pattern: /shopify/i },
   etsy: { label: "Etsy Payments", pattern: /etsy/i },
+  ebay: { label: "eBay", pattern: /ebay/i },
   sumup: { label: "SumUp", pattern: /sum ?up/i },
+  // Auszahlender laut Auszahlungsbeleg: Google Payment Ireland Ltd bzw. Apple Distribution International Ltd; an echten
+  // Kontoauszügen noch zu bestätigen (Plan Google Play und App Store, „Offen“)
+  googleplay: { label: "Google Play", pattern: /google\s*(payment|commerce|ireland)/i },
+  appstore: { label: "App Store", pattern: /apple\s*distribution|itunes/i },
   sonstige: { label: "Anderer Zahlungsdienstleister", pattern: null },
 } as const;
 
@@ -165,8 +270,20 @@ export function providerPattern(account: Pick<OwnAccount, "provider">): RegExp |
 }
 
 export interface DirectSuggestion {
-  kind: "privat" | "geldtransit" | "ustVorauszahlung" | "gebuehren" | "mahnerloes";
+  kind:
+    | "privat"
+    | "spende"
+    | "geldtransit"
+    | "ustVorauszahlung"
+    | "sondervorauszahlung"
+    | "gebuehren"
+    | "mahnerloes"
+    | "lohnsteuer"
+    | "zinsertrag"
+    | "kategorie";
   reasons: string[];
+  /** Nur bei „kategorie“: Kategorie und Steuersatz, wie früher direkt gebucht (#324) */
+  kategorie?: KategorieAngabe;
   /**
    * Nur mit Gegenbuchung vorschlagen: Gegenpartei „PayPal“ auf der Bank kann auch ein mit PayPal bezahlter Einkauf sein;
    * Geldtransit ist es erst, wenn im Konto des Dienstleisters die passende Auszahlung steht.
@@ -177,11 +294,13 @@ export interface DirectSuggestion {
 }
 
 /** Finanzkassen und Steuerverwaltung, wie sie im Namen der Gegenpartei stehen */
-const TAX_OFFICE = /finanzamt|finanzkasse|steuerverwaltung|landeshauptkasse|landesfinanzkasse|bundeskasse|staatsoberkasse|finanzbehörde/i;
+export const TAX_OFFICE = /finanzamt|finanzkasse|steuerverwaltung|landeshauptkasse|landesfinanzkasse|bundeskasse|staatsoberkasse|finanzbehörde/i;
 /** Umsatzsteuer im Verwendungszweck: „USt 09/2026“, „Umsatzsteuer“, „UStVA“ */
-const VAT_PURPOSE = /umsatzsteuer|\bust\b|\bust[- ]?va\b|\bust\d|voranmeldung/i;
+export const VAT_PURPOSE = /umsatzsteuer|\bust\b|\bust[- ]?va\b|\bust\d|voranmeldung/i;
 /** Andere Steuern, die dasselbe Finanzamt einzieht oder erstattet (oft privat) */
-const OTHER_TAX_PURPOSE = /einkommen|\best\b|\best[- ]?v|kirchen|\bkist\b|soli|gewerbe|\bgewst\b|kfz|grundsteuer|lohnsteuer|\blst\b/i;
+/** Sondervorauszahlung der Dauerfristverlängerung (§ 47 UStDV): „USt-Sondervorauszahlung“, „USt-SVZ“, „USt 1/11“ */
+const SVZ_PURPOSE = /sondervorauszahlung|\bsvz\b|\b1\/11\b/i;
+export const OTHER_TAX_PURPOSE = /einkommen|\best\b|\best[- ]?v|kirchen|\bkist\b|soli|gewerbe|\bgewst\b|kfz|grundsteuer|lohnsteuer|\blst\b/i;
 
 /**
  * Vorschlag für einen Umsatz ohne Rechnung aus dem Zweck der Konten:
@@ -199,7 +318,12 @@ export function suggestDirectBooking(tx: MatchTransaction, account: OwnAccount, 
   // Auf der Bank: Gegenpartei ist ein eigener Zahlungsdienstleister (Auszahlung von PayPal, Aufladung)
   const provider = ownAccounts.find((a) => a.purpose === "zahlungsdienstleister" && providerPattern(a)?.test(tx.counterpartyName));
   if (provider) {
-    return { kind: "geldtransit", reasons: [`Gegenpartei ist dein Zahlungsdienstleister ${provider.name}`], counterAccountId: provider.id, requiresCounterpart: true };
+    return {
+      kind: "geldtransit",
+      reasons: [`Gegenpartei ist dein Zahlungsdienstleister ${provider.name}`],
+      counterAccountId: provider.id,
+      requiresCounterpart: true,
+    };
   }
   const iban = tx.counterpartyIban?.replace(/\s/g, "").toUpperCase();
   const own = iban ? ownAccounts.find((a) => a.id !== account.id && a.iban === iban) : undefined;
@@ -211,12 +335,30 @@ export function suggestDirectBooking(tx: MatchTransaction, account: OwnAccount, 
   }
   // Nur bei erkennbarer Umsatzsteuer: auf dem Steuerkonto liegt oft auch die Rücklage für die Einkommensteuer
   if (account.purpose === "steuer" && TAX_OFFICE.test(tx.counterpartyName) && VAT_PURPOSE.test(tx.purpose) && !OTHER_TAX_PURPOSE.test(tx.purpose)) {
+    // Die Sondervorauszahlung gehört auf ihr eigenes Konto (SKR03 1781, SKR04 3830), nicht auf die laufende Vorauszahlung
+    if (SVZ_PURPOSE.test(tx.purpose)) {
+      return { kind: "sondervorauszahlung", reasons: ["Sondervorauszahlung (Dauerfristverlängerung) an das Finanzamt"] };
+    }
     return {
       kind: "ustVorauszahlung",
       reasons: [tx.amount < 0 ? "Lastschrift des Finanzamts auf dem Steuerkonto" : "Erstattung des Finanzamts auf das Steuerkonto"],
     };
   }
   return null;
+}
+
+/**
+ * Lastschrift des Finanzamts über genau den Gesamtbetrag (Kz 83) einer übermittelten Lohnsteuer-Anmeldung: die Lohnsteuer
+ * dieses Zeitraums. Nur bei eindeutigem Betrag; zwei Zeiträume mit demselben Betrag lassen offen, welcher gezahlt ist.
+ */
+export function suggestLohnsteuer(
+  tx: Pick<MatchTransaction, "amount" | "counterpartyName">,
+  anmeldungen: readonly { label: string; betrag: Cents }[],
+): DirectSuggestion | null {
+  if (tx.amount >= 0 || !TAX_OFFICE.test(tx.counterpartyName)) return null;
+  const passend = anmeldungen.filter((a) => a.betrag === -tx.amount);
+  if (passend.length !== 1) return null;
+  return { kind: "lohnsteuer", reasons: [`Gesamtbetrag (Kz 83) der Lohnsteuer-Anmeldung ${passend[0]!.label}`] };
 }
 
 /** Auszahlungs-ID aus der Referenz einer Teilauszahlung („payout-98765|…“, Shopify Payments) */
@@ -265,47 +407,74 @@ export function findTransferCounterpart<
   const fitting = candidates.filter((c) => c.amount === -tx.amount && c.open === c.amount && daysBetween(c.bookingDate, tx.bookingDate) <= 5);
   const byDate = (a: T, b: T) => daysBetween(a.bookingDate, tx.bookingDate) - daysBetween(b.bookingDate, tx.bookingDate);
   const withIban = fitting
-    .filter((c) => (source !== null && normalizeIban(c.counterpartyIban) === source) || (pattern !== null && pattern.test(c.counterpartyName ?? "")))
+    .filter((c) => (source !== null && normalizeIban(c.counterpartyIban) === source) || pattern?.test(c.counterpartyName ?? ""))
     .sort(byDate);
   const withoutIban = fitting.filter((c) => !c.counterpartyIban).sort(byDate);
   return withIban[0] ?? withoutIban[0] ?? null;
 }
 
 /**
- * Häufigster Wert mit Anzahl, bei Gleichstand der zuletzt verwendete. Für Vorschläge aus früheren Buchungen: die Kategorie
- * eines Lieferanten, die Buchungsart einer Gegenpartei. `last` ist ein sortierbarer Zeitstempel (ISO).
+ * Häufigster Wert mit Anzahl und letzter Verwendung, bei Gleichstand der zuletzt verwendete. Für Vorschläge aus früheren
+ * Buchungen: die Kategorie eines Lieferanten, die Buchungsart einer Gegenpartei. `last` ist ein sortierbarer Zeitstempel (ISO).
  */
 export function mostFrequent<T>(
   rows: { value: T; count: number; last: string }[],
   /** Zahl der Fälle, wenn ein Fall mehrere Werte haben kann (aufgeteilter Umsatz); sonst die Summe der Anzahlen */
   total = rows.reduce((s, r) => s + r.count, 0),
-): { value: T; count: number; total: number } | null {
+): { value: T; count: number; total: number; last: string } | null {
   const best = [...rows].sort((a, b) => b.count - a.count || b.last.localeCompare(a.last))[0];
-  return best ? { value: best.value, count: best.count, total } : null;
+  return best ? { value: best.value, count: best.count, total, last: best.last } : null;
 }
 
-/** Arten ohne Rechnung, die Haben aus früheren Buchungen vorschlägt */
-const LEARNED_KINDS = new Set(["privat", "gebuehren", "mahnerloes"]);
+/**
+ * Eine frühere Zuordnung, wie sie die Historie zählt: die Art (invoice, document, privat, gebuehren, kategorie …), bei
+ * „kategorie“ mit Kategorie und Steuersatz, damit jede Kategorie und jeder Satz für sich zählt.
+ */
+export interface LearnedBooking {
+  kind: string;
+  kategorie?: KategorieAngabe;
+}
+
+/**
+ * Arten ohne Rechnung, die Haben aus früheren Buchungen vorschlägt. Nicht dabei: was die Regeln der Kontozwecke besser
+ * wissen oder was eine Angabe braucht, die sich je Zahlung ändert (Steuerart und Jahr, Teil einer Darlehensrate, die
+ * offene Lohnverbindlichkeit).
+ */
+const LEARNED_KINDS = new Set(["privat", "spende", "gebuehren", "mahnerloes", "zinsertrag", "kategorie"]);
+
+/** „2026-09-30“ → „30.09.2026“; `last` kann ein Zeitstempel sein, gezählt wird der Tag */
+const tagText = (iso: string) => iso.slice(0, 10).split("-").reverse().join(".");
 
 /**
  * Buchungsart ohne Rechnung aus früheren Zuordnungen derselben Gegenpartei (gleiche Gegen-IBAN, sonst gleicher Name) in
  * derselben Richtung: Abbuchungen lernen nur aus Abbuchungen, Eingänge nur aus Eingängen (die Gebühr von Stripe ist keine
- * Vorlage für dessen Auszahlung). `history` zählt je Art (invoice, document, privat, gebuehren …) die früheren Umsätze,
- * `total` die Umsätze insgesamt (ein aufgeteilter Umsatz zählt bei jeder seiner Arten, aber nur einmal insgesamt).
- * Vorgeschlagen wird nur, wenn die häufigste Art mindestens zweimal vorkam und mehr als die Hälfte der Umsätze ausmacht.
+ * Vorlage für dessen Auszahlung). `history` zählt je Art die früheren Umsätze, bei „Direkt buchen“ auf eine Kategorie je
+ * Kategorie und Steuersatz; `total` zählt die Umsätze insgesamt (ein aufgeteilter Umsatz zählt bei jeder seiner Arten,
+ * aber nur einmal insgesamt). Vorgeschlagen wird nur, wenn die häufigste Art mindestens zweimal vorkam und mehr als die
+ * Hälfte der Umsätze ausmacht. Eine Kategorie nur, wenn sie heute noch so direkt buchbar wäre (kategorieFehler): Nach dem
+ * Wechsel zum Kleinunternehmer etwa sind Erlöse mit 19 % kein Vorschlag mehr.
  * Nicht gelernt werden:
  * - Geldtransit: braucht die Gegenbuchung, die die Regeln zu eigenen Konten finden
  * - Umsatzsteuer und alles mit dem Finanzamt: über dieselbe IBAN laufen Umsatzsteuer und private Steuern
+ * - Lohn, Sozialversicherung, Steuerzahlungen und Darlehen: Abrechnung, Steuerart oder Teil der Rate ändern sich je Zahlung
  */
 export function learnedDirectBooking(
   tx: Pick<MatchTransaction, "counterpartyName">,
-  history: { value: string; count: number; last: string }[],
+  history: { value: LearnedBooking; count: number; last: string }[],
   total: number,
   basis: "iban" | "name",
+  /** Kleinunternehmer heute; entscheidet, ob eine gelernte Erlöskategorie mit oder ohne Steuer noch buchbar ist */
+  kleinunternehmer = false,
 ): DirectSuggestion | null {
   if (TAX_OFFICE.test(tx.counterpartyName)) return null;
   const top = mostFrequent(history, total);
-  if (!top || !LEARNED_KINDS.has(top.value) || top.count < 2 || top.count * 2 <= top.total) return null;
+  if (!top || !LEARNED_KINDS.has(top.value.kind) || top.count < 2 || top.count * 2 <= top.total) return null;
+  const { kategorie } = top.value;
+  if (top.value.kind === "kategorie" && (!kategorie || kategorieFehler(kategorie, kleinunternehmer))) return null;
   const from = basis === "iban" ? "mit dieser Gegen-IBAN" : "von dieser Gegenpartei";
-  return { kind: top.value as DirectSuggestion["kind"], reasons: [`${top.count} von ${top.total} Umsätzen ${from} so gebucht`] };
+  return {
+    kind: top.value.kind as DirectSuggestion["kind"],
+    ...(kategorie ? { kategorie } : {}),
+    reasons: [`${top.count} von ${top.total} Umsätzen ${from} so gebucht, zuletzt am ${tagText(top.last)}`],
+  };
 }

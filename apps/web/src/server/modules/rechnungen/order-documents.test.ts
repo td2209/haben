@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Auftragsbestätigung und Lieferschein (Postgres)", () => {
   let docs: typeof import("./order-documents.ts");
@@ -25,15 +25,24 @@ describe.skipIf(!testDatabaseUrl)("Auftragsbestätigung und Lieferschein (Postgr
   });
 
   beforeEach(async () => {
-    await sql`truncate quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
+    await leeren(sql)`truncate quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
       invoice_number_counters, contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, steuernummer, ust_id, bundesland, iban, bic, bank)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '198/113/10010', 'DE123456789', 'BY',
               'DE89370400440532013000', 'COBADEFFXXX', 'Commerzbank')`;
     contactId = (
       await contacts.createContact(actor, {
-        kundennummer: "", name: "Nordwerk Software GmbH", strasse: "Hafenstraße 5", plz: "20457", ort: "Hamburg", land: "DE",
-        email: "", ustId: "", iban: "", leitwegId: "", defaultFormat: null,
+        kundennummer: "",
+        name: "Nordwerk Software GmbH",
+        strasse: "Hafenstraße 5",
+        plz: "20457",
+        ort: "Hamburg",
+        land: "DE",
+        email: "",
+        ustId: "",
+        iban: "",
+        leitwegId: "",
+        defaultFormat: null,
       })
     ).id;
   });
@@ -41,7 +50,17 @@ describe.skipIf(!testDatabaseUrl)("Auftragsbestätigung und Lieferschein (Postgr
   it("Auftragsbestätigung und Lieferschein erst zum angenommenen Angebot", async () => {
     const quote = await quotes.finalizeQuote(
       actor,
-      (await quotes.createQuoteDraft(actor, { contactId, issueDate: "2026-10-01", validUntil: "2026-10-31", serviceFrom: null, serviceTo: null, note: "", lines })).id,
+      (
+        await quotes.createQuoteDraft(actor, {
+          contactId,
+          issueDate: "2026-10-01",
+          validUntil: "2026-10-31",
+          serviceFrom: null,
+          serviceTo: null,
+          note: "",
+          lines,
+        })
+      ).id,
     );
     await expect(docs.confirmationPdf(quote.id)).rejects.toThrow(/nicht als angenommen/);
     await quotes.setQuoteDecision(actor, quote.id, "angenommen");
@@ -56,7 +75,18 @@ describe.skipIf(!testDatabaseUrl)("Auftragsbestätigung und Lieferschein (Postgr
   it("Lieferschein zur Rechnung, nicht zur Stornorechnung", async () => {
     const invoice = await invoices.finalizeInvoice(
       actor,
-      (await invoices.createDraft(actor, { contactId, issueDate: "2026-10-02", serviceFrom: null, serviceTo: null, paymentTermDays: 14, format: "zugferd", note: "", lines })).id,
+      (
+        await invoices.createDraft(actor, {
+          contactId,
+          issueDate: "2026-10-02",
+          serviceFrom: null,
+          serviceTo: null,
+          paymentTermDays: 14,
+          format: "zugferd",
+          note: "",
+          lines,
+        })
+      ).id,
     );
     const note = await docs.deliveryNotePdf("rechnung", invoice.id);
     expect(note.filename).toBe("Lieferschein-2026-001.pdf");

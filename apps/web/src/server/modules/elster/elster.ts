@@ -5,8 +5,10 @@ import {
   createElsterClient,
   DEFAULT_ERIC_VERSION,
   EricInstallError,
+  hatJahresPlugin,
   installedEricVersion,
   ericHomeIn,
+  ericPlatformSupported,
   installEric,
   isEricVersion,
   type ElsterClient,
@@ -67,6 +69,15 @@ export function mitDatenschutzPruefung(inner: ElsterClient, check: () => Promise
   });
 }
 
+/**
+ * Kennt das geladene ERiC die Datenart-Version (z. B. LStA_2027, Bilanz_6.10)? Neue Jahre und Taxonomien bringt erst eine
+ * neuere ERiC-Version mit (Prüf-Plugin libcheck<Datenart>_<Version>.so); simuliert gilt jede als bekannt.
+ */
+export function ericKennt(datenartVersion: string): boolean {
+  const home = ericHome();
+  return !home || hatJahresPlugin(home, datenartVersion);
+}
+
 /** Ohne ERiC läuft alles gegen einen simulierten Client. */
 export function elsterMode(): "eric" | "simuliert" {
   return ericHome() ? "eric" : "simuliert";
@@ -92,7 +103,7 @@ export async function ericStatus() {
     home,
     version: home ? await installedEricVersion(home) : null,
     defaultVersion: DEFAULT_ERIC_VERSION,
-    platformSupported: process.platform === "linux" && process.arch === "x64",
+    platformSupported: ericPlatformSupported(e.ERIC_WORKER_COMMAND),
     install: installState,
     /** Wann die Datenschutzhinweise der Finanzverwaltung bestätigt wurden; null = noch nicht */
     datenschutzBestaetigt: (await loadCompany()).elsterDatenschutzAt?.toISOString() ?? null,
@@ -105,7 +116,7 @@ export async function ericStatus() {
  */
 export function startEricInstall(version: string): void {
   if (env().ERIC_HOME?.trim()) throw new EricSetupError("ERiC ist über ERIC_HOME eingebunden; zum Herunterladen ERIC_HOME entfernen.");
-  if (!isEricVersion(version)) throw new EricSetupError("Die Version hat die Form 43.4.6.0.");
+  if (!isEricVersion(version)) throw new EricSetupError(`Die Version hat die Form ${DEFAULT_ERIC_VERSION}.`);
   if (installState?.status === "laeuft") throw new EricSetupError("Der Download läuft schon.");
   const state: InstallState = { status: "laeuft", version, progress: null, startedAt: new Date().toISOString() };
   installState = state;
@@ -114,6 +125,7 @@ export function startEricInstall(version: string): void {
     dir: resolve(env().ERIC_DIR),
     baseUrl: env().ERIC_DOWNLOAD_URL,
     sha256: env().ERIC_SHA256 || undefined,
+    workerCommand: env().ERIC_WORKER_COMMAND,
     onProgress: (progress) => {
       state.progress = progress;
     },

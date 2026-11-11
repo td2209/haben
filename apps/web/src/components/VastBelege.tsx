@@ -6,14 +6,10 @@ import { useAction, type Notice } from "../lib/use-action.ts";
 import { feldname, formatWert } from "../lib/vast.ts";
 import { NoticeBanner } from "./NoticeBanner.tsx";
 import type { getAnnualReturns } from "../server/functions/annual.ts";
-import {
-  activateVastBerechtigung,
-  fetchVast,
-  refreshVastBerechtigung,
-  requestVastBerechtigung,
-  revokeVastBerechtigung,
-} from "../server/functions/annual.ts";
+import { activateVastBerechtigung, fetchVast, refreshVastBerechtigung, requestVastBerechtigung, revokeVastBerechtigung } from "../server/functions/annual.ts";
 import { ScrollTable } from "./ScrollTable.tsx";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { Field } from "./Field.tsx";
 
 type Data = Awaited<ReturnType<typeof getAnnualReturns>>;
 type Beleg = Data["vast"]["belege"][number];
@@ -98,8 +94,8 @@ export function VastBelege({ data }: { data: Data }) {
     <section className="card" aria-labelledby="vast-heading">
       <h2 id="vast-heading">Belege von ELSTER {data.year}</h2>
       <p className="small muted" style={{ margin: 0, maxWidth: 760 }}>
-        Was Arbeitgeber, Rentenversicherung, Krankenkasse und andere Stellen dem Finanzamt für {data.year} gemeldet haben
-        (vorausgefüllte Steuererklärung). Zum Abgleich mit deinen Angaben oben; Haben übernimmt die Werte nicht von selbst in die Erklärung.
+        Was Arbeitgeber, Rentenversicherung, Krankenkasse und andere Stellen dem Finanzamt für {data.year} gemeldet haben (vorausgefüllte Steuererklärung). Zum
+        Abgleich mit deinen Angaben oben; Haben übernimmt die Werte nicht von selbst in die Erklärung.
       </p>
       <div className="grid-main">
         <div className="stack" style={{ gap: 12 }}>
@@ -117,7 +113,7 @@ export function VastBelege({ data }: { data: Data }) {
               if (belege.length === 0) return null;
               return (
                 <div key={p.key}>
-                  <h3 style={{ margin: "0 0 4px", fontSize: 15 }}>{p.name}</h3>
+                  <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>{p.name}</h3>
                   {belege.map((b) => (
                     <BelegDetails key={b.id} beleg={b} />
                   ))}
@@ -129,29 +125,37 @@ export function VastBelege({ data }: { data: Data }) {
         {vast.personen.length > 0 && (
           <form className="stack" style={{ gap: 12 }} onSubmit={onSubmit} aria-label="Belege abrufen">
             {vast.personen.length > 1 && (
-              <label className="field">
-                Für
-                <select value={person} onChange={(e) => setPerson(e.target.value as "a" | "b")}>
-                  {vast.personen.map((p) => (
-                    <option key={p.key} value={p.key}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <Field label="Für">
+                {(control) => (
+                  <select {...control} value={person} onChange={(e) => setPerson(e.target.value as "a" | "b")}>
+                    {vast.personen.map((p) => (
+                      <option key={p.key} value={p.key}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
             )}
-            <label className="field">
-              Zertifikats-PIN
-              <input
-                type="password"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                autoComplete="off"
-                placeholder={canUseSavedPin ? "gespeicherte PIN verwenden" : undefined}
-              />
-            </label>
+            <Field label="Zertifikats-PIN">
+              {(control) => (
+                <input
+                  {...control}
+                  type="password"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  autoComplete="off"
+                  placeholder={canUseSavedPin ? "gespeicherte PIN verwenden" : undefined}
+                />
+              )}
+            </Field>
             <label className="checkbox">
-              <input type="checkbox" checked={testOnly || !data.herstellerIdConfigured} disabled={!data.herstellerIdConfigured} onChange={(e) => setTestOnly(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={testOnly || !data.herstellerIdConfigured}
+                disabled={!data.herstellerIdConfigured}
+                onChange={(e) => setTestOnly(e.target.checked)}
+              />
               Nur testweise abrufen
             </label>
             {!data.herstellerIdConfigured && (
@@ -228,7 +232,12 @@ function BerechtigungPanel({
   const tone = (ok: boolean) => (ok ? "ok" : "danger") as "ok" | "danger";
 
   return (
-    <div className="banner banner-info stack" role="group" aria-label={`Berechtigung für ${name}`} style={{ gap: 8, display: "flex", flexDirection: "column", alignItems: "stretch" }}>
+    <div
+      className="banner banner-info stack"
+      role="group"
+      aria-label={`Berechtigung für ${name}`}
+      style={{ gap: 8, display: "flex", flexDirection: "column", alignItems: "stretch" }}
+    >
       <div>
         <strong>Berechtigung für {name}</strong>
         {current ? (
@@ -254,13 +263,10 @@ function BerechtigungPanel({
       {(!status || !["offen", "genehmigt"].includes(status)) && (
         <>
           <p className="small" style={{ margin: 0 }}>
-            Für die Belege von {name} braucht dein Zertifikat ihre Zustimmung: Haben beantragt das Recht bei ELSTER, {name} bekommt einen
-            Brief mit Freischaltcode, den du hier eingibst.
+            Für die Belege von {name} braucht dein Zertifikat ihre Zustimmung: Haben beantragt das Recht bei ELSTER, {name} bekommt einen Brief mit
+            Freischaltcode, den du hier eingibst.
           </p>
-          <label className="field">
-            Gültig bis
-            <input type="date" value={gueltigBis} onChange={(e) => setGueltigBis(e.target.value)} />
-          </label>
+          <Field label="Gültig bis">{(control) => <input {...control} type="date" value={gueltigBis} onChange={(e) => setGueltigBis(e.target.value)} />}</Field>
           <button
             type="button"
             className="btn btn-primary"
@@ -278,10 +284,9 @@ function BerechtigungPanel({
       )}
       {status === "offen" && (
         <>
-          <label className="field">
-            Freischaltcode aus dem Brief
-            <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="XXXX-XXXX-XXXX" autoComplete="off" />
-          </label>
+          <Field label="Freischaltcode aus dem Brief">
+            {(control) => <input {...control} value={code} onChange={(e) => setCode(e.target.value)} placeholder="XXXX-XXXX-XXXX" autoComplete="off" />}
+          </Field>
           <button
             type="button"
             className="btn btn-primary"
@@ -313,22 +318,25 @@ function BerechtigungPanel({
           Stand bei ELSTER prüfen
         </button>
         {(status === "offen" || status === "genehmigt") && (
-          <button
-            type="button"
-            className="btn btn-sm btn-danger"
-            disabled={disabled}
-            onClick={() => {
-              if (!confirmRevoke) return setConfirmRevoke(true);
-              setConfirmRevoke(false);
-              void run(async (base) => {
-                const result = await revoke({ data: base });
-                return { tone: tone(result.ok), text: result.message };
-              });
-            }}
-          >
-            {confirmRevoke ? "Wirklich widerrufen?" : status === "offen" ? "Antrag zurückziehen" : "Widerrufen"}
+          <button type="button" className="btn btn-sm btn-danger" disabled={disabled} onClick={() => setConfirmRevoke(true)}>
+            {status === "offen" ? "Antrag zurückziehen" : "Widerrufen"}
           </button>
         )}
+        <ConfirmDialog
+          open={confirmRevoke}
+          title={status === "offen" ? `Antrag für ${name} zurückziehen?` : `Berechtigung für ${name} widerrufen?`}
+          confirmLabel={status === "offen" ? "Antrag zurückziehen" : "Widerrufen"}
+          danger
+          onConfirm={() =>
+            void run(async (base) => {
+              const result = await revoke({ data: base });
+              return { tone: tone(result.ok), text: result.message };
+            })
+          }
+          onClose={() => setConfirmRevoke(false)}
+        >
+          <p>Der Belegabruf für {name} geht danach erst wieder mit einem neuen Antrag.</p>
+        </ConfirmDialog>
       </div>
     </div>
   );

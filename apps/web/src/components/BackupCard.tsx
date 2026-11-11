@@ -3,7 +3,7 @@ import type { getBackupStatus } from "../server/functions/backup.ts";
 
 type Status = Awaited<ReturnType<typeof getBackupStatus>>;
 
-export const BACKUP_DOCS = "https://firsttris.github.io/haben/installation.html#backup-und-wiederherstellen";
+export const BACKUP_DOCS = "https://haben.app/installation.html#backup-und-wiederherstellen";
 
 const ART = { backup: "Backup", restore_check: "Test-Restore" } as const;
 
@@ -14,8 +14,8 @@ export function BackupCard({ status }: { status: Status }) {
     <section className="card" aria-labelledby="backup-heading">
       <h2 id="backup-heading">Backup</h2>
       <p className="small muted" style={{ margin: 0 }}>
-        Der Backup-Container sichert Datenbank und Belege täglich mit restic und spielt einmal pro Woche das letzte Backup probeweise in eine
-        Wegwerf-Datenbank ein: Hash-Kette und Siegel werden geprüft, einige Belege mit ihrer Prüfsumme verglichen. Hier steht das Ergebnis.
+        Der Backup-Container sichert Datenbank und Belege täglich mit restic und spielt einmal pro Woche das letzte Backup probeweise in eine Wegwerf-Datenbank
+        ein: Hash-Kette und Siegel werden geprüft, einige Belege mit ihrer Prüfsumme verglichen. Hier steht das Ergebnis.
       </p>
       {state === "keins" && (
         <div className="banner banner-info">

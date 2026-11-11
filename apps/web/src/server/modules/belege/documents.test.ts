@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { computeInvoiceTotals } from "@haben/core";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 // Die KI wird nicht aufgerufen; die Auslesung liefert feste Werte.
 vi.mock("./extraction.ts", async (importOriginal) => {
@@ -31,6 +31,7 @@ const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x4
 
 describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
   let documents: typeof import("./documents.ts");
+  let vorschlaege: typeof import("./vorschlaege.ts");
   let einvoice: typeof import("@haben/einvoice");
   let sql: postgres.Sql;
   const actor = "test-user";
@@ -38,6 +39,7 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
   beforeAll(async () => {
     sql = await setupTestDb();
     documents = await import("./documents.ts");
+    vorschlaege = await import("./vorschlaege.ts");
     einvoice = await import("@haben/einvoice");
   }, 30_000);
 
@@ -46,8 +48,84 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate journal_lines, journal_entries, document_amounts, documents, exchange_rates, company cascade`;
+    await leeren(sql)`truncate journal_lines, journal_entries, document_amounts, documents, exchange_rates, contact_versions, contacts, company cascade`;
     await sql`insert into company (id, name, kontenrahmen) values (1, 'Testfirma', 'SKR03')`;
+  });
+
+  it("merkt sich den aus den Kontakten gewählten Lieferanten; ein unbekannter Kontakt wird abgelehnt", async () => {
+    const stammdaten = await import("../stammdaten/index.ts");
+    const hetzner = await stammdaten.createContact(actor, {
+      kundennummer: "",
+      name: "Hetzner Online GmbH",
+      strasse: "",
+      plz: "",
+      ort: "",
+      land: "DE",
+      email: "",
+      ustId: "DE812871812",
+      iban: "",
+      leitwegId: "",
+      defaultFormat: null,
+      isCustomer: false,
+      isSupplier: true,
+    });
+    const { id } = await documents.uploadDocument(actor, { bytes: new Uint8Array([...JPEG, 91]), filename: "hetzner.jpg" });
+    const input = {
+      supplierName: "Hetzner Online GmbH",
+      supplierUstId: "DE812871812",
+      supplierContactId: hetzner.id,
+      invoiceNumber: "R1",
+      documentDate: "2026-09-15",
+      dueDate: null,
+      category: "software" as const,
+      payment: "bank" as const,
+      note: "",
+      amounts: [{ taxRate: 1900 as const, net: 1_000, tax: 190 }],
+    };
+    await documents.updateDocument(actor, id, input);
+    expect((await documents.getDocument(id))!.document.supplierContactId).toBe(hetzner.id);
+    await expect(documents.updateDocument(actor, id, { ...input, supplierContactId: "00000000-0000-4000-8000-000000000000" })).rejects.toThrow(
+      /Lieferant nicht gefunden/,
+    );
+    await documents.updateDocument(actor, id, { ...input, supplierContactId: null });
+    expect((await documents.getDocument(id))!.document.supplierContactId).toBeNull();
+  });
+
+  it("erneutes Auslesen mit anderem Lieferanten löst die Verknüpfung zum Kontakt", async () => {
+    const stammdaten = await import("../stammdaten/index.ts");
+    const hetzner = await stammdaten.createContact(actor, {
+      kundennummer: "",
+      name: "Hetzner Online GmbH",
+      strasse: "",
+      plz: "",
+      ort: "",
+      land: "DE",
+      email: "",
+      ustId: "DE812871812",
+      iban: "",
+      leitwegId: "",
+      defaultFormat: null,
+      isCustomer: false,
+      isSupplier: true,
+    });
+    const { id } = await documents.uploadDocument(actor, { bytes: new Uint8Array([...JPEG, 92]), filename: "hetzner-2.jpg" });
+    await documents.updateDocument(actor, id, {
+      supplierName: "Hetzner Online GmbH",
+      supplierUstId: "DE812871812",
+      supplierContactId: hetzner.id,
+      invoiceNumber: "R2",
+      documentDate: "2026-09-15",
+      dueDate: null,
+      category: "software",
+      payment: "bank",
+      note: "",
+      amounts: [{ taxRate: 1900, net: 1_000, tax: 190 }],
+    });
+    // Die Auslesung (Mock) liefert „Telekom Deutschland GmbH“: der Beleg zeigt nicht mehr auf Hetzner
+    await documents.runExtraction(actor, id);
+    const { document } = (await documents.getDocument(id))!;
+    expect(document.supplierName).toBe("Telekom Deutschland GmbH");
+    expect(document.supplierContactId).toBeNull();
   });
 
   it("von Hand eingetragener Tabellenkurs: der später veröffentlichte amtliche Kurs gilt auch für ungebuchte Belege", async () => {
@@ -119,9 +197,7 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
       gross: sample.totals.gross,
       category: null,
     });
-    expect(result?.amounts.map((a) => [a.taxRate, a.net, a.tax])).toEqual(
-      sample.totals.taxes.map((t) => [t.rate, t.base, t.tax]),
-    );
+    expect(result?.amounts.map((a) => [a.taxRate, a.net, a.tax])).toEqual(sample.totals.taxes.map((t) => [t.rate, t.base, t.tax]));
 
     const again = await documents.uploadDocument(actor, { bytes: pdf, filename: "nochmal.pdf" });
     expect(again).toEqual({ id, duplicate: true });
@@ -190,15 +266,16 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
     await book(1, "internet");
     await book(2, "telefon");
     // Gleichstand: der zuletzt gebuchte
-    expect(await documents.supplierCategory("Telekom Deutschland GmbH", "")).toEqual({ category: "telefon", count: 1, total: 2 });
+    const lieferant = (supplierName: string, supplierUstId: string) => ({ supplierName, supplierUstId, supplierContactId: null });
+    expect(await vorschlaege.supplierCategory(lieferant("Telekom Deutschland GmbH", ""))).toMatchObject({ category: "telefon", count: 1, total: 2 });
     await book(3, "internet");
     await book(4, "internet");
     // Zuletzt „telefon“, häufiger bleibt „internet“
     await book(5, "telefon");
     // Erkannt an der USt-IdNr. oder am Namen ohne Groß- und Kleinschreibung
-    expect(await documents.supplierCategory("", "DE123475223")).toEqual({ category: "internet", count: 3, total: 5 });
-    expect(await documents.supplierCategory("telekom deutschland gmbh ", "")).toEqual({ category: "internet", count: 3, total: 5 });
-    expect(await documents.supplierCategory("Andere GmbH", "")).toBeNull();
+    expect(await vorschlaege.supplierCategory(lieferant("", "DE123475223"))).toMatchObject({ category: "internet", count: 3, total: 5 });
+    expect(await vorschlaege.supplierCategory(lieferant("telekom deutschland gmbh ", ""))).toMatchObject({ category: "internet", count: 3, total: 5 });
+    expect(await vorschlaege.supplierCategory(lieferant("Andere GmbH", ""))).toBeNull();
     // Auch die Auslesung (KI: „telefon“) überstimmt die häufigste Kategorie
     const next = await documents.uploadDocument(actor, { bytes: new Uint8Array([...JPEG, 99]), filename: "neu.jpg" });
     expect((await documents.getDocument(next.id))?.document.category).toBe("internet");
@@ -274,7 +351,14 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
     expect((await documents.getDocument(id))!.document).toMatchObject({ exchangeRate: null, exchangeRateSource: null, gross: 0 });
 
     // Das BMF veröffentlicht September: der wartende Beleg wird umgerechnet
-    await stammdaten.storeExchangeRates(actor, [{ currency: "USD", month: "2026-09", rate: "1.0812" }, { currency: "USD", month: "2026-10", rate: "1.1" }], "bmf");
+    await stammdaten.storeExchangeRates(
+      actor,
+      [
+        { currency: "USD", month: "2026-09", rate: "1.0812" },
+        { currency: "USD", month: "2026-10", rate: "1.1" },
+      ],
+      "bmf",
+    );
     expect(await documents.applyPublishedRates(actor)).toBe(1);
     const applied = (await documents.getDocument(id))!.document;
     expect(applied).toMatchObject({ exchangeRate: "1.081200", exchangeRateSource: "ust", exchangeRateDate: "2026-09-01", gross: 11_006 });
@@ -295,6 +379,111 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
     await stammdaten.storeExchangeRates(actor, [{ currency: "USD", month: "2026-10", rate: "1.2" }], "bmf");
     expect(await documents.applyPublishedRates(actor)).toBe(0);
     expect((await documents.getDocument(id))!.document.exchangeRate).toBe("1.095000");
+  });
+
+  it("lehnt § 13b beim Wareneinkauf ab: Waren aus dem EU-Ausland sind ein innergemeinschaftlicher Erwerb, keine sonstige Leistung", async () => {
+    const { id } = await documents.uploadDocument(actor, { bytes: new Uint8Array([...JPEG, 41]), filename: "waren-eu.jpg" });
+    await documents.updateDocument(actor, id, {
+      supplierName: "Groothandel B.V.",
+      supplierUstId: "NL123456789B01",
+      invoiceNumber: "NL-2026-7",
+      documentDate: "2026-09-30",
+      dueDate: null,
+      category: "wareneinkauf",
+      payment: "bank",
+      note: "",
+      reverseCharge: "eu",
+      currency: "EUR",
+      exchangeRate: null,
+      amounts: [{ taxRate: 1900, net: 10_000, tax: 1_900 }],
+    });
+    const doc = (await documents.getDocument(id))!;
+    // § 13b Abs. 1 UStG gilt nur für sonstige Leistungen (Kz 46/47); Waren gehören in Kz 89/93 (§ 1a UStG)
+    expect(documents.bookingIssues(doc.document, doc.amounts)).toContain("§ 13b gilt nicht für Wareneinkäufe");
+  });
+
+  it.each([
+    ["eu", "software", "Steuer § 13b"],
+    ["ig_erwerb", "buero", "Erwerbsteuer"],
+  ] as const)(
+    "%s in Euro: die selbst geschuldete Steuer rechnet der Server aus Netto und Satz, nicht aus der Eingabe (#331)",
+    async (reverseCharge, category, name) => {
+      const { id } = await documents.uploadDocument(actor, { bytes: new Uint8Array([...JPEG, reverseCharge.length, 42]), filename: `${reverseCharge}.jpg` });
+      const input = {
+        supplierName: "Lieferant B.V.",
+        supplierUstId: "NL123456789B01",
+        invoiceNumber: `NL-${reverseCharge}`,
+        documentDate: "2026-09-30",
+        dueDate: null,
+        category,
+        payment: "bank" as const,
+        note: "",
+        reverseCharge,
+        currency: "EUR",
+        exchangeRate: null,
+      };
+      // Über die API oder ein altes Formular kommt eine abweichende Steuer; maßgeblich sind 19 % bzw. 7 % vom Netto
+      await documents.updateDocument(actor, id, {
+        ...input,
+        amounts: [
+          { taxRate: 1900, net: 20_000, tax: 0 },
+          { taxRate: 700, net: 10_000, tax: 999 },
+        ],
+      });
+      const doc = (await documents.getDocument(id))!;
+      expect(doc.amounts.map((a) => [a.taxRate, a.net, a.tax]).sort()).toEqual(
+        [
+          [1900, 20_000, 3_800],
+          [700, 10_000, 700],
+        ].sort(),
+      );
+      expect(doc.document).toMatchObject({ net: 30_000, tax: 4_500, gross: 30_000 });
+      // Ein schon gespeicherter Entwurf mit abweichender Steuer lässt sich nicht buchen, bis er neu gespeichert ist
+      await sql`update document_amounts set tax = 0 where document_id = ${id} and tax_rate = 1900`;
+      const legacy = (await documents.getDocument(id))!;
+      expect(documents.bookingIssues(legacy.document, legacy.amounts)).toContain(`${name} passt nicht zu Netto und Satz; öffne den Beleg und speichere ihn`);
+    },
+  );
+
+  it("§ 13b in Fremdwährung neu ausgelesen: die Steuer kommt aus dem umgerechneten Netto, nicht aus der Auslesung (#335)", async () => {
+    const extraction = await import("./extraction.ts");
+    await sql`insert into exchange_rates (currency, month, rate, source) values ('USD', '2026-09', 1.0812, 'bmf')`;
+    const { id } = await documents.uploadDocument(actor, { bytes: new Uint8Array([...JPEG, 9, 13]), filename: "aws-usd.jpg" });
+    await documents.updateDocument(actor, id, {
+      supplierName: "Amazon Web Services, Inc.",
+      supplierUstId: "",
+      invoiceNumber: "US-1",
+      documentDate: "2026-09-30",
+      dueDate: null,
+      category: "software",
+      payment: "bank",
+      note: "",
+      reverseCharge: "drittland",
+      currency: "USD",
+      exchangeRate: null,
+      amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 10_000, originalTax: 0 }],
+    });
+    // Die Rechnung weist keine Steuer aus; neu ausgelesen bleibt der Beleg § 13b
+    vi.mocked(extraction.extractDocument).mockResolvedValueOnce({
+      extraction: { quelle: "test" } as unknown as import("./extraction.ts").Extraction,
+      fields: {
+        supplierName: "Amazon Web Services, Inc.",
+        supplierUstId: "",
+        invoiceNumber: "US-1",
+        documentDate: "2026-09-30",
+        dueDate: null,
+        currency: "USD",
+        category: "software",
+        amounts: [{ taxRate: 1900, net: 10_000, tax: 0 }],
+        warnings: [],
+      },
+    });
+    await documents.runExtraction(actor, id);
+    const doc = (await documents.getDocument(id))!;
+    expect(doc.document.reverseCharge).toBe("drittland");
+    // 100,00 USD / 1,0812 = 92,49 €; § 13b: 19 % davon = 17,57 € in Kz 85, gezahlt wird netto
+    expect(doc.amounts.map((a) => [a.net, a.tax])).toEqual([[9249, 1757]]);
+    expect(doc.document).toMatchObject({ net: 9249, tax: 1757, gross: 9249 });
   });
 
   it("Fremdwährung mit § 13b: Steuer aus dem umgerechneten Netto; zurück auf Euro löscht Kurs und Originalbeträge", async () => {
@@ -321,17 +510,37 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
     expect(rc.document).toMatchObject({ net: 9249, tax: 1757, gross: 9249 });
 
     await expect(
-      documents.updateDocument(actor, id, { ...base, currency: "USD", exchangeRate: "0", amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 1, originalTax: 0 }] }),
+      documents.updateDocument(actor, id, {
+        ...base,
+        currency: "USD",
+        exchangeRate: "0",
+        amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 1, originalTax: 0 }],
+      }),
     ).rejects.toThrow(/Umrechnungskurs ungültig/);
     await expect(
-      documents.updateDocument(actor, id, { ...base, currency: "USD", exchangeRate: "0,000001", amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 10_000_000, originalTax: 0 }] }),
+      documents.updateDocument(actor, id, {
+        ...base,
+        currency: "USD",
+        exchangeRate: "0,000001",
+        amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 10_000_000, originalTax: 0 }],
+      }),
     ).rejects.toThrow(/zu groß/);
     // 50 Mio. Yen passen nicht in int4-Cent, als Originalbetrag aber schon; umgerechnet (1 EUR = 160 JPY) sind es 312.500 €
-    await documents.updateDocument(actor, id, { ...base, currency: "JPY", exchangeRate: "160", amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 5_000_000_000, originalTax: 0 }] });
+    await documents.updateDocument(actor, id, {
+      ...base,
+      currency: "JPY",
+      exchangeRate: "160",
+      amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 5_000_000_000, originalTax: 0 }],
+    });
     const yen = (await documents.getDocument(id))!;
     expect(yen.amounts.map((a) => [a.originalNet, a.net])).toEqual([[5_000_000_000, 31_250_000]]);
     // Winziger Betrag mit großem Kurs: umgerechnet 0,00 €, also nicht buchbar
-    await documents.updateDocument(actor, id, { ...base, currency: "USD", exchangeRate: "1000", amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 4, originalTax: 0 }] });
+    await documents.updateDocument(actor, id, {
+      ...base,
+      currency: "USD",
+      exchangeRate: "1000",
+      amounts: [{ taxRate: 1900, net: 0, tax: 0, originalNet: 4, originalTax: 0 }],
+    });
     const zero = (await documents.getDocument(id))!;
     expect(documents.bookingIssues(zero.document, zero.amounts)).toEqual(["Umgerechnet 0,00 €, bitte den Kurs prüfen"]);
 
@@ -432,8 +641,6 @@ describe.skipIf(!testDatabaseUrl)("Belege (Postgres)", () => {
   });
 
   it("lehnt unbekannte Dateitypen ab", async () => {
-    await expect(
-      documents.uploadDocument(actor, { bytes: new TextEncoder().encode("hallo"), filename: "x.txt" }),
-    ).rejects.toThrow(/Erlaubt sind/);
+    await expect(documents.uploadDocument(actor, { bytes: new TextEncoder().encode("hallo"), filename: "x.txt" })).rejects.toThrow(/Erlaubt sind/);
   });
 });

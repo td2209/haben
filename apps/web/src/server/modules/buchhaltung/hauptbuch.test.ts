@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 /** Fehlermeldung samt Ursache: Drizzle verpackt den Fehler der Datenbank in „Failed query“ */
 async function failure(work: Promise<unknown>): Promise<string> {
@@ -31,9 +31,7 @@ describe("Hauptbuch als einziger Schreiber des Journals", () => {
     const sources = serverSources();
     // Die Suche sieht alle Module, nicht nur diesen Ordner
     expect(sources.some((file) => file.endsWith(join("rechnungen", "invoices.ts")))).toBe(true);
-    const offenders = sources
-      .filter((file) => !file.endsWith(`${join("buchhaltung", "ledger.ts")}`))
-      .filter((file) => writes.test(readFileSync(file, "utf8")));
+    const offenders = sources.filter((file) => !file.endsWith(`${join("buchhaltung", "ledger.ts")}`)).filter((file) => writes.test(readFileSync(file, "utf8")));
     expect(offenders).toEqual([]);
     // Die Prüfung erkennt, was sie erkennen soll
     expect(writes.test("await tx.insert(schema.journalEntries).values(x)")).toBe(true);
@@ -51,7 +49,7 @@ describe.skipIf(!testDatabaseUrl)("Hauptbuch, Transaktionen und Sperre der Firme
   let contacts: typeof import("../stammdaten/contacts.ts");
   let guard: typeof import("../stammdaten/settings-guard.ts");
   let company: typeof import("../stammdaten/company.ts");
-  let withActor: (typeof import("../../db/actor.ts"))["withActor"];
+  let withActor: typeof import("../../db/actor.ts")["withActor"];
   const actor = "test-user";
   let contactId: string;
   const year = Number(new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Berlin" }).format(new Date()).slice(0, 4));
@@ -89,7 +87,7 @@ describe.skipIf(!testDatabaseUrl)("Hauptbuch, Transaktionen und Sperre der Firme
   });
 
   beforeEach(async () => {
-    await sql`truncate quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
+    await leeren(sql)`truncate quote_lines, quotes, quote_number_counters, journal_lines, journal_entries, invoice_lines, invoices,
       invoice_number_counters, contact_versions, contacts, documents, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, email, steuernummer, ust_id, bundesland, iban, bic, bank)
       values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', 'rechnung@example.com', '198/113/10010', 'DE123456789', 'BY',
@@ -112,22 +110,26 @@ describe.skipIf(!testDatabaseUrl)("Hauptbuch, Transaktionen und Sperre der Firme
 
   describe("ledger.post", () => {
     it("bucht, schreibt fest und versiegelt, im Kontenrahmen der Firmendaten", async () => {
-      const reversed = await withActor(actor, async (tx) => ledger.post(tx, await ledger.openBooks(tx), {
-        date: `${year}-03-01`,
-        description: "Erste",
-        sourceType: "kasse",
-        sourceId: crypto.randomUUID(),
-        lines: lines(500),
-      }));
-      const id = await withActor(actor, async (tx) => ledger.post(tx, await ledger.openBooks(tx), {
-        date: `${year}-03-02`,
-        description: "Storno",
-        sourceType: "kasse",
-        sourceId: crypto.randomUUID(),
-        reversesId: reversed,
-        // Zeilen ohne Betrag fallen weg
-        lines: [...lines(500).map((l) => ({ ...l, debit: l.credit, credit: l.debit })), { account: "1200", debit: 0, credit: 0, taxCode: null }],
-      }));
+      const reversed = await withActor(actor, async (tx) =>
+        ledger.post(tx, await ledger.openBooks(tx), {
+          date: `${year}-03-01`,
+          description: "Erste",
+          sourceType: "kasse",
+          sourceId: crypto.randomUUID(),
+          lines: lines(500),
+        }),
+      );
+      const id = await withActor(actor, async (tx) =>
+        ledger.post(tx, await ledger.openBooks(tx), {
+          date: `${year}-03-02`,
+          description: "Storno",
+          sourceType: "kasse",
+          sourceId: crypto.randomUUID(),
+          reversesId: reversed,
+          // Zeilen ohne Betrag fallen weg
+          lines: [...lines(500).map((l) => ({ ...l, debit: l.credit, credit: l.debit })), { account: "1200", debit: 0, credit: 0, taxCode: null }],
+        }),
+      );
       const [entry] = await sql`select kontenrahmen, reverses_id, locked_at from journal_entries where id = ${id}`;
       expect(entry).toMatchObject({ kontenrahmen: "SKR03", reverses_id: reversed });
       expect(entry!.locked_at).not.toBeNull();
@@ -152,7 +154,10 @@ describe.skipIf(!testDatabaseUrl)("Hauptbuch, Transaktionen und Sperre der Firme
               description: "Schief",
               sourceType: "kasse",
               sourceId: crypto.randomUUID(),
-              lines: [{ account: "1400", debit: 500, credit: 0, taxCode: null }, { account: "8400", debit: 0, credit: 400, taxCode: null }],
+              lines: [
+                { account: "1400", debit: 500, credit: 0, taxCode: null },
+                { account: "8400", debit: 0, credit: 400, taxCode: null },
+              ],
             }),
           ),
         ),
@@ -160,7 +165,13 @@ describe.skipIf(!testDatabaseUrl)("Hauptbuch, Transaktionen und Sperre der Firme
       expect(
         await failure(
           withActor(actor, async (tx) =>
-            ledger.post(tx, await ledger.openBooks(tx), { date: `${year}-03-01`, description: "Leer", sourceType: "kasse", sourceId: crypto.randomUUID(), lines: [] }),
+            ledger.post(tx, await ledger.openBooks(tx), {
+              date: `${year}-03-01`,
+              description: "Leer",
+              sourceType: "kasse",
+              sourceId: crypto.randomUUID(),
+              lines: [],
+            }),
           ),
         ),
       ).toMatch(/nicht ausgeglichen \(Differenz 0, 0 Zeilen\)/);
@@ -186,7 +197,13 @@ describe.skipIf(!testDatabaseUrl)("Hauptbuch, Transaktionen und Sperre der Firme
             withActor(actor, async (tx) => {
               const books = await ledger.openBooks(tx);
               await other`update company set kontenrahmen = 'SKR04'`;
-              return ledger.post(tx, books, { date: `${year}-03-01`, description: "Alt", sourceType: "kasse", sourceId: crypto.randomUUID(), lines: lines(100) });
+              return ledger.post(tx, books, {
+                date: `${year}-03-01`,
+                description: "Alt",
+                sourceType: "kasse",
+                sourceId: crypto.randomUUID(),
+                lines: lines(100),
+              });
             }),
           ),
         ).toMatch(/Kontenrahmen SKR03, die Firmendaten stehen auf SKR04/);
@@ -267,7 +284,9 @@ describe.skipIf(!testDatabaseUrl)("Hauptbuch, Transaktionen und Sperre der Firme
       const current = company.companySchema.parse(await company.loadCompany());
       await invoices.finalizeInvoice(actor, (await invoices.createDraft(actor, invoiceDraft())).id);
       // Mit einem Datum im Folgejahr meldet die App keine Sperre; die Datenbank rechnet mit dem echten Jahr
-      expect(await failure(guard.saveCompany(actor, { ...current, kontenrahmen: "SKR04" }, `${year + 1}-01-02`))).toMatch(/Im Jahr \d+ gibt es schon Buchungen/);
+      expect(await failure(guard.saveCompany(actor, { ...current, kontenrahmen: "SKR04" }, `${year + 1}-01-02`))).toMatch(
+        /Im Jahr \d+ gibt es schon Buchungen/,
+      );
       expect((await company.loadCompany()).kontenrahmen).toBe("SKR03");
     }, 30_000);
   });

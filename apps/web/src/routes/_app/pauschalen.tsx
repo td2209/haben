@@ -1,4 +1,5 @@
 import {
+  currentYear,
   fahrtBetrag,
   FAHRZEUG_LABEL,
   formatEuro,
@@ -11,6 +12,7 @@ import {
   type Fahrzeug,
   type PauschaleArt,
   type Reisetag,
+  isKapitalgesellschaft,
 } from "@haben/core";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
@@ -21,10 +23,12 @@ import { NoticeBanner } from "../../components/NoticeBanner.tsx";
 import { useAction, type Notice } from "../../lib/use-action.ts";
 import { createPauschaleFn, getPauschalen, reversePauschaleFn } from "../../server/functions/pauschalen.ts";
 import styles from "../../styles/auswertungen.css?url";
+import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
+import { Field } from "../../components/Field.tsx";
 
 export const Route = createFileRoute("/_app/pauschalen")({
   validateSearch: z.object({ jahr: z.optional(z.int().check(z.minimum(2000), z.maximum(2100))) }),
-  loaderDeps: ({ search }) => ({ year: search.jahr ?? new Date().getFullYear() }),
+  loaderDeps: ({ search }) => ({ year: search.jahr ?? currentYear() }),
   loader: ({ deps }) => getPauschalen({ data: deps.year }),
   head: () => ({ meta: [{ title: "Pauschalen · Haben" }], links: [{ rel: "stylesheet", href: styles }] }),
   component: PauschalenPage,
@@ -36,6 +40,13 @@ type Entry = Data["entries"][number];
 const ARTEN: PauschaleArt[] = ["homeoffice", "fahrt", "verpflegung"];
 const ART_KURZ: Record<PauschaleArt, string> = { homeoffice: "Homeoffice", fahrt: "Fahrt", verpflegung: "Verpflegung" };
 const MAHLZEIT_LABEL = { fruehstueck: "Frühstück", mittag: "Mittagessen", abend: "Abendessen" } as const;
+
+/** Homeoffice gilt für einen Monat, die anderen Pauschalen für einen Tag */
+function pauschaleDatum(e: { art: string; date: string }): string {
+  return e.art === "homeoffice"
+    ? new Intl.DateTimeFormat("de-DE", { month: "long", timeZone: "UTC" }).format(new Date(`${e.date}T00:00:00Z`))
+    : formatDate(e.date);
+}
 
 const parseKm = (value: string) => Number(value.replace(/\./g, "").replace(",", "."));
 
@@ -52,11 +63,35 @@ function detailText(entry: Entry): string {
 }
 
 function PauschalenPage() {
+  const { rechtsform } = Route.useRouteContext();
+  if (isKapitalgesellschaft(rechtsform)) return <OnlyEinzelunternehmen />;
+  return <PauschalenList />;
+}
+
+/** GmbH und UG: keine Pauschalen; Auslagen des Gesellschafters gehen mit Beleg auf das Verrechnungskonto */
+function OnlyEinzelunternehmen() {
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">Ausgaben ohne Beleg</div>
+          <h1>Pauschalen</h1>
+        </div>
+      </div>
+      <p className="muted" style={{ marginTop: 0, maxWidth: 760 }}>
+        Pauschalen gibt es nur im Einzelunternehmen. Erstattet die Gesellschaft dem Gesellschafter Reisekosten oder Auslagen, lade die Abrechnung unter{" "}
+        <Link to="/belege">Belege</Link> hoch und wähle „Vom Gesellschafter ausgelegt“.
+      </p>
+    </>
+  );
+}
+
+function PauschalenList() {
   const data = Route.useLoaderData();
   const { year, totals, homeoffice } = data;
   const [art, setArt] = useState<PauschaleArt>("homeoffice");
   const [notice, setNotice] = useState<Notice>(null);
-  const thisYear = new Date().getFullYear();
+  const thisYear = currentYear();
   const years = [...new Set([thisYear, thisYear - 1, thisYear - 2, year])].sort((a, b) => b - a);
   const summe = totals.homeoffice + totals.fahrt + totals.verpflegung;
 
@@ -69,10 +104,9 @@ function PauschalenPage() {
         </div>
       </div>
       <p className="muted" style={{ marginTop: 0, maxWidth: 760 }}>
-        Homeoffice-Tage, Fahrten mit dem eigenen Auto und Verpflegung auf Geschäftsreisen mindern den Gewinn, ohne dass du etwas bezahlt hast,
-        das einen Beleg hätte. Haben bucht sie als Ausgabe an Privateinlage und trägt sie in die richtigen Zeilen der{" "}
-        <Link to="/jahreserklaerung">Anlage EÜR</Link> ein. Halte fest, wann du wo warst (Kalender, Fahrtenliste); das Finanzamt kann
-        danach fragen.
+        Homeoffice-Tage, Fahrten mit dem eigenen Auto und Verpflegung auf Geschäftsreisen mindern den Gewinn, ohne dass du etwas bezahlt hast, das einen Beleg
+        hätte. Haben bucht sie als Ausgabe an Privateinlage und trägt sie in die richtigen Zeilen der <Link to="/jahreserklaerung">Anlage EÜR</Link> ein. Halte
+        fest, wann du wo warst (Kalender, Fahrtenliste); das Finanzamt kann danach fragen.
       </p>
 
       <nav className="filter-row" aria-label="Jahr wählen">
@@ -89,9 +123,7 @@ function PauschalenPage() {
         <div className="card">
           <div className="kpi-label">Homeoffice</div>
           <div className="kpi-value">{formatEuro(totals.homeoffice)}</div>
-          <div className="small muted">
-            {homeoffice.maxTage ? `${homeoffice.tage} von ${homeoffice.maxTage} Tagen` : "erst ab 2020"}
-          </div>
+          <div className="small muted">{homeoffice.maxTage ? `${homeoffice.tage} von ${homeoffice.maxTage} Tagen` : "erst ab 2020"}</div>
         </div>
         <div className="card">
           <div className="kpi-label">Fahrten</div>
@@ -168,6 +200,7 @@ function useSubmit(onNotice: (n: Notice) => void) {
 }
 
 /** Heute im laufenden Jahr, sonst der letzte Tag des gewählten Jahres */
+// biome-ignore lint/complexity/useMathMinMax: Datumstexte (JJJJ-MM-TT), Math.min ergäbe NaN
 const defaultDate = (data: Data) => (`${data.year}-12-31` < data.today ? `${data.year}-12-31` : data.today);
 
 function HomeofficeForm({ data, onNotice }: { data: Data; onNotice: (n: Notice) => void }) {
@@ -196,30 +229,28 @@ function HomeofficeForm({ data, onNotice }: { data: Data; onNotice: (n: Notice) 
   return (
     <form className="stack" style={{ gap: 12 }} onSubmit={onSubmit} aria-label="Homeoffice-Pauschale">
       <p className="small muted" style={{ margin: 0 }}>
-        {formatEuro(satz.proTag)} für jeden Tag, an dem du überwiegend zu Hause gearbeitet hast, höchstens {satz.maxTage} Tage im Jahr ({rest} übrig). Hast
-        du ein häusliches Arbeitszimmer, das den Mittelpunkt deiner Arbeit bildet, setzt du stattdessen die Kosten oder die Jahrespauschale von 1.260 € an,
-        nicht beides. Trag die Tage am besten jeden Monat ein.
+        {formatEuro(satz.proTag)} für jeden Tag, an dem du überwiegend zu Hause gearbeitet hast, höchstens {satz.maxTage} Tage im Jahr ({rest} übrig). Hast du
+        ein häusliches Arbeitszimmer, das den Mittelpunkt deiner Arbeit bildet, setzt du stattdessen die Kosten oder die Jahrespauschale von 1.260 € an, nicht
+        beides. Trag die Tage am besten jeden Monat ein.
       </p>
       <div className="form-grid">
-        <label className="field">
-          Monat
-          <input
-            type="month"
-            value={month}
-            min={`${data.year}-01`}
-            max={`${data.year}-12` < data.today.slice(0, 7) ? `${data.year}-12` : data.today.slice(0, 7)}
-            onChange={(e) => setMonth(e.target.value)}
-            required
-          />
-        </label>
-        <label className="field">
-          Tage im Homeoffice
-          <input value={tage} onChange={(e) => setTage(e.target.value.replace(/\D/g, ""))} inputMode="numeric" required />
-        </label>
-        <label className="field">
-          Notiz (optional)
-          <input name="description" maxLength={300} />
-        </label>
+        <Field label="Monat">
+          {(control) => (
+            <input
+              {...control}
+              type="month"
+              value={month}
+              min={`${data.year}-01`}
+              max={defaultDate(data).slice(0, 7)}
+              onChange={(e) => setMonth(e.target.value)}
+              required
+            />
+          )}
+        </Field>
+        <Field label="Tage im Homeoffice">
+          {(control) => <input {...control} value={tage} onChange={(e) => setTage(e.target.value.replace(/\D/g, ""))} inputMode="numeric" required />}
+        </Field>
+        <Field label="Notiz (optional)">{(control) => <input {...control} name="description" maxLength={300} />}</Field>
       </div>
       <div className="actions">
         <button type="submit" className="btn btn-primary" disabled={busy || n === 0}>
@@ -253,32 +284,30 @@ function FahrtForm({ data, onNotice }: { data: Data; onNotice: (n: Notice) => vo
     <form className="stack" style={{ gap: 12 }} onSubmit={onSubmit} aria-label="Fahrt mit dem Privatfahrzeug">
       <p className="small muted" style={{ margin: 0 }}>
         Fahrten zu Kunden, Terminen und auf Geschäftsreisen mit deinem privaten Fahrzeug: {formatEuro(KM_SATZ.pkw)} je gefahrenem Kilometer mit dem Auto,{" "}
-        {formatEuro(KM_SATZ.andere)} mit Motorrad oder Roller. Arbeitest du dauerhaft beim selben Kunden, kann dort eine
-        Betriebsstätte entstehen; dann zählt die Entfernungspauschale, die Haben noch nicht abbildet.
+        {formatEuro(KM_SATZ.andere)} mit Motorrad oder Roller. Arbeitest du dauerhaft beim selben Kunden, kann dort eine Betriebsstätte entstehen; dann zählt
+        die Entfernungspauschale, die Haben noch nicht abbildet.
       </p>
       <div className="form-grid">
-        <label className="field">
-          Datum
-          <input name="date" type="date" defaultValue={defaultDate(data)} min={`${data.year}-01-01`} max={data.today} required />
-        </label>
-        <label className="field">
-          Anlass und Ziel
-          <input name="description" placeholder="Workshop bei Kunde, Karlsruhe" maxLength={300} required />
-        </label>
-        <label className="field">
-          Kilometer einfach
-          <input value={km} onChange={(e) => setKm(e.target.value.replace(/[^\d,.]/g, ""))} inputMode="decimal" required />
-        </label>
-        <label className="field">
-          Fahrzeug
-          <select value={fahrzeug} onChange={(e) => setFahrzeug(e.target.value as Fahrzeug)}>
-            {(Object.keys(FAHRZEUG_LABEL) as Fahrzeug[]).map((f) => (
-              <option key={f} value={f}>
-                {FAHRZEUG_LABEL[f]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Field label="Datum">
+          {(control) => <input {...control} name="date" type="date" defaultValue={defaultDate(data)} min={`${data.year}-01-01`} max={data.today} required />}
+        </Field>
+        <Field label="Anlass und Ziel">
+          {(control) => <input {...control} name="description" placeholder="Workshop bei Kunde, Karlsruhe" maxLength={300} required />}
+        </Field>
+        <Field label="Kilometer einfach">
+          {(control) => <input {...control} value={km} onChange={(e) => setKm(e.target.value.replace(/[^\d,.]/g, ""))} inputMode="decimal" required />}
+        </Field>
+        <Field label="Fahrzeug">
+          {(control) => (
+            <select {...control} value={fahrzeug} onChange={(e) => setFahrzeug(e.target.value as Fahrzeug)}>
+              {(Object.keys(FAHRZEUG_LABEL) as Fahrzeug[]).map((f) => (
+                <option key={f} value={f}>
+                  {FAHRZEUG_LABEL[f]}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
       </div>
       <label className="checkbox">
         <input type="checkbox" checked={hinUndZurueck} onChange={(e) => setHinUndZurueck(e.target.checked)} />
@@ -314,29 +343,30 @@ function VerpflegungForm({ data, onNotice }: { data: Data; onNotice: (n: Notice)
   return (
     <form className="stack" style={{ gap: 12 }} onSubmit={onSubmit} aria-label="Verpflegungsmehraufwand">
       <p className="small muted" style={{ margin: 0 }}>
-        Je Reisetag im Inland {formatEuro(saetze.klein)} (mehr als 8 Stunden unterwegs, An- und Abreisetag) oder {formatEuro(saetze.gross)} (voller Tag).
-        Hat der Kunde oder das Hotel eine Mahlzeit gestellt, zieht Haben 20 % (Frühstück) bzw. 40 % (Mittag, Abend) des vollen Satzes ab. Am selben Ort
-        gibt es die Pauschale nur in den ersten drei Monaten. Eine Zeile je Reisetag.
+        Je Reisetag im Inland {formatEuro(saetze.klein)} (mehr als 8 Stunden unterwegs, An- und Abreisetag) oder {formatEuro(saetze.gross)} (voller Tag). Hat
+        der Kunde oder das Hotel eine Mahlzeit gestellt, zieht Haben 20 % (Frühstück) bzw. 40 % (Mittag, Abend) des vollen Satzes ab. Am selben Ort gibt es die
+        Pauschale nur in den ersten drei Monaten. Eine Zeile je Reisetag.
       </p>
       <div className="form-grid">
-        <label className="field">
-          Datum
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} min={`${data.year}-01-01`} max={data.today} required />
-        </label>
-        <label className="field">
-          Anlass und Ort
-          <input name="description" placeholder="Kundenprojekt, München" maxLength={300} required />
-        </label>
-        <label className="field">
-          Reisetag
-          <select value={tag} onChange={(e) => setTag(e.target.value as Reisetag)}>
-            {(Object.keys(REISETAG_LABEL) as Reisetag[]).map((t) => (
-              <option key={t} value={t}>
-                {REISETAG_LABEL[t]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Field label="Datum">
+          {(control) => (
+            <input {...control} type="date" value={date} onChange={(e) => setDate(e.target.value)} min={`${data.year}-01-01`} max={data.today} required />
+          )}
+        </Field>
+        <Field label="Anlass und Ort">
+          {(control) => <input {...control} name="description" placeholder="Kundenprojekt, München" maxLength={300} required />}
+        </Field>
+        <Field label="Reisetag">
+          {(control) => (
+            <select {...control} value={tag} onChange={(e) => setTag(e.target.value as Reisetag)}>
+              {(Object.keys(REISETAG_LABEL) as Reisetag[]).map((t) => (
+                <option key={t} value={t}>
+                  {REISETAG_LABEL[t]}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
       </div>
       <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="small" style={{ fontWeight: 500, marginBottom: 4 }}>
@@ -363,17 +393,12 @@ function VerpflegungForm({ data, onNotice }: { data: Data; onNotice: (n: Notice)
 function Liste({ data }: { data: Data }) {
   const router = useRouter();
   const reverse = useServerFn(reversePauschaleFn);
-  const [confirm, setConfirm] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<(typeof data.entries)[number] | null>(null);
   const { busy, notice, run } = useAction();
 
-  async function storno(id: string) {
-    if (confirm !== id) {
-      setConfirm(id);
-      return;
-    }
-    await run(async () => {
+  function storno(id: string) {
+    void run(async () => {
       await reverse({ data: id });
-      setConfirm(null);
       await router.invalidate();
     });
   }
@@ -384,6 +409,24 @@ function Liste({ data }: { data: Data }) {
         Eingetragen in {data.year} <span className="small muted">({data.entries.length})</span>
       </h2>
       <NoticeBanner notice={notice} />
+      <ConfirmDialog
+        open={confirm !== null}
+        title={`${confirm ? PAUSCHALE_LABEL[confirm.art] : ""} stornieren?`}
+        facts={
+          confirm
+            ? [
+                { label: "Datum", value: pauschaleDatum(confirm) },
+                { label: "Betrag", value: formatEuro(confirm.amount), strong: true },
+              ]
+            : undefined
+        }
+        confirmLabel="Stornieren"
+        danger
+        onConfirm={() => confirm && storno(confirm.id)}
+        onClose={() => setConfirm(null)}
+      >
+        <p>Haben schreibt eine Gegenzeile mit negativem Betrag und eine Gegenbuchung am selben Tag. Das Original bleibt durchgestrichen stehen.</p>
+      </ConfirmDialog>
       {data.entries.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
           Noch keine Pauschalen für {data.year}.
@@ -407,7 +450,7 @@ function Liste({ data }: { data: Data }) {
           <tbody>
             {data.entries.map((e) => (
               <tr key={e.id} style={e.storniert ? { color: "var(--muted)" } : undefined}>
-                <td data-label="Datum">{e.art === "homeoffice" ? new Intl.DateTimeFormat("de-DE", { month: "long", timeZone: "UTC" }).format(new Date(`${e.date}T00:00:00Z`)) : formatDate(e.date)}</td>
+                <td data-label="Datum">{pauschaleDatum(e)}</td>
                 <td data-label="Pauschale">
                   <span style={{ fontWeight: 500, textDecoration: e.storniert ? "line-through" : undefined }}>
                     {PAUSCHALE_LABEL[e.art]}
@@ -422,8 +465,8 @@ function Liste({ data }: { data: Data }) {
                   {e.storniert ? (
                     <span className="pill">storniert</span>
                   ) : (
-                    <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => void storno(e.id)}>
-                      {confirm === e.id ? "Wirklich stornieren" : "Stornieren"}
+                    <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => setConfirm(e)}>
+                      Stornieren
                     </button>
                   )}
                 </td>

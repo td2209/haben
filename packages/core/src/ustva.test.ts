@@ -17,8 +17,21 @@ describe("computeUstva", () => {
       kz84: 0,
       kz85: 0,
       kz67: 0,
+      kz41: 0,
+      kz43: 0,
+      kz89: 0,
+      tax89: 0,
+      kz93: 0,
+      tax93: 0,
+      kz61: 0,
+      kz62: 0,
+      kz39: 0,
       kz83: 37_745,
     });
+  });
+
+  it("zieht die Sondervorauszahlung ab (Kz 39, § 48 Abs. 4 UStDV)", () => {
+    expect(computeUstva({ kz81: 290_000, kz86: 0, kz66: 17_355, kz39: 40_000 })).toMatchObject({ kz39: 40_000, kz83: -2_255 });
   });
 
   it("schneidet Cent der Bemessungsgrundlagen ab", () => {
@@ -42,5 +55,11 @@ describe("computeUstva", () => {
     expect(result).toMatchObject({ kz46: 10_000, kz47: 1_910, kz84: 20_000, kz85: 3_800, kz67: 5_710, kz83: 0 });
     // Ohne Vorsteuerabzug (Kleinunternehmer) bleibt die Steuer als Zahllast
     expect(computeUstva({ kz81: 0, kz86: 0, kz66: 0, kz46: 10_000, kz47: 1_900 }).kz83).toBe(1_900);
+  });
+});
+
+describe("Einfuhrumsatzsteuer", () => {
+  it("Kz 62 mindert Kz 83 wie Vorsteuer, in Cent", () => {
+    expect(computeUstva({ kz81: 100_000, kz86: 0, kz66: 1_900, kz62: 38_015 })).toMatchObject({ kz62: 38_015, kz83: 19_000 - 1_900 - 38_015 });
   });
 });

@@ -3,20 +3,27 @@ import { FakeElsterClient } from "./fake-client.ts";
 import { checkFormats, ericMeldungen, formatProben } from "./formatprobe.ts";
 import { datenartVersionFromXml, hasTestmerker } from "./xml.ts";
 
-const input = { idnr: "65929970489", geburtsdatum: "1985-04-12", datenlieferant: "Test", herstellerId: "74931", veranlagungsjahr: 2025, produktVersion: "0.1.0" };
+const input = {
+  idnr: "65929970489",
+  geburtsdatum: "1985-04-12",
+  datenlieferant: "Test",
+  herstellerId: "74931",
+  veranlagungsjahr: 2025,
+  produktVersion: "0.1.0",
+};
 
 describe("Formatprüfung", () => {
   it("baut je Nachricht eine Probe wie beim echten Senden", () => {
     const proben = formatProben(input);
     expect(proben.map((p) => datenartVersionFromXml(p.xml))).toEqual([
-      "ElsterVaStDaten_31",
-      "ElsterVaStDaten_31",
+      "ElsterVaStDaten_32",
+      "ElsterVaStDaten_32",
       "SpezRechtAntrag",
       "SpezRechtFreischaltung",
       "SpezRechtStorno",
       "SpezRechtListe",
-      "PostfachAnfrage_31",
-      "PostfachBestaetigung_31",
+      "PostfachAnfrage_32",
+      "PostfachBestaetigung_32",
     ]);
     expect(proben.every((p) => !hasTestmerker(p.xml))).toBe(true);
   });

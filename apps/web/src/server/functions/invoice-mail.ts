@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   dunningMailDraft,
   invoiceMailDraft,
+  invoiceMailSchema,
   outgoingMailSchema,
   quoteMailDraft,
   sendDunningMail,
@@ -13,22 +14,28 @@ import { authMiddleware } from "../middleware.ts";
 
 const target = z.object({ kind: z.enum(["rechnung", "mahnung", "angebot"]), id: z.uuid() });
 
+/** Rechnung und Angebot kennen Zusatzanhänge zur Auswahl, die Mahnung nicht */
+const outgoing = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("rechnung"), id: z.uuid(), mail: invoiceMailSchema }),
+  z.object({ kind: z.literal("mahnung"), id: z.uuid(), mail: outgoingMailSchema }),
+  z.object({ kind: z.literal("angebot"), id: z.uuid(), mail: invoiceMailSchema }),
+]);
+
 /** Vorschlag für Empfänger, Betreff und Text samt Anhängen */
 export const getMailDraft = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .validator(target)
   .handler(({ data }) =>
-    (data.kind === "rechnung" ? invoiceMailDraft(data.id) : data.kind === "angebot" ? quoteMailDraft(data.id) : dunningMailDraft(data.id)),
+    data.kind === "rechnung" ? invoiceMailDraft(data.id) : data.kind === "angebot" ? quoteMailDraft(data.id) : dunningMailDraft(data.id),
   );
 
 export const sendDocumentMail = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(target.extend({ mail: outgoingMailSchema }))
+  .validator(outgoing)
   .handler(({ data, context }) =>
-    (data.kind === "rechnung"
+    data.kind === "rechnung"
       ? sendInvoiceMail(context.user.id, data.id, data.mail)
       : data.kind === "angebot"
         ? sendQuoteMail(context.user.id, data.id, data.mail)
-        : sendDunningMail(context.user.id, data.id, data.mail)
-    ),
+        : sendDunningMail(context.user.id, data.id, data.mail),
   );

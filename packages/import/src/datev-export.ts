@@ -48,10 +48,17 @@ export interface DatevBookingRow {
   locked: boolean;
 }
 
-/** Erlöskonten mit Umsatzsteuer-Automatik in den DATEV-Standardkontenrahmen */
+/**
+ * Erlöskonten mit Umsatzsteuer-Automatik (AM) in den DATEV-Standardkontenrahmen, die Haben bebucht: Erlöse 19 % und 7 %,
+ * die Sachentnahme (Entnahme durch den Unternehmer für Zwecke außerhalb des Unternehmens (Waren) 19 % bzw. 7 % USt) und die
+ * private Kfz-Nutzung mit Umsatzsteuer (Verwendung von Gegenständen … 19 % USt (Fahrzeug-Nutzung)). Das Konto der
+ * Kfz-Nutzung ohne Umsatzsteuer (SKR03 8924, SKR04 4639) ist ein KU-Konto ohne Automatik. SKR04 4630 („Verwendung von
+ * Gegenständen … 7 % USt“, ebenfalls AM) trägt Sachentnahmen 7 %, die Haben vor #598 dort gebucht hat. Quelle: DATEV-Kontenrahmen
+ * SKR03 Art.-Nr. 11174 und SKR04 Art.-Nr. 11175, gültig für 2026.
+ */
 export const DATEV_AUTOMATIC_ACCOUNTS: Record<DatevExportHeader["kontenrahmen"], ReadonlySet<string>> = {
-  SKR03: new Set(["8400", "8300"]),
-  SKR04: new Set(["4400", "4300"]),
+  SKR03: new Set(["8400", "8300", "8910", "8915", "8921"]),
+  SKR04: new Set(["4400", "4300", "4620", "4610", "4630", "4645"]),
 };
 
 /**
@@ -95,20 +102,76 @@ export function splitEntry(entry: DatevExportEntry, kontenrahmen: DatevExportHea
 
 /** Spalten der Formatversion 13 (125, Version 9 endete mit „Land“); DATEV liest EXTF-Dateien nach Position */
 export const DATEV_COLUMNS = [
-  "Umsatz (ohne Soll/Haben-Kz)", "Soll/Haben-Kennzeichen", "WKZ Umsatz", "Kurs", "Basis-Umsatz", "WKZ Basis-Umsatz", "Konto",
-  "Gegenkonto (ohne BU-Schlüssel)", "BU-Schlüssel", "Belegdatum", "Belegfeld 1", "Belegfeld 2", "Skonto", "Buchungstext",
-  "Postensperre", "Diverse Adressnummer", "Geschäftspartnerbank", "Sachverhalt", "Zinssperre", "Beleglink",
+  "Umsatz (ohne Soll/Haben-Kz)",
+  "Soll/Haben-Kennzeichen",
+  "WKZ Umsatz",
+  "Kurs",
+  "Basis-Umsatz",
+  "WKZ Basis-Umsatz",
+  "Konto",
+  "Gegenkonto (ohne BU-Schlüssel)",
+  "BU-Schlüssel",
+  "Belegdatum",
+  "Belegfeld 1",
+  "Belegfeld 2",
+  "Skonto",
+  "Buchungstext",
+  "Postensperre",
+  "Diverse Adressnummer",
+  "Geschäftspartnerbank",
+  "Sachverhalt",
+  "Zinssperre",
+  "Beleglink",
   ...Array.from({ length: 8 }, (_, i) => [`Beleginfo - Art ${i + 1}`, `Beleginfo - Inhalt ${i + 1}`]).flat(),
-  "KOST1 - Kostenstelle", "KOST2 - Kostenstelle", "Kost-Menge", "EU-Mitgliedstaat u. UStID (Bestimmung)", "EU-Steuersatz (Bestimmung)",
-  "Abw. Versteuerungsart", "Sachverhalt L+L", "Funktionsergänzung L+L", "BU 49 Hauptfunktionstyp", "BU 49 Hauptfunktionsnummer",
+  "KOST1 - Kostenstelle",
+  "KOST2 - Kostenstelle",
+  "Kost-Menge",
+  "EU-Mitgliedstaat u. UStID (Bestimmung)",
+  "EU-Steuersatz (Bestimmung)",
+  "Abw. Versteuerungsart",
+  "Sachverhalt L+L",
+  "Funktionsergänzung L+L",
+  "BU 49 Hauptfunktionstyp",
+  "BU 49 Hauptfunktionsnummer",
   "BU 49 Funktionsergänzung",
   ...Array.from({ length: 20 }, (_, i) => [`Zusatzinformation - Art ${i + 1}`, `Zusatzinformation- Inhalt ${i + 1}`]).flat(),
-  "Stück", "Gewicht", "Zahlweise", "Forderungsart", "Veranlagungsjahr", "Zugeordnete Fälligkeit", "Skontotyp", "Auftragsnummer",
-  "Buchungstyp", "USt-Schlüssel (Anzahlungen)", "EU-Land (Anzahlungen)", "Sachverhalt L+L (Anzahlungen)", "EU-Steuersatz (Anzahlungen)",
-  "Erlöskonto (Anzahlungen)", "Herkunft-Kz", "Buchungs GUID", "KOST-Datum", "SEPA-Mandatsreferenz", "Skontosperre", "Gesellschaftername",
-  "Beteiligtennummer", "Identifikationsnummer", "Zeichnernummer", "Postensperre bis", "Bezeichnung SoBil-Sachverhalt",
-  "Kennzeichen SoBil-Buchung", "Festschreibung", "Leistungsdatum", "Datum Zuord. Steuerperiode", "Fälligkeit", "Generalumkehr (GU)",
-  "Steuersatz", "Land", "Abrechnungsreferenz", "BVV-Position", "EU-Mitgliedstaat u. UStID (Ursprung)", "EU-Steuersatz (Ursprung)",
+  "Stück",
+  "Gewicht",
+  "Zahlweise",
+  "Forderungsart",
+  "Veranlagungsjahr",
+  "Zugeordnete Fälligkeit",
+  "Skontotyp",
+  "Auftragsnummer",
+  "Buchungstyp",
+  "USt-Schlüssel (Anzahlungen)",
+  "EU-Land (Anzahlungen)",
+  "Sachverhalt L+L (Anzahlungen)",
+  "EU-Steuersatz (Anzahlungen)",
+  "Erlöskonto (Anzahlungen)",
+  "Herkunft-Kz",
+  "Buchungs GUID",
+  "KOST-Datum",
+  "SEPA-Mandatsreferenz",
+  "Skontosperre",
+  "Gesellschaftername",
+  "Beteiligtennummer",
+  "Identifikationsnummer",
+  "Zeichnernummer",
+  "Postensperre bis",
+  "Bezeichnung SoBil-Sachverhalt",
+  "Kennzeichen SoBil-Buchung",
+  "Festschreibung",
+  "Leistungsdatum",
+  "Datum Zuord. Steuerperiode",
+  "Fälligkeit",
+  "Generalumkehr (GU)",
+  "Steuersatz",
+  "Land",
+  "Abrechnungsreferenz",
+  "BVV-Position",
+  "EU-Mitgliedstaat u. UStID (Ursprung)",
+  "EU-Steuersatz (Ursprung)",
   "Abw. Skontokonto",
 ] as const;
 
@@ -117,18 +180,57 @@ const compact = (iso: string) => iso.replace(/-/g, "");
 const amount = (cents: number) => `${Math.floor(cents / 100)},${String(cents % 100).padStart(2, "0")}`;
 /** Belegfeld 1 erlaubt laut DATEV nur bestimmte Zeichen, höchstens 36 */
 const voucherField = (value: string) => value.replace(/[^A-Za-z0-9$&%*+\-/.]/g, "").slice(0, 36);
-const pad2 = (n: number) => String(n).padStart(2, "0");
 
+const germanTime = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Europe/Berlin",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/** „Erzeugt am“ laut DATEV: JJJJMMTTHHMMSSFFF, in deutscher Zeit */
 function stamp(date: Date): string {
-  return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(date.getSeconds())}${String(date.getMilliseconds()).padStart(3, "0")}`;
+  return `${germanTime.format(date).replace(/\D/g, "")}${String(date.getMilliseconds()).padStart(3, "0")}`;
 }
 
 /** Kopfzeile laut Schnittstellenbeschreibung (31 Felder) */
 function headerLine(h: DatevExportHeader): string {
   const fields: (string | number)[] = [
-    text("EXTF"), 700, 21, text("Buchungsstapel"), 13, stamp(h.createdAt), "", text("HB"), text(""), text(""),
-    h.beraterNr, h.mandantNr, compact(h.fiscalYearStart), 4, compact(h.dateFrom), compact(h.dateTo), text(h.description.slice(0, 30)),
-    text(""), 1, 0, 1, text("EUR"), "", text(""), "", "", text(h.kontenrahmen === "SKR04" ? "04" : "03"), "", "", text(""), text(""),
+    text("EXTF"),
+    700,
+    21,
+    text("Buchungsstapel"),
+    13,
+    stamp(h.createdAt),
+    "",
+    text("HB"),
+    text(""),
+    text(""),
+    h.beraterNr,
+    h.mandantNr,
+    compact(h.fiscalYearStart),
+    4,
+    compact(h.dateFrom),
+    compact(h.dateTo),
+    text(h.description.slice(0, 30)),
+    text(""),
+    1,
+    0,
+    1,
+    text("EUR"),
+    "",
+    text(""),
+    "",
+    "",
+    text(h.kontenrahmen === "SKR04" ? "04" : "03"),
+    "",
+    "",
+    text(""),
+    text(""),
   ];
   return fields.join(";");
 }
@@ -153,9 +255,33 @@ function bookingLine(row: DatevBookingRow): string {
 
 /** Windows-1252, wie DATEV EXTF-Dateien erwartet; nicht darstellbare Zeichen werden zu „?“ */
 const CP1252: Record<string, number> = {
-  "€": 0x80, "‚": 0x82, "ƒ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87, "ˆ": 0x88, "‰": 0x89, "Š": 0x8a, "‹": 0x8b,
-  "Œ": 0x8c, "Ž": 0x8e, "‘": 0x91, "’": 0x92, "“": 0x93, "”": 0x94, "•": 0x95, "–": 0x96, "—": 0x97, "˜": 0x98, "™": 0x99,
-  "š": 0x9a, "›": 0x9b, "œ": 0x9c, "ž": 0x9e, "Ÿ": 0x9f,
+  "€": 0x80,
+  "‚": 0x82,
+  ƒ: 0x83,
+  "„": 0x84,
+  "…": 0x85,
+  "†": 0x86,
+  "‡": 0x87,
+  ˆ: 0x88,
+  "‰": 0x89,
+  Š: 0x8a,
+  "‹": 0x8b,
+  Œ: 0x8c,
+  Ž: 0x8e,
+  "‘": 0x91,
+  "’": 0x92,
+  "“": 0x93,
+  "”": 0x94,
+  "•": 0x95,
+  "–": 0x96,
+  "—": 0x97,
+  "˜": 0x98,
+  "™": 0x99,
+  š: 0x9a,
+  "›": 0x9b,
+  œ: 0x9c,
+  ž: 0x9e,
+  Ÿ: 0x9f,
 };
 
 export function encodeCp1252(value: string): Uint8Array {

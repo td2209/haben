@@ -1,5 +1,21 @@
-import { ACCOUNT_PURPOSES, DIRECT_BOOKINGS, PAYMENT_PROVIDERS, paymentProviderAccount, suggestDirectBooking } from "@haben/core";
+import {
+  ACCOUNT_PURPOSES,
+  directBookingsFor,
+  direktKategorienFuer,
+  PAYMENT_PROVIDERS,
+  directBookingLabel,
+  paymentProviderAccount,
+  STEUER_POSTEN,
+  STEUER_POSTEN_KEYS,
+  DARLEHEN_TEILE,
+  DARLEHEN_TEIL_KEYS,
+  formatEuro,
+  STEUERARTEN,
+  steuerartenFor,
+  suggestDirectBooking,
+} from "@haben/core";
 import { loadCompany } from "../modules/stammdaten/index.ts";
+import { storePayoutView } from "../modules/stores/index.ts";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { suggestMatches } from "@haben/core";
@@ -8,6 +24,8 @@ import {
   accountSettingsSchema,
   allocate,
   allocateTransfer,
+  allocateDirectDebitBatch,
+  allocateDirectDebitReturn,
   allocateSplit,
   allocationSchema,
   BankError,
@@ -16,6 +34,11 @@ import {
   providerAccountSchema,
   importStatement,
   listAccounts,
+  excludeAccount,
+  excludeBlocker,
+  includeAccount,
+  listExcludedAccounts,
+  listLoans,
   learnedDirectSuggestions,
   listTransactions,
   openItems,
@@ -32,13 +55,12 @@ import {
   reverseWriteOff,
   writeOff,
   writeOffSchema,
+  neutralizationView,
+  neutralizeSchema,
+  neutralizeTransactions,
+  reverseNeutralization,
 } from "../modules/bank/index.ts";
-import {
-  deleteEnableBankingSettings,
-  enableBankingSettingsSchema,
-  enableBankingSettingsSummary,
-  saveEnableBankingSettings,
-} from "../modules/bank/index.ts";
+import { deleteEnableBankingSettings, enableBankingSettingsSchema, enableBankingSettingsSummary, saveEnableBankingSettings } from "../modules/bank/index.ts";
 import { callbackUrl, enableBankingConfigured, listBanks, listConnections, removeConnection, startConnection, syncConnection } from "../modules/bank/index.ts";
 import { authMiddleware } from "../middleware.ts";
 import { today } from "../today.ts";
@@ -65,9 +87,12 @@ export const getBankOverview = createServerFn({ method: "GET" })
     const items = rows.some((r) => r.open !== 0) ? await openItems() : [];
     const own = await ownAccounts();
     const current = own.find((a) => a.id === account?.id);
+    // Ob sich das Konto als „gehört nicht zu dieser Firma“ ausschließen lässt (#462); sonst steht hier der Grund
+    const excludeBlockedBy = account ? await excludeBlocker(account.id) : null;
     // Aus früheren Buchungen derselben Gegenpartei, für alle ganz offenen Umsätze in einer Abfrage
     const learned = await learnedDirectSuggestions(rows.filter((r) => r.open !== 0 && r.open === r.amount));
     const transactions = rows.map((row) => {
+      if (row.neutralized) return { ...row, hint: "verrechnet" as const };
       if (row.open === 0) return { ...row, hint: "zugeordnet" as const };
       const hasSuggestion =
         suggestMatches({ ...row, amount: row.open }, items, 1).length > 0 ||
@@ -75,7 +100,13 @@ export const getBankOverview = createServerFn({ method: "GET" })
         learned.has(row.id);
       return {
         ...row,
-        hint: hasSuggestion ? ("vorschlag" as const) : row.open !== row.amount ? ("teilweise" as const) : row.amount < 0 ? ("belegFehlt" as const) : ("offen" as const),
+        hint: hasSuggestion
+          ? ("vorschlag" as const)
+          : row.open !== row.amount
+            ? ("teilweise" as const)
+            : row.amount < 0
+              ? ("belegFehlt" as const)
+              : ("offen" as const),
       };
     });
     const selectedId = data.umsatz ?? transactions.find((t) => t.open !== 0)?.id ?? transactions[0]?.id;
@@ -83,15 +114,34 @@ export const getBankOverview = createServerFn({ method: "GET" })
     return {
       accounts,
       accountId: account?.id ?? null,
+      excludeBlockedBy,
+      excludedAccounts: (await listExcludedAccounts()).map((a) => ({ ...a, excludedAt: a.excludedAt?.toISOString() ?? null })),
       transactions,
-      detail: detail && detail.transaction.bankAccountId === account?.id ? detail : null,
-      directKinds: Object.entries(DIRECT_BOOKINGS).map(([value, label]) => ({ value, label })),
+      detail:
+        detail && detail.transaction.bankAccountId === account?.id
+          ? { ...detail, neutralization: await neutralizationView(detail.transaction.id), storePayout: await storePayoutView(detail.transaction.id) }
+          : null,
+      directKinds: await (async () => {
+        const { rechtsform } = await loadCompany();
+        return directBookingsFor(rechtsform).map((value) => ({ value, label: directBookingLabel(value, rechtsform) }));
+      })(),
+      /** Steuerzahlung: Steuerarten der Rechtsform und Teile (Steuer, Zinsen, Zuschläge) */
+      steuerarten: steuerartenFor((await loadCompany()).rechtsform).map((value) => ({ value, label: STEUERARTEN[value] })),
+      steuerPosten: STEUER_POSTEN_KEYS.map((value) => ({ value, label: STEUER_POSTEN[value] })),
+      /** Direkt buchen auf eine Kategorie: Einnahmen und die Ausgabekategorien, die ohne Beleg gehen (#324) */
+      kategorien: direktKategorienFuer(),
+      kleinunternehmer: (await loadCompany()).kleinunternehmer,
+      /** Darlehen mit Bestand und die Teile einer Rate */
+      loans: (await listLoans()).map((l) => ({ value: l.id, label: `${l.name} · Bestand ${formatEuro(l.balance)}` })),
+      loanParts: DARLEHEN_TEIL_KEYS.map((value) => ({ value, label: DARLEHEN_TEILE[value] })),
       purposes: Object.entries(ACCOUNT_PURPOSES).map(([value, label]) => ({ value, label })),
       providers: Object.entries(PAYMENT_PROVIDERS).map(([value, p]) => ({ value, label: p.label })),
       /** Sachkonto je Zahlungsdienstleister, zur Anzeige */
       ledgers: Object.fromEntries(
         await Promise.all(
-          accounts.filter((a) => a.ledgerIndex !== null).map(async (a) => [a.id, paymentProviderAccount((await loadCompany()).kontenrahmen, a.ledgerIndex!)] as const),
+          accounts
+            .filter((a) => a.ledgerIndex !== null)
+            .map(async (a) => [a.id, paymentProviderAccount((await loadCompany()).kontenrahmen, a.ledgerIndex!)] as const),
         ),
       ),
       sync: { configured: await enableBankingConfigured(), callbackUrl: callbackUrl(), connections: await listConnections() },
@@ -106,7 +156,10 @@ export const importStatements = createServerFn({ method: "POST" })
     if (files.length === 0) throw new UserError("Keine Datei ausgewählt.");
     if (files.length > 50) throw new UserError("Höchstens 50 Dateien auf einmal.");
     if (files.some((f) => f.size > 20 * 1024 * 1024)) throw new UserError("Eine Datei ist größer als 20 MB.");
-    const accountId = z.uuid().nullable().parse(data.get("accountId") || null);
+    const accountId = z
+      .uuid()
+      .nullable()
+      .parse(data.get("accountId") || null);
     return { files, accountId };
   })
   .handler(async ({ data, context }) => {
@@ -137,6 +190,22 @@ export const addProviderAccount = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const account = await createProviderAccount(context.user.id, data);
     return { id: account.id };
+  });
+
+export const excludeBankAccount = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.uuid() }))
+  .handler(async ({ data, context }) => {
+    await excludeAccount(context.user.id, data.id);
+    return { ok: true };
+  });
+
+export const includeBankAccount = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.uuid() }))
+  .handler(async ({ data, context }) => {
+    await includeAccount(context.user.id, data.id);
+    return { ok: true };
   });
 
 export const updateBankAccount = createServerFn({ method: "POST" })
@@ -208,13 +277,37 @@ export const reverseTransactionAllocation = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/** Zwei gegenläufige Umsätze, die sich aufheben, miteinander verrechnen (#457); keine Buchung */
+export const neutralizeBankTransactions = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(neutralizeSchema)
+  .handler(async ({ data, context }) => {
+    await neutralizeTransactions(context.user.id, data);
+    return { ok: true };
+  });
+
+export const reverseBankNeutralization = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.uuid())
+  .handler(async ({ data, context }) => {
+    await reverseNeutralization(context.user.id, data);
+    return { ok: true };
+  });
+
 export const getEnableBanks = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async () => listBanks("DE"));
 
 export const connectBank = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator(z.object({ aspspName: z.string().min(1).max(200), psuType: z.enum(["personal", "business"]) }))
+  .validator(
+    z.object({
+      aspspName: z.string().min(1).max(200),
+      psuType: z.enum(["personal", "business"]),
+      /** Erster Abruf neuer Konten ab diesem Tag; fehlt = ab Jahresbeginn */
+      fetchFrom: z.iso.date().nullish(),
+    }),
+  )
   .handler(async ({ data, context }) => startConnection(context.user.id, { ...data, country: "DE" }));
 
 export const syncBankConnection = createServerFn({ method: "POST" })
@@ -250,5 +343,23 @@ export const removeEnableBanking = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     await deleteEnableBankingSettings(context.user.id);
+    return { ok: true };
+  });
+
+/** Sammelgutschrift einer Lastschriftdatei auf ihre Rechnungen aufteilen (#445) */
+export const allocateDirectDebitBatchFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ transactionId: z.uuid() }))
+  .handler(async ({ data, context }) => {
+    await allocateDirectDebitBatch(context.user.id, data.transactionId);
+    return { ok: true };
+  });
+
+/** Rücklastschrift ihrer Lastschrift zuordnen, Entgelt als Bankgebühr (#445) */
+export const allocateDirectDebitReturnFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ transactionId: z.uuid() }))
+  .handler(async ({ data, context }) => {
+    await allocateDirectDebitReturn(context.user.id, data.transactionId);
     return { ok: true };
   });

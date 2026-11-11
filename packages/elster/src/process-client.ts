@@ -1,4 +1,4 @@
-import { fork } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,14 +11,30 @@ import { datenartVersionFromXml, testmerkerMismatch } from "./xml.ts";
 
 export const DEFAULT_TIMEOUT_MS = 120_000;
 export const DEFAULT_WORKER_PATH = fileURLToPath(new URL("./worker.ts", import.meta.url));
-/** Node 22 braucht für .ts-Dateien (je nach Minor-Version) noch das Flag. */
-export const DEFAULT_WORKER_EXEC_ARGV = ["--experimental-strip-types", "--disable-warning=ExperimentalWarning"];
 
 export interface EricProcessClientOptions extends EricConfig {
   timeoutMs?: number;
   /** Austauschbar für Tests */
   workerPath?: string;
-  execArgv?: string[];
+  /**
+   * Befehl, der den Worker startet (worker.ts kommt als letztes Argument dazu); ohne Angabe dieselbe Laufzeit wie
+   * die App. ERiC gibt es nur für Linux x86_64: Auf anderen Rechnern startet ein solcher Befehl den Worker als
+   * x86_64-Prozess, etwa emuliert mit QEMU (ERIC_WORKER_COMMAND, siehe docs/installation.md).
+   */
+  workerCommand?: readonly string[] | undefined;
+}
+
+/**
+ * Startet den Worker mit derselben Laufzeit wie die App (Bun führt worker.ts direkt aus) oder mit workerCommand,
+ * über sh ohne Core-Dump: Der Dump eines abgestürzten Bun-Prozesses ist mehrere GB groß (reservierter Speicher).
+ * Wo ein Dienst ihn annimmt (apport, systemd-coredump), käme die Meldung des Absturzes erst nach Sekunden bis
+ * Minuten, und auf dem Host landeten GB pro Absturz von ERiC. exec behält den IPC-Kanal (NODE_CHANNEL_FD).
+ */
+function spawnWorker(workerPath: string, command: readonly string[] = [process.execPath]) {
+  return spawn("/bin/sh", ["-c", 'ulimit -c 0 && exec "$@"', "sh", ...command, workerPath], {
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+    serialization: "json",
+  });
 }
 
 /** Führt jeden ERiC-Aufruf in einem eigenen, kurzlebigen Kindprozess aus. */
@@ -52,7 +68,7 @@ export class EricProcessClient implements ElsterClient {
   async fetchPostfach(xml: string, certificate: Uint8Array, pin: string, options: PostfachOptions): Promise<PostfachResult> {
     const leer = { bereitstellungen: [], dateien: [] };
     const datenartVersion = datenartVersionFromXml(xml);
-    if (datenartVersion !== "PostfachAnfrage_31") return { ...failure("Keine PostfachAnfrage (Version 31)."), ...leer };
+    if (datenartVersion !== "PostfachAnfrage_32") return { ...failure("Keine PostfachAnfrage (Version 32)."), ...leer };
     const mismatch = testmerkerMismatch(xml, options.test);
     if (mismatch) return { ...failure(mismatch), ...leer };
 
@@ -117,7 +133,7 @@ export class EricProcessClient implements ElsterClient {
 
   /** tempDir: Logs von ERiC und Otto landen dort, wenn kein ERIC_LOG_DIR gesetzt ist */
   async #run(request: EricRequest, tempDir: string): Promise<{ result: ElsterResult; raw?: EricRawResult }> {
-    const { timeoutMs = DEFAULT_TIMEOUT_MS, workerPath = DEFAULT_WORKER_PATH, execArgv } = this.#options;
+    const { timeoutMs = DEFAULT_TIMEOUT_MS, workerPath = DEFAULT_WORKER_PATH } = this.#options;
     const config: EricConfig = { ericHome: this.#options.ericHome, logDir: this.#options.logDir ?? tempDir };
 
     return new Promise<{ result: ElsterResult; raw?: EricRawResult }>((resolve) => {
@@ -132,11 +148,7 @@ export class EricProcessClient implements ElsterClient {
         resolve(raw ? { result, raw } : { result });
       };
 
-      const child = fork(workerPath, [], {
-        execArgv: execArgv ?? DEFAULT_WORKER_EXEC_ARGV,
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-        serialization: "json",
-      });
+      const child = spawnWorker(workerPath, this.#options.workerCommand);
 
       /** Beendet mit der Antwort des Workers, falls schon eine da ist */
       const finishWithResponse = (): boolean => {

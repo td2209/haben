@@ -1,116 +1,25 @@
-import { UserError } from "../../errors.ts";
-import { MAIL_TEMPLATE_KEYS, tageBis, type MailTemplates } from "@haben/core";
+import { tageBis } from "@haben/core";
 import { and, desc, eq, sql } from "drizzle-orm";
-import nodemailer, { type Transporter } from "nodemailer";
-import { z } from "zod";
-import { decrypt, encrypt } from "../../crypto.ts";
 import { withActor } from "../../db/actor.ts";
 import { db, schema } from "../../db/index.ts";
 import { env } from "../../env.ts";
 import { listFristen, type Frist } from "../finanzamt/index.ts";
 import { chainHead, checkIntegrity, formatPruefwert } from "../auswertungen/index.ts";
+import { MailError } from "./errors.ts";
+import { loadMailSettings } from "./settings.ts";
+import { transportFor } from "./transport.ts";
+
+export { MailError } from "./errors.ts";
+export { deleteMailSettings, loadMailSettings, mailSettingsSchema, mailSettingsSummary, saveMailSettings, SMTP_PRESETS } from "./settings.ts";
+export type { MailSettingsInput } from "./settings.ts";
+export { setMailTransportForTests } from "./transport.ts";
 
 /**
- * E-Mail über SMTP: jeder Anbieter mit SMTP-Zugang, auch Gmail (smtp.gmail.com mit App-Passwort).
- * Das Passwort liegt verschlüsselt wie das ELSTER-Zertifikat in der Datenbank.
+ * E-Mail: Einstellungen, Versand mit Protokoll, Erinnerungen und Prüfwert-Mail. Der Versandweg (SMTP, auch Gmail mit
+ * App-Passwort) steckt hinter `transport.ts`; das Passwort liegt verschlüsselt wie das ELSTER-Zertifikat in der Datenbank.
  */
 
-export class MailError extends UserError {}
-
 export const MAIL_ACTOR = "system:mail";
-
-/** Bekannte Anbieter zum Vorbelegen; Gmail und GMX brauchen ein App-Passwort bzw. freigeschaltetes SMTP */
-export const SMTP_PRESETS = {
-  gmail: { label: "Gmail", host: "smtp.gmail.com", port: 465, secure: true },
-  gmx: { label: "GMX", host: "mail.gmx.net", port: 465, secure: true },
-  webde: { label: "web.de", host: "smtp.web.de", port: 587, secure: false },
-  posteo: { label: "Posteo", host: "posteo.de", port: 465, secure: true },
-  mailbox: { label: "mailbox.org", host: "smtp.mailbox.org", port: 465, secure: true },
-} as const;
-
-const email = z.string().trim().email("Keine gültige E-Mail-Adresse");
-
-export const mailSettingsSchema = z.object({
-  host: z
-    .string()
-    .trim()
-    .min(1, "Server fehlt")
-    .max(253)
-    .regex(/^[A-Za-z0-9.-]+$/, "Nur der Servername, z. B. smtp.gmail.com"),
-  port: z.number().int().min(1).max(65535),
-  secure: z.boolean(),
-  username: z.string().trim().min(1, "Benutzername fehlt").max(320),
-  /** leer: das gespeicherte Passwort behalten */
-  password: z.string().max(500).optional(),
-  fromAddress: email,
-  reminderTo: email,
-  remindersEnabled: z.boolean(),
-  reminderDays: z.array(z.number().int().min(0).max(60)).max(5),
-  /** Vorlagen je Art und Sprache („abschlag:en“); leere werden nicht gespeichert, dann gilt die allgemeine bzw. der Standardtext */
-  templates: z
-    .record(
-      z.string().refine((key) => MAIL_TEMPLATE_KEYS.includes(key), "Unbekannte Vorlage"),
-      z.object({ subject: z.string().trim().max(300).default(""), body: z.string().trim().max(5000).default("") }),
-    )
-    .default({})
-    .transform((templates): MailTemplates => Object.fromEntries(Object.entries(templates).filter(([, t]) => t.subject || t.body))),
-  pruefwertMail: z.boolean().default(true),
-});
-
-export type MailSettingsInput = z.input<typeof mailSettingsSchema>;
-
-export async function loadMailSettings() {
-  const [row] = await db.select().from(schema.mailSettings).where(eq(schema.mailSettings.id, 1));
-  return row ?? null;
-}
-
-/** Was die Oberfläche sehen darf: alles außer dem Passwort */
-export async function mailSettingsSummary() {
-  const row = await loadMailSettings();
-  if (!row) return null;
-  const { ciphertext: _ciphertext, ...rest } = row;
-  return { ...rest, reminderDays: [...rest.reminderDays].sort((a, b) => b - a) };
-}
-
-export async function saveMailSettings(actor: string, input: MailSettingsInput): Promise<void> {
-  const data = mailSettingsSchema.parse(input);
-  const existing = await loadMailSettings();
-  if (!data.password && !existing) throw new MailError("Das Passwort fehlt.");
-  const { password, ...rest } = data;
-  const values = {
-    ...rest,
-    reminderDays: [...new Set(data.reminderDays)].sort((a, b) => b - a),
-    ciphertext: password ? encrypt(new TextEncoder().encode(password)) : existing!.ciphertext,
-    updatedAt: new Date(),
-  };
-  await withActor(actor, (tx) =>
-    tx
-      .insert(schema.mailSettings)
-      .values({ id: 1, ...values })
-      .onConflictDoUpdate({ target: schema.mailSettings.id, set: values }),
-  );
-}
-
-export async function deleteMailSettings(actor: string): Promise<void> {
-  await withActor(actor, (tx) => tx.delete(schema.mailSettings).where(eq(schema.mailSettings.id, 1)));
-}
-
-/** Austauschbar für Tests */
-let transportFactory = (settings: NonNullable<Awaited<ReturnType<typeof loadMailSettings>>>): Transporter =>
-  nodemailer.createTransport({
-    host: settings.host,
-    port: settings.port,
-    secure: settings.secure,
-    requireTLS: !settings.secure,
-    auth: { user: settings.username, pass: new TextDecoder().decode(decrypt(settings.ciphertext)) },
-    connectionTimeout: 15_000,
-    greetingTimeout: 15_000,
-    socketTimeout: 30_000,
-  });
-
-export function setMailTransportForTests(factory: typeof transportFactory): void {
-  transportFactory = factory;
-}
 
 export interface Message {
   kind: "test" | "fristen" | "rechnung" | "mahnung" | "angebot" | "pruefwert";
@@ -127,14 +36,21 @@ export interface Message {
   quoteId?: string;
 }
 
+/** Name im Absender: der eingetragene, sonst der Firmenname, damit Kunden nicht „Haben“ als Absender sehen */
+export function senderName(fromName: string, companyName: string): string {
+  return fromName.trim() || companyName.trim() || "Haben";
+}
+
 /** Sendet und protokolliert; Fehler des Servers kommen als Ergebnis zurück, nicht als Ausnahme */
 export async function send(actor: string, message: Message): Promise<{ ok: boolean; error: string | null }> {
   const settings = await loadMailSettings();
   if (!settings) throw new MailError("Es ist kein E-Mail-Zugang eingerichtet.");
+  // Nur lesen: loadCompany legt die Zeile an und schriebe so beim Versand ins Änderungsprotokoll
+  const [company] = await db.select({ name: schema.company.name }).from(schema.company).where(eq(schema.company.id, 1));
   let error: string | null = null;
   try {
-    await transportFactory(settings).sendMail({
-      from: { name: "Haben", address: settings.fromAddress },
+    await transportFor(settings).sendMail({
+      from: { name: senderName(settings.fromName, company?.name ?? ""), address: settings.fromAddress },
       to: message.to,
       ...(message.bcc ? { bcc: message.bcc } : {}),
       subject: message.subject,
@@ -148,6 +64,7 @@ export async function send(actor: string, message: Message): Promise<{ ok: boole
   await withActor(actor, (tx) =>
     tx.insert(schema.mailLog).values({
       kind: message.kind,
+      transport: settings.transport,
       recipient: message.to,
       subject: message.subject,
       ok: error === null,
@@ -186,8 +103,7 @@ function wann(tage: number): string {
 
 /** Inhalt einer Erinnerung; neu: was heute erinnert wird, offen: alles Überfällige als Hinweis dazu */
 function fristenMail(neu: { frist: Frist; tage: number }[], today: string) {
-  const subject =
-    neu.length === 1 ? `Frist ${wann(neu[0]!.tage)}: ${neu[0]!.frist.titel}` : `${neu.length} Steuerfristen stehen an`;
+  const subject = neu.length === 1 ? `Frist ${wann(neu[0]!.tage)}: ${neu[0]!.frist.titel}` : `${neu.length} Steuerfristen stehen an`;
   const zeilen = neu.map(({ frist, tage }) => ({ frist, text: `${datum(frist.datum)} (${wann(tage)}): ${frist.titel}` }));
   const text = [
     `Erinnerung von Haben, Stand ${datum(today)}:`,
@@ -200,8 +116,7 @@ function fristenMail(neu: { frist: Frist; tage: number }[], today: string) {
     `<p>Erinnerung von Haben, Stand ${datum(today)}:</p>`,
     "<ul>",
     ...zeilen.map(
-      ({ frist, text }) =>
-        `<li><a href="${escapeHtml(baseUrl() + frist.link)}">${escapeHtml(text)}</a><br><small>${escapeHtml(frist.detail)}</small></li>`,
+      ({ frist, text }) => `<li><a href="${escapeHtml(baseUrl() + frist.link)}">${escapeHtml(text)}</a><br><small>${escapeHtml(frist.detail)}</small></li>`,
     ),
     "</ul>",
     `<p><a href="${escapeHtml(`${baseUrl()}/fristen`)}">Alle Fristen in Haben</a></p>`,
@@ -221,9 +136,7 @@ async function sentReminderKeys(): Promise<Set<string>> {
 /** Stunde in Berlin, damit Erinnerungen nicht nachts kommen */
 const berlinHour = (now: Date) =>
   Number(
-    new Intl.DateTimeFormat("de-DE", { hour: "numeric", hourCycle: "h23", timeZone: "Europe/Berlin" })
-      .formatToParts(now)
-      .find((p) => p.type === "hour")!.value,
+    new Intl.DateTimeFormat("de-DE", { hour: "numeric", hourCycle: "h23", timeZone: "Europe/Berlin" }).formatToParts(now).find((p) => p.type === "hour")!.value,
   );
 
 /**
@@ -267,9 +180,7 @@ async function changedSince(seq: number): Promise<boolean> {
   const [row] = await db
     .select({ seq: schema.auditLog.seq })
     .from(schema.auditLog)
-    .where(
-      sql`${schema.auditLog.seq} > ${seq} and not (${schema.auditLog.tableName} = 'mail_log' and ${schema.auditLog.newValue} ->> 'kind' = 'pruefwert')`,
-    )
+    .where(sql`${schema.auditLog.seq} > ${seq} and not (${schema.auditLog.tableName} = 'mail_log' and ${schema.auditLog.newValue} ->> 'kind' = 'pruefwert')`)
     .limit(1);
   return row !== undefined;
 }
@@ -335,7 +246,9 @@ export async function runDuePruefwertMail(now = new Date()) {
         ]
       : []),
     ...(report.problems.length > 0
-      ? [`Prüfung von Kette und Siegel: ${report.problems.length}${report.truncated ? " oder mehr" : ""} Befunde. Die Datenbank wurde außerhalb von Haben verändert.`]
+      ? [
+          `Prüfung von Kette und Siegel: ${report.problems.length}${report.truncated ? " oder mehr" : ""} Befunde. Die Datenbank wurde außerhalb von Haben verändert.`,
+        ]
       : []),
     ...(report.abgleich.abweichungen.length > 0
       ? [
@@ -353,7 +266,8 @@ export async function runDuePruefwertMail(now = new Date()) {
   const intro = `Prüfwert des Änderungsprotokolls von Haben (${baseUrl()}), Stand ${stand}:`;
   const aufbewahren =
     "Bitte diese Mail aufbewahren, nicht nur auf dem Server von Haben. Mit dem Prüfwert lässt sich später zeigen, dass das Änderungsprotokoll und die festgeschriebenen Daten bis zu diesem Stand nicht nachträglich verändert wurden: in Haben unter Einstellungen → Export → Änderungsprotokoll prüfen einfügen und vergleichen.";
-  const hinweis = "Diese Mail kommt höchstens einmal pro Woche, wenn sich etwas geändert hat oder die Prüfung etwas findet. Abschalten in den E-Mail-Einstellungen.";
+  const hinweis =
+    "Diese Mail kommt höchstens einmal pro Woche, wenn sich etwas geändert hat oder die Prüfung etwas findet. Abschalten in den E-Mail-Einstellungen.";
   const text = [intro, "", pruefwert, "", befund, "", aufbewahren, "", hinweis].join("\n");
   const html = [
     `<p>${escapeHtml(intro)}</p>`,
@@ -371,7 +285,13 @@ export async function runDuePruefwertMail(now = new Date()) {
 
 export async function lastMails(limit = 5) {
   return db
-    .select({ kind: schema.mailLog.kind, subject: schema.mailLog.subject, ok: schema.mailLog.ok, error: schema.mailLog.error, createdAt: schema.mailLog.createdAt })
+    .select({
+      kind: schema.mailLog.kind,
+      subject: schema.mailLog.subject,
+      ok: schema.mailLog.ok,
+      error: schema.mailLog.error,
+      createdAt: schema.mailLog.createdAt,
+    })
     .from(schema.mailLog)
     .orderBy(desc(schema.mailLog.createdAt))
     .limit(limit);

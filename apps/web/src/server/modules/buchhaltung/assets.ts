@@ -1,5 +1,6 @@
 import { UserError } from "../../errors.ts";
 import {
+  currentYear,
   ACCOUNTS,
   ASSET_ACCOUNTS,
   ASSET_KIND_KEYS,
@@ -18,11 +19,14 @@ import {
   type EuerWithdrawals,
   type ScheduleAsset,
   type ScheduleYear,
+  isKapitalgesellschaft,
 } from "@haben/core";
 import { asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { kleinunternehmerHistory, lastDayOfMonth, loadCompany } from "../stammdaten/index.ts";
+import { kleinunternehmerHistory, lastDayOfMonth, loadCompany, type Company } from "../stammdaten/index.ts";
 import { withActor } from "../../db/actor.ts";
+import { elektroIssues, methodValues, switchToLinearProblem } from "./asset-methoden.ts";
+import { stapelOpeningCovering } from "./eroeffnung.ts";
 import { openBooks, post } from "./ledger.ts";
 import { db, schema, type Db, type Tx } from "../../db/index.ts";
 
@@ -43,6 +47,12 @@ export const assetInputSchema = z.object({
   acquisitionDate: isoDate,
   cost: z.number().int().min(1).max(100_000_000_00),
   usefulLifeMonths: z.number().int().min(1).max(600).nullable(),
+  /** Nur bei degressiv: Satz in Basispunkten; ohne Angabe der Höchstsatz */
+  degressiveRate: z.number().int().min(1).max(3000).nullable().default(null),
+  /** Nur bei degressiv: ab diesem Jahr linear (§ 7 Abs. 3 EStG) */
+  linearFromYear: z.number().int().min(2000).max(2200).nullable().default(null),
+  /** Erinnerungswert von 1 € bis zum Abgang */
+  memoValue: z.boolean().default(false),
   openingDate: isoDate,
   openingBookValue: z.number().int().min(0).max(100_000_000_00),
   disposalDate: isoDate.nullable(),
@@ -62,22 +72,33 @@ export const assetInputSchema = z.object({
 export type AssetInput = z.input<typeof assetInputSchema>;
 
 /** Was an einer Anlage nach der Anlage noch geändert werden darf */
-export const assetUpdateSchema = assetInputSchema.partial().extend({ name: z.string().trim().min(1).max(200) });
+export const assetUpdateSchema = assetInputSchema.partial().extend({
+  name: z.string().trim().min(1).max(200),
+  // Ohne Vorgabe, damit eine Änderung ohne diese Felder sie nicht zurücksetzt
+  degressiveRate: z.number().int().min(1).max(3000).nullable().optional(),
+  linearFromYear: z.number().int().min(2000).max(2200).nullable().optional(),
+  memoValue: z.boolean().optional(),
+});
 
 function scheduleInput(asset: Asset): ScheduleAsset {
   return {
     acquisitionDate: asset.acquisitionDate,
     cost: asset.cost,
     method: asset.method,
+    kind: asset.kind,
     usefulLifeMonths: asset.usefulLifeMonths,
+    degressiveRate: asset.degressiveRate,
+    linearFromYear: asset.linearFromYear,
+    memoValue: asset.memoValue,
     opening: asset.openingDate ? { date: asset.openingDate, bookValue: asset.openingBookValue! } : null,
     disposalDate: asset.disposalDate,
   };
 }
 
-function scheduleOf(asset: Asset): ScheduleYear[] {
+/** Plan bis mindestens untilYear: Mit Erinnerungswert hat jedes Jahr bis dahin seine Zeile mit 1 € Buchwert */
+function scheduleOf(asset: Asset, untilYear: number): ScheduleYear[] {
   try {
-    return depreciationSchedule(scheduleInput(asset));
+    return depreciationSchedule(scheduleInput(asset), untilYear);
   } catch {
     return [];
   }
@@ -86,8 +107,8 @@ function scheduleOf(asset: Asset): ScheduleYear[] {
 /** Kleinunternehmer je Monat (Stand am Monatsende, wie die Voranmeldung) */
 type KleinunternehmerInMonth = (month: number) => boolean;
 
-async function kleinunternehmerInYear(year: number): Promise<KleinunternehmerInMonth> {
-  const history = await kleinunternehmerHistory();
+async function kleinunternehmerInYear(year: number, q: Db | Tx = db): Promise<KleinunternehmerInMonth> {
+  const history = await kleinunternehmerHistory(q);
   return (month) => history(lastDayOfMonth(year, month));
 }
 
@@ -112,7 +133,7 @@ function privateUseForYear(asset: Asset, year: number, kleinunternehmer: Kleinun
 
 /** Was im Jahr zu buchen ist: AfA laut Plan und Privatnutzung */
 function yearPlan(asset: Asset, year: number, kleinunternehmer?: KleinunternehmerInMonth) {
-  const row = scheduleOf(asset).find((r) => r.year === year) ?? null;
+  const row = scheduleOf(asset, year).find((r) => r.year === year) ?? null;
   const privateUse = privateUseForYear(asset, year, kleinunternehmer);
   const hasWork = Boolean((row && (row.depreciation !== 0 || row.disposal !== 0)) || (privateUse && privateUse.withdrawal !== 0));
   return { row, privateUse, hasWork };
@@ -135,10 +156,13 @@ async function bookedYears(ids: string[], q: Db | Tx = db): Promise<Map<string, 
 /** Anlagenverzeichnis zum Jahr: Plan des Jahres und ob die AfA schon gebucht ist */
 export async function listAssets(year: number, q: Db | Tx = db) {
   const assets = await q.select().from(schema.assets).orderBy(asc(schema.assets.acquisitionDate), asc(schema.assets.name));
-  const booked = await bookedYears(assets.map((a) => a.id), q);
-  const kleinunternehmer = await kleinunternehmerInYear(year);
+  const booked = await bookedYears(
+    assets.map((a) => a.id),
+    q,
+  );
+  const kleinunternehmer = await kleinunternehmerInYear(year, q);
   return assets.map((asset) => {
-    const schedule = scheduleOf(asset);
+    const schedule = scheduleOf(asset, year);
     const row = schedule.find((r) => r.year === year) ?? null;
     const first = schedule[0]?.year ?? Number(asset.acquisitionDate.slice(0, 4));
     // Nach dem Plan: Buchwert 0 bzw. vor Beginn kein Eintrag; zur Anzeige den Stand am Jahresende
@@ -164,32 +188,35 @@ export async function getAsset(id: string) {
   const booked = (await bookedYears([id])).get(id) ?? [];
   return {
     asset,
-    schedule: scheduleOf(asset),
+    schedule: scheduleOf(asset, currentYear()),
     bookedYears: booked.sort((a, b) => a - b),
   };
 }
 
 /** Übernimmt eine Anlage mit Restbuchwert zum Stichtag. */
 export async function createAsset(actor: string, input: AssetInput): Promise<Asset> {
-  return withActor(actor, async (tx) => {
-    // Anlagekonto und Umsatzsteuer auf die Privatnutzung nach den Firmendaten in derselben Transaktion
-    const company = await loadCompany(tx);
-    const values = {
-      ...input,
-      privateUse: privateUseValue(input.kind, input.privateUse ?? null, company.kleinunternehmer),
-      usefulLifeMonths: input.method === "linear" ? input.usefulLifeMonths : null,
-      account: assetAccount(input.kind, input.method, company.kontenrahmen),
-    };
-    const issues = assetIssues(scheduleInput({ ...values, openingEntryId: null } as Asset));
-    if (issues.length > 0) throw new AssetUserError(`${issues.join(", ")}.`);
-    const [created] = await tx.insert(schema.assets).values(values).returning();
-    return created!;
-  });
+  return withActor(actor, (tx) => insertAsset(tx, input));
+}
+
+/** Übernimmt eine Anlage in der laufenden Transaktion; auch für den CSV-Import, der alle Zeilen in einer Transaktion anlegt */
+export async function insertAsset(tx: Tx, input: AssetInput): Promise<Asset> {
+  // Anlagekonto und Umsatzsteuer auf die Privatnutzung nach den Firmendaten in derselben Transaktion
+  const company = await loadCompany(tx);
+  const values = {
+    ...input,
+    ...methodValues(input.method, input),
+    privateUse: privateUseValue(input.kind, input.privateUse ?? null, company),
+    account: assetAccount(input.kind, input.method, company.kontenrahmen),
+  };
+  const issues = [...assetIssues(scheduleInput({ ...values, openingEntryId: null } as Asset)), ...elektroIssues(values, company.rechtsform)];
+  if (issues.length > 0) throw new AssetUserError(`${issues.join(", ")}.`);
+  const [created] = await tx.insert(schema.assets).values(values).returning();
+  return created!;
 }
 
 /**
- * Ändert eine Anlage. Ist schon etwas gebucht, gehen nur Bezeichnung, Notiz und der Abgang,
- * und der Abgang nur in ein Jahr, für das noch keine AfA gebucht ist.
+ * Ändert eine Anlage. Ist schon etwas gebucht, gehen nur Bezeichnung, Notiz, der Abgang und bei degressiver AfA der
+ * Wechsel zur linearen, beide nur in ein Jahr, für das noch keine AfA gebucht ist.
  */
 export async function updateAsset(actor: string, id: string, input: z.infer<typeof assetUpdateSchema>): Promise<Asset> {
   return withActor(actor, async (tx) => {
@@ -231,13 +258,23 @@ export async function updateAsset(actor: string, id: string, input: z.infer<type
         if (!same) throw new AssetUserError("GWG und Sammelposten werden schon bei der Belegbuchung festgelegt.");
         next.method = input.method;
       }
-      if (next.method !== "linear") next.usefulLifeMonths = null;
-      if (input.privateUse !== undefined) next.privateUse = privateUseValue(next.kind, input.privateUse, company.kleinunternehmer);
-    } else if (input.privateUse !== undefined && !samePrivateUse(input.privateUse, asset.privateUse)) {
-      throw new AssetUserError("Für die Anlage ist schon gebucht; die Privatnutzung lässt sich nicht mehr ändern.");
+      for (const key of ["degressiveRate", "linearFromYear", "memoValue"] as const) {
+        if (input[key] !== undefined) (next as Record<string, unknown>)[key] = input[key];
+      }
+      Object.assign(next, methodValues(next.method, next));
+      if (input.privateUse !== undefined) next.privateUse = privateUseValue(next.kind, input.privateUse, company);
+    } else {
+      if (input.privateUse !== undefined && !samePrivateUse(input.privateUse, asset.privateUse)) {
+        throw new AssetUserError("Für die Anlage ist schon gebucht; die Privatnutzung lässt sich nicht mehr ändern.");
+      }
+      if (input.linearFromYear !== undefined && input.linearFromYear !== asset.linearFromYear) {
+        const problem = switchToLinearProblem(asset, input.linearFromYear, lastBooked);
+        if (problem) throw new AssetUserError(problem);
+        next.linearFromYear = input.linearFromYear;
+      }
     }
 
-    const issues = assetIssues(scheduleInput(next));
+    const issues = [...assetIssues(scheduleInput(next)), ...elektroIssues(next, company.rechtsform)];
     if (issues.length > 0) throw new AssetUserError(`${issues.join(", ")}.`);
     const { id: _id, createdAt: _createdAt, ...values } = next;
     const [updated] = await tx
@@ -254,11 +291,15 @@ function samePrivateUse(a: CarPrivateUse | null, b: CarPrivateUse | null): boole
   return a.listPrice === b.listPrice && a.drive === b.drive && a.rate === b.rate && a.vat === b.vat;
 }
 
-/** Privatnutzung nur bei Fahrzeugen; Kleinunternehmer zahlen keine Umsatzsteuer darauf */
-function privateUseValue(kind: Asset["kind"], value: CarPrivateUse | null, kleinunternehmer: boolean): CarPrivateUse | null {
+/**
+ * Privatnutzung nur bei Fahrzeugen und nur im Einzelunternehmen; Kleinunternehmer zahlen keine Umsatzsteuer darauf.
+ * Fährt der Gesellschafter einen Wagen der GmbH privat, ist das Arbeitslohn (Sachbezug), keine Entnahme.
+ */
+function privateUseValue(kind: Asset["kind"], value: CarPrivateUse | null, company: Pick<Company, "kleinunternehmer" | "rechtsform">): CarPrivateUse | null {
   if (!value) return null;
+  if (isKapitalgesellschaft(company.rechtsform)) throw new AssetUserError("Privatnutzung als Entnahme gibt es nur im Einzelunternehmen.");
   if (kind !== "kfz") throw new AssetUserError("Privatnutzung nach der Listenpreismethode gibt es nur für Fahrzeuge.");
-  return { ...value, vat: value.vat && !kleinunternehmer };
+  return { ...value, vat: value.vat && !company.kleinunternehmer };
 }
 
 /** Nur übernommene Anlagen ohne Buchung lassen sich löschen */
@@ -331,16 +372,20 @@ export async function bookDepreciation(actor: string, year: number, today: strin
         closing: 0,
       };
       if (asset.openingDate && !asset.openingEntryId) {
-        const openingEntryId = await post(tx, books, {
-          date: asset.openingDate,
-          description: `Eröffnung Anlage · ${asset.name}`,
-          sourceType: "asset",
-          sourceId: asset.id,
-          lines: [
-            { account: asset.account, debit: asset.openingBookValue!, credit: 0, taxCode: null },
-            { account: ACCOUNTS[kr].saldenvortrag, debit: 0, credit: asset.openingBookValue!, taxCode: null },
-          ],
-        });
+        // Steht die Anlage schon in der Eröffnung aus dem DATEV-Stapel, verweist sie darauf statt noch einmal zu buchen
+        const covering = await stapelOpeningCovering(tx, asset.acquisitionDate);
+        const openingEntryId =
+          covering?.id ??
+          (await post(tx, books, {
+            date: asset.openingDate,
+            description: `Eröffnung Anlage · ${asset.name}`,
+            sourceType: "asset",
+            sourceId: asset.id,
+            lines: [
+              { account: asset.account, debit: asset.openingBookValue!, credit: 0, taxCode: null },
+              { account: ACCOUNTS[kr].saldenvortrag, debit: 0, credit: asset.openingBookValue!, taxCode: null },
+            ],
+          }));
         await tx.update(schema.assets).set({ openingEntryId }).where(eq(schema.assets.id, asset.id));
       }
       const disposalInYear = asset.disposalDate && Number(asset.disposalDate.slice(0, 4)) === year;
@@ -398,8 +443,8 @@ export async function bookDepreciation(actor: string, year: number, today: strin
 }
 
 /** Abschreibungen eines Jahres für die EÜR, aus dem Plan (gebucht oder nicht) */
-export async function depreciationForEuer(year: number): Promise<EuerDepreciation> {
-  const assets = await db.select().from(schema.assets);
+export async function depreciationForEuer(year: number, q: Db | Tx = db): Promise<EuerDepreciation> {
+  const assets = await q.select().from(schema.assets);
   const result: EuerDepreciation = {
     afa: 0,
     gwg: 0,
@@ -407,7 +452,7 @@ export async function depreciationForEuer(year: number): Promise<EuerDepreciatio
     restbuchwert: 0,
   };
   for (const asset of assets) {
-    const row = scheduleOf(asset).find((r) => r.year === year);
+    const row = scheduleOf(asset, year).find((r) => r.year === year);
     if (!row) continue;
     if (asset.method === "gwg") result.gwg += row.depreciation;
     else if (asset.method === "sammelposten") result.sammelposten += row.depreciation;
@@ -430,10 +475,10 @@ export async function pendingDepreciation(today: string): Promise<{ year: number
 }
 
 /** Private Kfz-Nutzung eines Jahres für die EÜR */
-export async function withdrawalsForEuer(year: number): Promise<EuerWithdrawals> {
-  const assets = await db.select().from(schema.assets);
+export async function withdrawalsForEuer(year: number, q: Db | Tx = db): Promise<EuerWithdrawals> {
+  const assets = await q.select().from(schema.assets);
   const result: EuerWithdrawals = { privateKfz: 0, ustEntnahmen: 0 };
-  const kleinunternehmer = await kleinunternehmerInYear(year);
+  const kleinunternehmer = await kleinunternehmerInYear(year, q);
   for (const asset of assets) {
     const use = privateUseForYear(asset, year, kleinunternehmer);
     if (!use) continue;
@@ -444,9 +489,9 @@ export async function withdrawalsForEuer(year: number): Promise<EuerWithdrawals>
 }
 
 /** Private Kfz-Nutzung eines Monats für die Voranmeldung (Kz 81), je Fahrzeug */
-export async function privateUseForMonth(year: number, month: number) {
-  const assets = await db.select().from(schema.assets);
-  const kleinunternehmer = await kleinunternehmerInYear(year);
+export async function privateUseForMonth(year: number, month: number, q: Db | Tx = db) {
+  const assets = await q.select().from(schema.assets);
+  const kleinunternehmer = await kleinunternehmerInYear(year, q);
   return assets.flatMap((asset) => {
     const use = privateUseForYear(asset, year, kleinunternehmer);
     const index = use?.months.indexOf(month) ?? -1;

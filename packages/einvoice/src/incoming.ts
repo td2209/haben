@@ -14,6 +14,8 @@ export interface IncomingInvoice {
   dueDate?: string;
   currency: string;
   seller: IncomingSeller;
+  /** Käufer (BG-7), soweit für die Erkennung eigener Rechnungen nötig: Name (BT-44) und USt-IdNr. (BT-48) */
+  buyer?: IncomingBuyer;
   buyerReference?: string;
   serviceFrom?: string;
   serviceTo?: string;
@@ -28,6 +30,8 @@ export interface IncomingInvoice {
   lines: IncomingLine[];
   paymentReference?: string;
   iban?: string;
+  /** Zahlungsbedingungen (BT-20), mehrere Angaben je Zeile; darin Skonto nach XRechnung (#SKONTO#…) */
+  paymentTerms?: string;
 }
 
 export interface IncomingSeller {
@@ -40,6 +44,11 @@ export interface IncomingSeller {
   land?: string;
   email?: string;
   iban?: string;
+}
+
+export interface IncomingBuyer {
+  name?: string;
+  ustId?: string;
 }
 
 export interface IncomingTax {
@@ -106,6 +115,12 @@ function text(node: unknown): string | undefined {
 
 function attr(node: unknown, name: string): string | undefined {
   return node && typeof node === "object" ? text((node as Node)[`@_${name}`]) : undefined;
+}
+
+/** Alle Texte unter einem Pfad, je Zeile; undefined, wenn keiner da ist */
+function textsAt(node: unknown, ...path: string[]): string | undefined {
+  const texts = all(node, ...path).flatMap((found) => text(found) ?? []);
+  return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
 function textAt(node: unknown, ...path: string[]): string | undefined {
@@ -206,9 +221,7 @@ export function parseEInvoiceXml(xml: string): IncomingInvoice {
     case "CreditNote":
       return finish(parseUbl(root, rootName === "CreditNote"));
     default:
-      throw new EInvoiceParseError(
-        rootName ? `Unbekanntes XML-Format <${rootName}>: keine E-Rechnung (CII oder UBL)` : "Leeres XML-Dokument",
-      );
+      throw new EInvoiceParseError(rootName ? `Unbekanntes XML-Format <${rootName}>: keine E-Rechnung (CII oder UBL)` : "Leeres XML-Dokument");
   }
 }
 
@@ -259,6 +272,10 @@ function parseCii(root: unknown): IncomingInvoice {
     iban,
   };
 
+  const buyerNode = one(agreement, "BuyerTradeParty");
+  const buyerVat = text(all(buyerNode, "SpecifiedTaxRegistration", "ID").find((r) => attr(r, "schemeID") === "VA"));
+  const buyer: IncomingBuyer = { name: textAt(buyerNode, "Name"), ustId: buyerVat };
+
   const taxes = all(settlement, "ApplicableTradeTax")
     .filter((t) => (textAt(t, "TypeCode") ?? "VAT") === "VAT")
     .map((t) => ({
@@ -301,6 +318,7 @@ function parseCii(root: unknown): IncomingInvoice {
     dueDate: isoDate(textAt(settlement, "SpecifiedTradePaymentTerms", "DueDateDateTime", "DateTimeString")),
     currency,
     seller,
+    buyer,
     buyerReference: textAt(agreement, "BuyerReference"),
     serviceFrom: isoDate(textAt(period, "StartDateTime", "DateTimeString")) ?? deliveryDate,
     serviceTo: isoDate(textAt(period, "EndDateTime", "DateTimeString")) ?? deliveryDate,
@@ -312,6 +330,7 @@ function parseCii(root: unknown): IncomingInvoice {
     lines,
     paymentReference: textAt(settlement, "PaymentReference"),
     iban,
+    paymentTerms: textsAt(settlement, "SpecifiedTradePaymentTerms", "Description"),
   };
 }
 
@@ -339,6 +358,13 @@ function parseUbl(root: unknown, creditNote: boolean): IncomingInvoice {
     iban,
   };
 
+  const customer = one(root, "AccountingCustomerParty", "Party");
+  const customerVat = all(customer, "PartyTaxScheme").find((s) => textAt(s, "TaxScheme", "ID") === "VAT");
+  const buyer: IncomingBuyer = {
+    name: textAt(customer, "PartyLegalEntity", "RegistrationName") ?? textAt(customer, "PartyName", "Name"),
+    ustId: textAt(customerVat, "CompanyID"),
+  };
+
   const taxTotals = all(root, "TaxTotal");
   const taxes = all(root, "TaxTotal", "TaxSubtotal").map((t) => ({
     rate: basisPoints(textAt(t, "TaxCategory", "Percent") ?? textAt(t, "Percent")),
@@ -360,7 +386,10 @@ function parseUbl(root: unknown, creditNote: boolean): IncomingInvoice {
 
   const totals = one(root, "LegalMonetaryTotal");
   const gross = cents(required(textAt(totals, "TaxInclusiveAmount"), "Gesamtbetrag"));
-  const taxText = amountIn(taxTotals.map((t) => one(t, "TaxAmount")), currency);
+  const taxText = amountIn(
+    taxTotals.map((t) => one(t, "TaxAmount")),
+    currency,
+  );
   const payable = textAt(totals, "PayableAmount");
   const deliveryDate = isoDate(textAt(root, "Delivery", "ActualDeliveryDate"));
   const period = one(root, "InvoicePeriod");
@@ -374,6 +403,7 @@ function parseUbl(root: unknown, creditNote: boolean): IncomingInvoice {
     dueDate: isoDate(textAt(root, "DueDate") ?? paymentMeans.map((m) => textAt(m, "PaymentDueDate")).find(Boolean)),
     currency,
     seller,
+    buyer,
     buyerReference: textAt(root, "BuyerReference"),
     serviceFrom: isoDate(textAt(period, "StartDate")) ?? deliveryDate,
     serviceTo: isoDate(textAt(period, "EndDate")) ?? deliveryDate,
@@ -385,6 +415,7 @@ function parseUbl(root: unknown, creditNote: boolean): IncomingInvoice {
     lines,
     paymentReference: paymentMeans.map((m) => textAt(m, "PaymentID")).find(Boolean),
     iban,
+    paymentTerms: textsAt(root, "PaymentTerms", "Note"),
   };
 }
 

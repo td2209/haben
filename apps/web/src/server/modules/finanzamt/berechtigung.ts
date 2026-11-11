@@ -14,7 +14,7 @@ import { and, asc, eq, getTableColumns } from "drizzle-orm";
 import { loadCompany } from "../stammdaten/index.ts";
 import { withActor } from "../../db/actor.ts";
 import { db, schema } from "../../db/index.ts";
-import { FinanzamtError } from "./finanzamt.ts";
+import { FinanzamtError, nurEinzelunternehmen } from "./finanzamt.ts";
 import { prepareAbruf, protocolSubmission, underSendLock } from "../elster/index.ts";
 
 /**
@@ -52,6 +52,7 @@ type Art = (typeof schema.brmRequests.$inferInsert)["art"];
 
 async function ehegatte() {
   const company = await loadCompany();
+  nurEinzelunternehmen(company.rechtsform, "Die Abrufberechtigung für den Ehegatten");
   const b = company.taxpayer.b;
   if (!b) throw new FinanzamtError("Angaben zum Ehegatten fehlen (Einstellungen → Persönliche Angaben).");
   const a = company.taxpayer.a;
@@ -74,7 +75,9 @@ function sendBrm(
   idnr: string | null,
   datenlieferant: string,
 ) {
-  return underSendLock(`haben.berechtigung.${art}.${idnr ?? ""}`, options.kind, () => sendBrmLocked(actor, client, options, art, build, extract, idnr, datenlieferant));
+  return underSendLock(`haben.berechtigung.${art}.${idnr ?? ""}`, options.kind, () =>
+    sendBrmLocked(actor, client, options, art, build, extract, idnr, datenlieferant),
+  );
 }
 
 async function sendBrmLocked(
@@ -127,11 +130,15 @@ export async function requestBerechtigung(actor: string, client: ElsterClient, o
     client,
     options,
     "antrag",
-    (input) =>
-      buildSpezRechtAntragXml({ ...input, dateninhaberIdnr: b.idnr, dateninhaberGeburtsdatum: b.geburtsdatum, gueltigBis: options.gueltigBis, mail }),
+    (input) => buildSpezRechtAntragXml({ ...input, dateninhaberIdnr: b.idnr, dateninhaberGeburtsdatum: b.geburtsdatum, gueltigBis: options.gueltigBis, mail }),
     (result) => {
       const antwort = parseSpezRechtAntragAntwort(result.serverResponseXml);
-      return { antragsId: antwort?.antragsId, status: antwort?.status, genehmigenBis: antwort?.genehmigenBis.slice(0, 10) || null, gueltigBis: options.gueltigBis };
+      return {
+        antragsId: antwort?.antragsId,
+        status: antwort?.status,
+        genehmigenBis: antwort?.genehmigenBis.slice(0, 10) || null,
+        gueltigBis: options.gueltigBis,
+      };
     },
     b.idnr,
     datenlieferant,
@@ -149,7 +156,7 @@ export async function activateBerechtigung(actor: string, client: ElsterClient, 
   const { b, datenlieferant } = await ehegatte();
   const test = options.kind !== "send";
   const aktuell = await berechtigungEhegatte(test);
-  if (!aktuell || aktuell.status !== "offen") throw new FinanzamtError("Es gibt keinen offenen Antrag zum Freischalten.");
+  if (aktuell?.status !== "offen") throw new FinanzamtError("Es gibt keinen offenen Antrag zum Freischalten.");
   const { ok, message } = await sendBrm(
     actor,
     client,
@@ -160,7 +167,11 @@ export async function activateBerechtigung(actor: string, client: ElsterClient, 
     b.idnr,
     datenlieferant,
   );
-  return { ok, message: ok ? `Freigeschaltet. Haben kann jetzt die Belege von ${b.vorname} abrufen.` : message, berechtigung: await berechtigungEhegatte(test) };
+  return {
+    ok,
+    message: ok ? `Freigeschaltet. Haben kann jetzt die Belege von ${b.vorname} abrufen.` : message,
+    berechtigung: await berechtigungEhegatte(test),
+  };
 }
 
 /** Widerruft Antrag oder Berechtigung */
@@ -204,7 +215,11 @@ export async function refreshBerechtigungen(actor: string, client: ElsterClient,
     datenlieferant,
   );
   const berechtigung = await berechtigungEhegatte(test);
-  return { ok, message: ok ? (berechtigung ? `Stand bei ELSTER: ${berechtigung.status}.` : `Bei ELSTER liegt kein Antrag für ${b.vorname} vor.`) : message, berechtigung };
+  return {
+    ok,
+    message: ok ? (berechtigung ? `Stand bei ELSTER: ${berechtigung.status}.` : `Bei ELSTER liegt kein Antrag für ${b.vorname} vor.`) : message,
+    berechtigung,
+  };
 }
 
 /**

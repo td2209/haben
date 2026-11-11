@@ -1,10 +1,11 @@
 import type postgres from "postgres";
 import nodemailer from "nodemailer";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 describe.skipIf(!testDatabaseUrl)("Fristen, Kalender-Abo und Erinnerungen per E-Mail (Postgres)", () => {
   let fristen: typeof import("./fristen.ts");
+  let kalender: typeof import("./kalender-abo.ts");
   let mail: typeof import("../mail/mail.ts");
   let taxpayer: typeof import("../stammdaten/taxpayer.ts");
   let crypto: typeof import("../../crypto.ts");
@@ -15,7 +16,9 @@ describe.skipIf(!testDatabaseUrl)("Fristen, Kalender-Abo und Erinnerungen per E-
 
   beforeAll(async () => {
     sql = await setupTestDb();
+    await sql`insert into "user"(id,name,email,role) values (${actor}, 'Testinhaber', 'inhaber@example.de', 'inhaber')`;
     fristen = await import("./fristen.ts");
+    kalender = await import("./kalender-abo.ts");
     mail = await import("../mail/mail.ts");
     taxpayer = await import("../stammdaten/taxpayer.ts");
     crypto = await import("../../crypto.ts");
@@ -40,7 +43,8 @@ describe.skipIf(!testDatabaseUrl)("Fristen, Kalender-Abo und Erinnerungen per E-
 
   beforeEach(async () => {
     sent.length = 0;
-    await sql`truncate journal_lines, journal_entries, vat_return_submissions, vat_returns, annual_submissions, elster_certificates, mail_log, mail_settings, company cascade`;
+    await leeren(sql)`truncate journal_lines, journal_entries, vat_return_submissions, vat_returns, annual_submissions, elster_certificates, mail_log,
+      mail_settings, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, steuernummer, bundesland) values (1, 'Testfirma', 'Musterstraße 1', '77815', 'Bühl', '35/123/45678', 'BW')`;
     await taxpayer.saveTaxpayer(actor, {
       a: { idnr: "65929970489", anrede: "Herrn", vorname: "Max", name: "Muster", geburtsdatum: "1985-04-12", religion: "11", beruf: "" },
@@ -66,24 +70,45 @@ describe.skipIf(!testDatabaseUrl)("Fristen, Kalender-Abo und Erinnerungen per E-
     expect(byId.get("est-2026")).toMatchObject({ datum: "2027-08-02", art: "erklaerung", status: "offen" });
     expect(byId.get("vz-2026-q4")).toMatchObject({ datum: "2026-12-10", status: "hinweis" });
     expect(byId.has("vz-2026-q3")).toBe(false); // vorbei
-    expect(byId.get("zertifikat-" + list.find((f) => f.art === "zertifikat")!.id.slice(11))).toMatchObject({ datum: "2027-01-15" });
+    expect(byId.get(`zertifikat-${list.find((f) => f.art === "zertifikat")!.id.slice(11)}`)).toMatchObject({ datum: "2027-01-15" });
     expect(list.map((f) => f.datum)).toEqual([...list.map((f) => f.datum)].sort());
     // Kleinunternehmer: je Monat bzw. Jahr der Stand laut Änderungsprotokoll, siehe vorjahr.test.ts
   });
 
+  it("GmbH: Voranmeldungen, Umsatz-, Körperschaft- und Gewerbesteuererklärung und E-Bilanz, keine EÜR, Einkommensteuer oder Vorauszahlungen dafür", async () => {
+    // Die Rechtsform ist ab der ersten Buchung fest; deshalb vor der Buchung umstellen
+    const [entry] = await sql`select date, description, source_type, source_id from journal_entries`;
+    await leeren(sql)`truncate journal_lines, journal_entries cascade`;
+    await sql`update company set rechtsform = 'gmbh'`;
+    await sql.begin(async (tx) => {
+      const [e] = await tx`insert into journal_entries (date, description, source_type, source_id, kontenrahmen)
+        values (${entry!.date}, ${entry!.description}, ${entry!.source_type}, ${entry!.source_id}, 'SKR03') returning id`;
+      await tx`insert into journal_lines (entry_id, account, debit, credit) values (${e!.id}, '1400', 100, 0), (${e!.id}, '8400', 0, 100)`;
+      await tx`update journal_entries set locked_at = now() where id = ${e!.id}`;
+    });
+    const list = await fristen.listFristen("2026-10-03");
+    const ids = list.map((f) => f.id);
+    expect(ids).toContain("ustva-2026-08");
+    expect(ids).toContain("ust-2026");
+    expect(list.find((f) => f.id === "kst-2026")).toMatchObject({ titel: "Körperschaftsteuererklärung 2026", link: "/jahreserklaerung/2026" });
+    expect(ids).toContain("gewst-2026");
+    expect(list.find((f) => f.id === "ebilanz-2026")).toMatchObject({ titel: "E-Bilanz 2026", link: "/abschluss/2026", status: "offen" });
+    expect(ids.filter((id) => /^(euer|est|vz)-/.test(id))).toEqual([]);
+  });
+
   it("liefert offene Fristen als Kalender-Abo nur mit gültigem Token", async () => {
-    expect(await fristen.calendarTokenActive()).toBe(false);
-    const token = await fristen.createCalendarToken(actor);
-    expect(await fristen.checkCalendarToken(token)).toBe(true);
-    expect(await fristen.checkCalendarToken("falsch")).toBe(false);
+    expect(await kalender.calendarTokenActive()).toBe(false);
+    const token = await kalender.createCalendarToken(actor);
+    expect(await kalender.checkCalendarToken(token)).toBe(true);
+    expect(await kalender.checkCalendarToken("falsch")).toBe(false);
     const [row] = await sql`select calendar_token_hash from company`;
     expect(row!.calendar_token_hash).not.toContain(token);
 
-    const second = await fristen.createCalendarToken(actor);
-    expect(await fristen.checkCalendarToken(token)).toBe(false);
-    expect(await fristen.checkCalendarToken(second)).toBe(true);
-    await fristen.revokeCalendarToken(actor);
-    expect(await fristen.checkCalendarToken(second)).toBe(false);
+    const second = await kalender.createCalendarToken(actor);
+    expect(await kalender.checkCalendarToken(token)).toBe(false);
+    expect(await kalender.checkCalendarToken(second)).toBe(true);
+    await kalender.revokeCalendarToken(actor);
+    expect(await kalender.checkCalendarToken(second)).toBe(false);
 
     const ics = fristen.fristenToIcs(await fristen.listFristen("2026-10-03"), "https://haben.example", new Date("2026-10-03T10:00:00Z"));
     expect(ics).toMatch(/^BEGIN:VCALENDAR\r\n/);
@@ -144,7 +169,16 @@ describe.skipIf(!testDatabaseUrl)("Fristen, Kalender-Abo und Erinnerungen per E-
 
   it("schickt eine Test-Mail und behält das Passwort beim Speichern ohne neues", async () => {
     await expect(mail.sendTestMail(actor)).rejects.toThrow(/kein E-Mail-Zugang/);
-    const base = { host: "smtp.example.com", port: 587, secure: false, username: "max", fromAddress: "a@example.com", reminderTo: "b@example.com", remindersEnabled: false, reminderDays: [] };
+    const base = {
+      host: "smtp.example.com",
+      port: 587,
+      secure: false,
+      username: "max",
+      fromAddress: "a@example.com",
+      reminderTo: "b@example.com",
+      remindersEnabled: false,
+      reminderDays: [],
+    };
     await expect(mail.saveMailSettings(actor, base)).rejects.toThrow(/Passwort fehlt/);
     await mail.saveMailSettings(actor, { ...base, password: "geheim" });
     await mail.saveMailSettings(actor, { ...base, port: 2525 });

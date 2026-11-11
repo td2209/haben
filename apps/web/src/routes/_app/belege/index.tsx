@@ -15,6 +15,7 @@ export const Route = createFileRoute("/_app/belege/")({
 
 function DocumentsPage() {
   const { documents, aiAvailable, inbox } = Route.useLoaderData();
+  const inhaber = Route.useRouteContext().user.role === "inhaber";
   const router = useRouter();
   const running = documents.some((d) => d.extractionStatus === "laeuft");
   const open = documents.filter((d) => d.status === "neu").length;
@@ -35,7 +36,7 @@ function DocumentsPage() {
         </div>
         {open > 0 && <span className="pill pill-info">{open} zu prüfen</span>}
       </div>
-      <DocumentUpload aiAvailable={aiAvailable} />
+      {inhaber && <DocumentUpload aiAvailable={aiAvailable} />}
       {inbox ? (
         <p className="small muted" style={{ margin: 0, overflowWrap: "anywhere" }}>
           Belege per E-Mail: Anhänge an {inbox.username}
@@ -45,12 +46,20 @@ function DocumentsPage() {
       ) : null}
       {inbox?.lastError && (
         <ErrorBanner title="Belege per E-Mail" detail={inbox.lastError}>
-          Prüfe das Postfach in den <Link to="/einstellungen" search={{ bereich: "email" }}>Einstellungen</Link>.
+          Prüfe das Postfach in den{" "}
+          <Link to="/einstellungen" search={{ bereich: "email" }}>
+            Einstellungen
+          </Link>
+          .
         </ErrorBanner>
       )}
-      {inbox ? null : (
+      {inbox || !inhaber ? null : (
         <p className="small muted" style={{ margin: 0 }}>
-          Rechnungen per E-Mail? Mit einem <Link to="/einstellungen" search={{ bereich: "email" }}>Postfach für Belege</Link> holt Haben die Anhänge selbst ab.
+          Rechnungen per E-Mail? Mit einem{" "}
+          <Link to="/einstellungen" search={{ bereich: "email" }}>
+            Postfach für Belege
+          </Link>{" "}
+          holt Haben die Anhänge selbst ab.
         </p>
       )}
       <section className="card" aria-label="Belegliste">
@@ -74,13 +83,19 @@ function DocumentsPage() {
                   <span className="ellipsis">{doc.supplierName || doc.filename}</span>
                   <span className="small muted ellipsis">
                     {doc.invoiceNumber || doc.filename}
-                    {doc.extractedBy ? ` · ${SOURCE_LABEL[doc.extractedBy]}` : ""}
+                    {doc.recurringDocumentId ? " · Dauerbeleg" : doc.extractedBy ? ` · ${SOURCE_LABEL[doc.extractedBy]}` : ""}
                   </span>
                 </div>
-                <div className="small">{doc.category ? EXPENSE_CATEGORIES[doc.category as ExpenseCategory].label : "–"}</div>
+                <div className="small">
+                  {doc.category
+                    ? EXPENSE_CATEGORIES[doc.category as ExpenseCategory].label
+                    : doc.splitCount > 0
+                      ? `Aufgeteilt auf ${doc.splitCount} Zeilen`
+                      : "–"}
+                </div>
                 <div className="num">{doc.gross ? formatEuro(doc.gross) : "–"}</div>
                 <div>
-                  <DocumentStatus status={doc.status} extractionStatus={doc.extractionStatus} />
+                  <DocumentStatus status={doc.status} extractionStatus={doc.extractionStatus} cancelled={doc.cancelledOn !== null} />
                 </div>
               </Link>
             ))}

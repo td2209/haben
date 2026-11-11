@@ -4,7 +4,7 @@ import { PDFArray, PDFDict, PDFDocument, PDFName, PDFString } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { extractEmbeddedXml, MAX_EMBEDDED_ATTEMPTS, MAX_EMBEDDED_BYTES } from "./embedded.ts";
 import { EInvoiceParseError, parseDecimal, parseEInvoiceXml, readEInvoice } from "./incoming.ts";
-import { mixedRateLines, sampleDocument } from "./samples.ts";
+import { euBuyer, mixedRateLines, sampleDocument } from "./samples.ts";
 import type { InvoiceFormat, InvoiceKind } from "./types.ts";
 import { buildEInvoice } from "./xml.ts";
 
@@ -87,12 +87,23 @@ describe("eigene E-Rechnungen zurücklesen", () => {
       email: doc.seller.email,
       iban,
     });
+    // Käufer mit USt-IdNr. (BT-44, BT-48): für die Erkennung eigener Rechnungen beim Beleg-Upload
+    expect(invoice.buyer).toEqual({ name: doc.buyer.name, ustId: doc.buyer.ustId });
     expect(byRate(invoice.taxes).map(({ rate, base, tax }) => ({ rate, base, tax }))).toEqual(byRate(doc.totals.taxes));
     expect(invoice.taxes.every((t) => t.category === "S")).toBe(true);
     expect(invoice.lines.map((l) => ({ ...l, quantity: Math.abs(l.quantity) }))).toEqual(
       doc.lines.map((l) => ({ description: l.description, quantity: l.quantity, unitCode: UNITS[l.unit], net: l.net, taxRate: l.taxRate })),
     );
     if (credit) expect(invoice.gross).toBeLessThan(0);
+  });
+});
+
+describe("Käufer mit USt-IdNr. zurücklesen (BT-48)", () => {
+  it.each(["zugferd", "xrechnung-cii", "xrechnung-ubl"] as const)("%s", async (format) => {
+    const doc = sampleDocument({ format, buyer: euBuyer });
+    const { xml } = await buildEInvoice(doc);
+    const read = await readEInvoice({ bytes: Buffer.from(xml), mimeType: "application/xml", filename: "rechnung.xml" });
+    expect(read!.invoice.buyer).toEqual({ name: euBuyer.name, ustId: euBuyer.ustId });
   });
 });
 
@@ -118,6 +129,7 @@ describe("parseEInvoiceXml mit Fremdrechnungen", () => {
         email: "billing@netzwerk-hosting.example",
         iban: "DE02120300000000202051",
       },
+      buyer: { name: "Erika Mustermann", ustId: undefined },
       buyerReference: "04011000-12345-34",
       serviceFrom: "2026-08-01",
       serviceTo: "2026-08-31",
@@ -199,6 +211,7 @@ describe("parseEInvoiceXml mit Fremdrechnungen", () => {
       serviceFrom: "2026-09-01",
       serviceTo: "2026-09-15",
       seller: { name: "CloudTools B.V.", ustId: "NL123456789B01", steuernummer: undefined, plz: "1015 CX", land: "NL", email: "ap@cloudtools.example" },
+      buyer: { name: "Erika Mustermann", ustId: undefined },
       taxes: [{ rate: 0, category: "AE", base: 4900, tax: 0 }],
       net: 4900,
       tax: 0,
@@ -238,12 +251,33 @@ describe("parseEInvoiceXml mit Fremdrechnungen", () => {
     expect(() => parseEInvoiceXml("<rsm:CrossIndustryInvoice><ram:ID>1</rsm:CrossIndustryInvoice>")).toThrow(EInvoiceParseError);
     expect(() => parseEInvoiceXml("kein xml")).toThrow(EInvoiceParseError);
     expect(() => parseEInvoiceXml("<Order><ID>1</ID></Order>")).toThrow(/Unbekanntes XML-Format <Order>/);
-    expect(() => parseEInvoiceXml(fixture("ubl-default-ns.xml").replace("<cbc:ID>INV-77</cbc:ID>", ""))).toThrow(
-      "Rechnungsnummer fehlt in der E-Rechnung",
-    );
+    expect(() => parseEInvoiceXml(fixture("ubl-default-ns.xml").replace("<cbc:ID>INV-77</cbc:ID>", ""))).toThrow("Rechnungsnummer fehlt in der E-Rechnung");
     expect(() => parseEInvoiceXml(fixture("ubl-default-ns.xml").replace(">49.00</cbc:TaxInclusiveAmount", ">49.001</cbc:TaxInclusiveAmount"))).toThrow(
       "mehr als 2 Nachkommastellen",
     );
+  });
+});
+
+describe("Zahlungsbedingungen (BT-20)", () => {
+  // Skontozeilen wie im Beispiel 01.10a der XRechnung-Testsuite (itplr-kosit/xrechnung-testsuite)
+  const skonto = "#SKONTO#TAGE=7#PROZENT=2.00#\n#SKONTO#TAGE=14#PROZENT=1.00#\n";
+
+  it("liest die Zahlungsbedingungen aus CII, mehrere Angaben je Zeile", () => {
+    const xml = fixture("cii-prefixes.xml").replace(
+      "<a:SpecifiedTradePaymentTerms>",
+      `<a:SpecifiedTradePaymentTerms><a:Description>${skonto}</a:Description></a:SpecifiedTradePaymentTerms><a:SpecifiedTradePaymentTerms><a:Description>Zahlbar ohne Abzug in 30 Tagen</a:Description>`,
+    );
+    expect(parseEInvoiceXml(xml).paymentTerms).toBe("#SKONTO#TAGE=7#PROZENT=2.00#\n#SKONTO#TAGE=14#PROZENT=1.00#\nZahlbar ohne Abzug in 30 Tagen");
+    expect(parseEInvoiceXml(fixture("zugferd1-comfort.xml")).paymentTerms).toBe("Zahlbar innerhalb 30 Tagen netto");
+  });
+
+  it("liest die Zahlungsbedingungen aus UBL", () => {
+    const xml = fixture("ubl-default-ns.xml").replace(
+      "<agg:PaymentMeans>",
+      `<agg:PaymentTerms><cbc:Note>${skonto}</cbc:Note></agg:PaymentTerms><agg:PaymentMeans>`,
+    );
+    expect(parseEInvoiceXml(xml).paymentTerms).toBe("#SKONTO#TAGE=7#PROZENT=2.00#\n#SKONTO#TAGE=14#PROZENT=1.00#");
+    expect(parseEInvoiceXml(fixture("ubl-default-ns.xml")).paymentTerms).toBeUndefined();
   });
 });
 
@@ -286,7 +320,7 @@ describe("eingebettete XML in PDFs", () => {
     doc.addPage();
     await doc.attach(Buffer.from(`<a>${" ".repeat(MAX_EMBEDDED_BYTES)}</a>`, "utf8"), "x.xml", { mimeType: "text/xml" });
     await doc.save(); // bettet die Anlage ein und legt /AF an
-    const stream = (doc.catalog.lookup(PDFName.of("AF"), PDFArray).lookup(0, PDFDict).lookup(PDFName.of("EF"), PDFDict)).get(PDFName.of("F"));
+    const stream = doc.catalog.lookup(PDFName.of("AF"), PDFArray).lookup(0, PDFDict).lookup(PDFName.of("EF"), PDFDict).get(PDFName.of("F"));
     // ohne Namensbaum und /AF durchsucht die Erkennung alle Objekte; 500 Dateispezifikationen teilen sich eine Deflate-Bombe
     doc.catalog.delete(PDFName.of("Names"));
     doc.catalog.delete(PDFName.of("AF"));

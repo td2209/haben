@@ -9,7 +9,7 @@
 .chart-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .chart-legend { list-style: none; margin: 0; padding: 0; display: flex; gap: 16px; font-size: 13px; color: var(--ink-2); }
 .chart-legend li { display: flex; align-items: center; gap: 6px; }
-.swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.swatch { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
 .swatch-in { background: var(--series-in); }
 .swatch-out { background: var(--series-out); }
 
@@ -17,7 +17,7 @@
 .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
 .chart .grid { stroke: var(--line-soft); stroke-width: 1; }
 .chart .axis-base { stroke: var(--line-strong); stroke-width: 1; }
-.chart .tick { fill: var(--muted); font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .tick { fill: var(--muted); font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chart .hit { fill: transparent; }
 .chart .month { cursor: default; outline: none; }
 .chart .month.active .hit { fill: var(--ground); }
@@ -37,11 +37,15 @@
 
 .report-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .report-table th, .report-table td { text-align: left; font-weight: 400; padding: 10px 8px; border-top: 1px solid var(--line-soft); vertical-align: baseline; }
-.report-table thead th { border-top: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 400; padding-top: 0; }
+.report-table thead th { border-top: 0; font-size: 13px; color: var(--muted); font-weight: 400; padding-top: 0; }
 .report-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Eingaben in Tabellen (Buchungszeilen, Restlaufzeiten) wie die Formularfelder, nur etwas niedriger */
+.report-table td input:not([type="checkbox"]):not([type="radio"]), .report-table td select { min-height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; font: inherit; font-size: 14px; color: var(--ink); background-color: var(--surface); }
+.report-table td.num input { text-align: right; font-family: var(--mono); font-size: 13px; }
+.report-table td input:focus-visible, .report-table td select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .report-table tfoot th, .report-table tfoot td { border-top: 2px solid var(--ink); font-weight: 600; }
 
-.euer-table .euer-section th { padding-top: 20px; font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); border-top: 0; }
+.euer-table .euer-section th { padding-top: 20px; font-weight: 600; font-size: 14px; color: var(--ink); border-top: 0; }
 .euer-table .euer-label { padding-left: 16px; }
 .euer-table .euer-zero td, .euer-table .euer-zero .euer-label { color: var(--muted); }
 .euer-table .euer-total th, .euer-table .euer-total td { font-weight: 600; border-top: 1px solid var(--line-strong); }
@@ -52,7 +56,7 @@
 .open-table td.ellipsis { max-width: 260px; }
 
 /* Konten und Journal: feste Kopfzeile, Klassenzeilen, Zwischensummen */
-.sticky-head thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; box-shadow: inset 0 -1px 0 var(--line); }
+.sticky-head thead th { position: sticky; top: var(--below-head); background: var(--surface); z-index: 1; box-shadow: inset 0 -1px 0 var(--line); }
 .report-table .group-row th, .report-table .group-row td { background: var(--ground); font-size: 13px; padding-top: 8px; padding-bottom: 8px; }
 .report-table .subtotal-row th, .report-table .subtotal-row td { color: var(--muted); font-size: 13px; }
 .group-toggle { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-weight: 500; color: var(--ink); }
@@ -60,11 +64,11 @@
 .chevron { display: inline-block; width: 12px; transition: transform 0.15s; color: var(--muted); }
 .chevron.open { transform: rotate(90deg); }
 .saldo-hint { display: inline-block; min-width: 4.5em; text-align: left; margin-left: 6px; font-size: 12px; color: var(--muted); font-family: var(--sans); }
-.side-mark { font-size: 11px; color: var(--muted); margin-left: 4px; }
+.side-mark { font-size: 12px; color: var(--muted); margin-left: 4px; }
 
 /* Kacheln über der Saldenliste */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.kpi-grid .card { padding: 14px 16px; }
+.kpi-grid .card { padding: 16px; }
 
 /* Journal: eine Zeile je Buchung */
 .journal-table td { vertical-align: top; }
@@ -143,10 +147,11 @@
 .report-table th.saldo-head { padding-right: calc(8px + 6px + 78px); }
 
 /* Jahreserklärung: Sprungleiste, zuklappbare Blöcke, Speichern am unteren Rand */
-.jump-nav { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 0; background: var(--ground); border-bottom: 1px solid var(--line); }
+.jump-nav { position: sticky; top: var(--below-head); z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 0; background: var(--ground); border-bottom: 1px solid var(--line); }
 .jump-nav a { padding: 6px 12px; border-radius: 16px; color: var(--ink-2); text-decoration: none; font-size: 13px; font-weight: 500; }
 .jump-nav a:hover { background: var(--accent-tint); color: var(--ink); }
-.jump-target { scroll-margin-top: 64px; }
+/* Zusätzlich zu scroll-padding-top (styles.css): Platz für die Sprungleiste unter dem Kopf */
+.jump-target { scroll-margin-top: 56px; }
 .est-block { border: 1px solid var(--line); border-radius: 10px; padding: 0 16px; }
 .est-block[open] { padding-bottom: 16px; }
 .est-block > summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 48px; cursor: pointer; list-style: none; }
@@ -156,6 +161,3 @@
 .est-block-title { flex: 1; font-weight: 600; }
 .est-sub { margin: 4px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); }
 .form-sticky-footer { position: sticky; bottom: 0; z-index: 4; display: flex; flex-direction: column; gap: 8px; margin: 0 -20px -20px; padding: 12px 20px; background: var(--surface); border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; }
-@media (max-width: 860px) {
-  .jump-nav { top: 60px; }
-}

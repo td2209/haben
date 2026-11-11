@@ -5,6 +5,7 @@ import { InvoiceStatus } from "../../../components/InvoiceStatus.tsx";
 import { formatDate } from "../../../lib/format.ts";
 import { VARIANT_TITLE } from "../../../lib/invoice.ts";
 import { getInvoices } from "../../../server/functions/invoices.ts";
+import { Icon } from "../../../components/Icon.tsx";
 
 export const Route = createFileRoute("/_app/rechnungen/")({
   loader: () => getInvoices(),
@@ -14,6 +15,7 @@ export const Route = createFileRoute("/_app/rechnungen/")({
 
 function InvoicesPage() {
   const invoices = Route.useLoaderData();
+  const inhaber = Route.useRouteContext().user.role === "inhaber";
   return (
     <>
       <div className="page-head">
@@ -21,13 +23,16 @@ function InvoicesPage() {
           <div className="eyebrow">Verkauf</div>
           <h1>Rechnungen</h1>
         </div>
-        <div className="actions">
-          <Link to="/rechnungen/neu" className="btn btn-primary">
-            Neue Rechnung
-          </Link>
-        </div>
+        {inhaber && (
+          <div className="actions">
+            <Link to="/rechnungen/neu" className="btn btn-primary">
+              Neue Rechnung
+            </Link>
+          </div>
+        )}
       </div>
-      <InvoiceTabs />
+      {/* Wiederkehrend und Mahnwesen sind Arbeit des Inhabers */}
+      {inhaber && <InvoiceTabs />}
       <section className="card" aria-label="Rechnungsliste">
         {invoices.length === 0 ? (
           <p className="muted" style={{ margin: 0 }}>
@@ -58,8 +63,9 @@ function InvoicesPage() {
                 <div>
                   <InvoiceStatus status={invoice.listStatus} />
                   {invoice.mailed && (
-                    <span className="small muted" title="per E-Mail versendet" style={{ marginLeft: 6 }}>
-                      ✉<span className="visually-hidden"> per E-Mail versendet</span>
+                    <span className="small muted" title="per E-Mail versendet" style={{ marginLeft: 8, verticalAlign: "middle" }}>
+                      <Icon name="mail" size={14} />
+                      <span className="visually-hidden"> per E-Mail versendet</span>
                     </span>
                   )}
                 </div>

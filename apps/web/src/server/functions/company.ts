@@ -1,4 +1,4 @@
-import { parseBmfRates } from "@haben/core";
+import { parseBmfRates, planTemplateSchema } from "@haben/core";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { UserError } from "../errors.ts";
@@ -8,6 +8,7 @@ import {
   companyIssues,
   companySchema,
   deleteExchangeRate,
+  letterIssues,
   ExchangeRateFetchError,
   exchangeRateSchema,
   listExchangeRates,
@@ -17,14 +18,14 @@ import {
 } from "../modules/stammdaten/index.ts";
 import { authMiddleware } from "../middleware.ts";
 import { saveCompany as saveCompanySettings, settingsLocks } from "../modules/stammdaten/index.ts";
-import { saveTaxpayer, taxpayerSchema } from "../modules/stammdaten/index.ts";
+import { customerNumbering, saveCustomerNumbering, saveNumberFormats, savePlanTemplates, saveTaxpayer, taxpayerSchema } from "../modules/stammdaten/index.ts";
 import { today } from "../today.ts";
 
 export const getCompany = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async () => {
     const company = await loadCompany();
-    return { company, issues: companyIssues(company), locks: await settingsLocks(today()) };
+    return { company, issues: companyIssues(company), letterIssues: letterIssues(company), locks: await settingsLocks(today()) };
   });
 
 export const saveCompany = createServerFn({ method: "POST" })
@@ -32,6 +33,39 @@ export const saveCompany = createServerFn({ method: "POST" })
   .validator(companySchema)
   .handler(async ({ data, context }) => {
     await saveCompanySettings(context.user.id, data, today());
+    return { ok: true };
+  });
+
+/** Nummernformate für Rechnungen und Angebote; die Regeln prüft saveNumberFormats */
+export const saveNumberFormatSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({ invoice: z.string().max(100), quote: z.string().max(100), invoiceRunning: z.boolean().optional(), quoteRunning: z.boolean().optional() }),
+  )
+  .handler(async ({ data, context }) => {
+    await saveNumberFormats(context.user.id, data);
+    return { ok: true };
+  });
+
+/** Vorlagen für den Zahlungsplan im Angebot; die Regeln prüft savePlanTemplates */
+export const savePlanTemplateSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.array(planTemplateSchema).max(20))
+  .handler(async ({ data, context }) => {
+    await savePlanTemplates(context.user.id, data);
+    return { ok: true };
+  });
+
+export const getCustomerNumbering = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(() => customerNumbering());
+
+/** Format und nächste Kundennummer; leeres Format = Nummern von Hand */
+export const saveCustomerNumberingSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ format: z.string().max(100), next: z.number().int().min(1).max(99_999_999) }))
+  .handler(async ({ data, context }) => {
+    await saveCustomerNumbering(context.user.id, data);
     return { ok: true };
   });
 
@@ -87,7 +121,8 @@ export const importExchangeRatesFn = createServerFn({ method: "POST" })
   .validator(z.object({ year: z.number().int().min(2010).max(2100), text: z.string().max(2_000_000) }))
   .handler(async ({ data, context }) => {
     const rates = parseBmfRates(data.text, data.year);
-    if (rates.length === 0) throw new UserError(`In der Datei stehen keine Kurse für ${data.year}. Erwartet wird die CSV-Datei des BMF mit einer Spalte je Monat.`);
+    if (rates.length === 0)
+      throw new UserError(`In der Datei stehen keine Kurse für ${data.year}. Erwartet wird die CSV-Datei des BMF mit einer Spalte je Monat.`);
     const result = await storeExchangeRates(context.user.id, rates, "bmf");
     return { ...result, fetched: rates.length, applied: await applyRates(context.user.id) };
   });

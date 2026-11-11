@@ -1,5 +1,22 @@
 import { UserError } from "../../errors.ts";
-import { ACCOUNTS, taxOf, toElsterSteuernummer, toWholeEuros, type Cents, type Prognose, type EuerResult, type ExpenseCategory, type PauschaleArt, homeofficeSatz } from "@haben/core";
+import {
+  ACCOUNTS,
+  taxOf,
+  toElsterSteuernummer,
+  toWholeEuros,
+  type Cents,
+  type Prognose,
+  type EuerResult,
+  type ExpenseCategory,
+  type PauschaleArt,
+  frequencyAt,
+  homeofficeSatz,
+  isKapitalgesellschaft,
+  monthsOfPeriod,
+  sondervorauszahlungFor,
+  STEUER_KONTEN,
+  type Kontenrahmen,
+} from "@haben/core";
 import {
   buildEstXml,
   buildEuerXml,
@@ -23,8 +40,8 @@ import { withActor } from "../../db/actor.ts";
 import { db, schema } from "../../db/index.ts";
 import { loadEstAngaben, prognose } from "./income-tax.ts";
 import { listPauschalen } from "../buchhaltung/index.ts";
-import { euerForYear } from "../auswertungen/index.ts";
-import { computeVatFigures } from "../umsatzsteuer/index.ts";
+import { euerForYear, lohnZahlungenUmJahreswechsel, umsatzsteuerVorjahreUmJahreswechsel } from "../auswertungen/index.ts";
+import { computeVatFigures, loadDauerfrist, loadFrequencies } from "../umsatzsteuer/index.ts";
 import { PRODUKT_VERSION, uebermitteln } from "../elster/index.ts";
 
 export class AnnualError extends UserError {}
@@ -50,14 +67,24 @@ export interface UstYear {
   kz48: Cents;
   /** § 13b als Leistungsempfänger: Steuer (Kz 47 und 85), noch nicht in der Erklärung */
   reverseChargeTax: Cents;
-  /** Monate ohne gesendete Voranmeldung */
+  /** Steuerfreie innergemeinschaftliche Lieferungen und Ausfuhrlieferungen (Kz 41, 43), noch nicht in der Erklärung */
+  kz41: Cents;
+  kz43: Cents;
+  /** Innergemeinschaftlicher Erwerb: Bemessungsgrundlagen 19 und 7 % und Vorsteuer daraus, noch nicht in der Erklärung */
+  igErwerb19: Cents;
+  igErwerb7: Cents;
+  igErwerbVorsteuer: Cents;
+  /** Entstandene Einfuhrumsatzsteuer des Jahres (Kz 62 der Voranmeldungen) */
+  einfuhrumsatzsteuer: Cents;
+  /** Monate ohne gesendete Voranmeldung (Monat oder Quartal), ohne die befreiten */
   missingMonths: number[];
 }
 
 /** Zahlen der Umsatzsteuererklärung: Summe der zwölf Monate aus den Buchungen, Vorauszahlungen aus den gesendeten Voranmeldungen */
 export async function ustYear(year: number): Promise<UstYear> {
   const months = await Promise.all(Array.from({ length: 12 }, (_, i) => computeVatFigures({ year, month: i + 1 })));
-  const total = (key: "kz81" | "kz86" | "kz21" | "kz45" | "kz48" | "kz66" | "kz47" | "kz85") => months.reduce((s, m) => s + m[key], 0);
+  const total = (key: "kz81" | "kz86" | "kz21" | "kz45" | "kz48" | "kz66" | "kz47" | "kz85" | "kz41" | "kz43" | "kz89" | "kz93" | "kz61" | "kz62") =>
+    months.reduce((s, m) => s + m[key], 0);
   // Wie in der Voranmeldung: Bemessungsgrundlage in vollen Euro, Steuer daraus
   const base19 = toWholeEuros(total("kz81"));
   const base7 = toWholeEuros(total("kz86"));
@@ -70,6 +97,9 @@ export async function ustYear(year: number): Promise<UstYear> {
     .orderBy(desc(schema.vatReturns.sentAt));
   const latest = new Map<number, Cents>();
   for (const row of sent) if (!latest.has(row.month)) latest.set(row.month, row.kz83);
+  // Ein gesendetes Quartal deckt seine drei Monate; befreite Monate fehlen nicht
+  const covered = new Set([...latest.keys()].flatMap((month) => monthsOfPeriod({ year, month }).map((m) => m.month)));
+  const frequencies = await loadFrequencies();
 
   const figures: UstErklaerungFigures = {
     base19,
@@ -77,7 +107,8 @@ export async function ustYear(year: number): Promise<UstYear> {
     base7,
     tax7: taxOf(base7, 700),
     vorsteuer: total("kz66"),
-    vorauszahlungen: [...latest.values()].reduce((s, v) => s + v, 0),
+    // Vorauszahlungssoll einschließlich der Sondervorauszahlung: Um sie ist die Voranmeldung für Dezember gemindert (Kz 39)
+    vorauszahlungen: [...latest.values()].reduce((s, v) => s + v, 0) + sondervorauszahlungFor(await loadDauerfrist(), year),
   };
   return {
     figures,
@@ -86,7 +117,13 @@ export async function ustYear(year: number): Promise<UstYear> {
     kz45: total("kz45"),
     kz48: total("kz48"),
     reverseChargeTax: total("kz47") + total("kz85"),
-    missingMonths: Array.from({ length: 12 }, (_, i) => i + 1).filter((m) => !latest.has(m)),
+    kz41: total("kz41"),
+    kz43: total("kz43"),
+    igErwerb19: total("kz89"),
+    igErwerb7: total("kz93"),
+    igErwerbVorsteuer: total("kz61"),
+    einfuhrumsatzsteuer: total("kz62"),
+    missingMonths: Array.from({ length: 12 }, (_, i) => i + 1).filter((m) => !covered.has(m) && frequencyAt(frequencies, { year, month: m }) !== "keine"),
   };
 }
 
@@ -107,6 +144,10 @@ export function ustIssues(kleinunternehmer: boolean, data: UstYear, year: number
     data.kz45 !== 0 && "nicht steuerbare Umsätze im Drittland (Kz 45)",
     data.kz48 !== 0 && "steuerfreie Umsätze ohne Vorsteuerabzug (Kz 48)",
     data.reverseChargeTax !== 0 && "Steuer als Leistungsempfänger nach § 13b UStG (Kz 46/47, 84/85)",
+    data.kz41 !== 0 && "steuerfreie innergemeinschaftliche Lieferungen (Kz 41)",
+    data.kz43 !== 0 && "Ausfuhrlieferungen (Kz 43)",
+    (data.igErwerb19 !== 0 || data.igErwerb7 !== 0 || data.igErwerbVorsteuer !== 0) && "innergemeinschaftliche Erwerbe (Kz 89, 93 und 61)",
+    data.einfuhrumsatzsteuer !== 0 && "Einfuhrumsatzsteuer (Kz 62)",
   ].filter(Boolean);
   if (unsupported.length > 0) {
     issues.push({
@@ -129,16 +170,21 @@ export function ustIssues(kleinunternehmer: boolean, data: UstYear, year: number
 
 // ------------------------------------------------------------------ Anlage EÜR
 
-/** Kategorie der Belege → Zeile der Anlage EÜR */
-const EUER_CATEGORY_FIELDS: Record<Exclude<ExpenseCategory, "anlage">, EuerFigureKey> = {
+/** Kategorie der Belege → Zeile der Anlage EÜR; Anlagen über die AfA, die Einfuhrumsatzsteuer als gezahlte Vorsteuer */
+const EUER_CATEGORY_FIELDS: Record<Exclude<ExpenseCategory, "anlage" | "einfuhrumsatzsteuer">, EuerFigureKey> = {
   software: "edv",
   edv: "edv",
+  // Anlage EÜR 2025: Erhaltungsaufwendungen (Zeile 48, Kz 225) und Miete/Pacht für Geschäftsräume (Zeile 39, Kz 150)
+  reparatur: "erhaltung",
+  miete: "miete",
   hardware: "gwg",
   telefon: "telekommunikation",
   internet: "telekommunikation",
   buero: "arbeitsmittel",
   literatur: "arbeitsmittel",
   porto: "arbeitsmittel",
+  // Anlage EÜR 2025, Zeile 60 „Übrige unbeschränkt abziehbare Betriebsausgaben“
+  betriebsbedarf: "uebrige",
   fortbildung: "fortbildung",
   fahrtkosten: "kfzSonstige",
   uebernachtung: "reisekosten",
@@ -147,6 +193,7 @@ const EUER_CATEGORY_FIELDS: Record<Exclude<ExpenseCategory, "anlage">, EuerFigur
   geschenke: "geschenke",
   beratung: "beratung",
   buchfuehrung: "beratung",
+  wareneinkauf: "waren",
   fremdleistung: "fremdleistungen",
   geldverkehr: "uebrige",
   kfzBetrieb: "kfzSonstige",
@@ -154,8 +201,13 @@ const EUER_CATEGORY_FIELDS: Record<Exclude<ExpenseCategory, "anlage">, EuerFigur
   kfzSteuer: "kfzSteuerVersicherung",
   kfzReparatur: "kfzSonstige",
   kfzLeasing: "kfzLeasing",
+  // Zeile 70 „Sonstige tatsächliche Fahrtkosten ohne AfA und Zinsen“; eine Zeile „sonstige Kfz-Kosten“ gibt es nicht
+  kfzSonstige: "kfzSonstige",
   versicherung: "beitraegeVersicherungen",
   beitraege: "beitraegeVersicherungen",
+  // Zeile 30: Gehälter, Löhne und Versicherungsbeiträge für Arbeitnehmer (Anleitung zur Anlage EÜR 2025)
+  berufsgenossenschaft: "personal",
+  versorgungskassen: "personal",
   sonstiges: "uebrige",
 };
 
@@ -188,6 +240,7 @@ function euerFigures(euer: EuerResult): EuerFigures {
         einnahmenSteuerpflichtig: "steuerpflichtig",
         einnahmenSteuerfrei: "steuerfrei",
         privateKfz: "privateKfz",
+        sachentnahmen: "sachentnahmen",
         vereinnahmteUst: "vereinnahmteUst",
         ustEntnahmen: "vereinnahmteUst",
         erstatteteUst: "erstatteteUst",
@@ -195,6 +248,12 @@ function euerFigures(euer: EuerResult): EuerFigures {
         gwg: "gwg",
         sammelposten: "sammelposten",
         restbuchwert: "restbuchwert",
+        personal: "personal",
+        // Zinsen und Zuschläge zu betrieblichen Steuern: übrige unbeschränkt abziehbare Betriebsausgaben, nicht die
+        // Schuldzinsen der Zeilen 55 und 56 (die rechnen für § 4 Abs. 4a EStG mit Darlehenszinsen)
+        steuerNebenleistungen: "uebrige",
+        schuldzinsenAnlage: "schuldzinsenAnlage",
+        schuldzinsen: "schuldzinsen",
         vorsteuer: "vorsteuer",
         gezahlteUst: "gezahlteUst",
         // Kursgewinne sind nicht steuerbare Einnahmen, Kursverluste übrige Ausgaben
@@ -205,6 +264,7 @@ function euerFigures(euer: EuerResult): EuerFigures {
     add(key, line.amount);
   }
   if (euer.bewirtungNichtAbziehbar !== 0) figures.bewirtungNichtAbziehbar = euer.bewirtungNichtAbziehbar;
+  if (euer.gewerbesteuerNichtAbziehbar !== 0) figures.gewerbesteuerNichtAbziehbar = euer.gewerbesteuerNichtAbziehbar;
   return figures;
 }
 
@@ -224,15 +284,29 @@ async function privateMovements(year: number) {
         lt(schema.journalEntries.date, `${year + 1}-01-01`),
         or(
           ...(["SKR03", "SKR04"] as const).map((kr) =>
-            and(eq(schema.journalEntries.kontenrahmen, kr), inArray(schema.journalLines.account, [ACCOUNTS[kr].privatentnahmen, ACCOUNTS[kr].privateinlagen])),
+            and(
+              eq(schema.journalEntries.kontenrahmen, kr),
+              inArray(schema.journalLines.account, [
+                ACCOUNTS[kr].privatentnahmen,
+                ACCOUNTS[kr].spenden,
+                STEUER_KONTEN[kr].privatsteuern,
+                ACCOUNTS[kr].privateinlagen,
+              ]),
+            ),
           ),
         ),
       ),
     )
     .groupBy(schema.journalEntries.kontenrahmen, schema.journalLines.account);
-  const saldo = (key: "privatentnahmen" | "privateinlagen") =>
-    rows.filter((r) => r.account === ACCOUNTS[r.kontenrahmen][key]).reduce((sum, r) => sum + Number(r.saldo), 0);
-  return { entnahmen: saldo("privatentnahmen"), einlagen: -saldo("privateinlagen") || 0 };
+  const saldo = (konto: (kr: Kontenrahmen) => string) => rows.filter((r) => r.account === konto(r.kontenrahmen)).reduce((sum, r) => sum + Number(r.saldo), 0);
+  // Private Steuern vom Geschäftskonto (Privatsteuern, steuerzahlung.ts) sind Entnahmen, ihre Erstattungen mindern sie.
+  // Übersteigen die Erstattungen die Zahlungen, ist der Rest eine Einlage: Die Anlage EÜR kennt keine negativen Entnahmen.
+  const privatsteuern = saldo((kr) => STEUER_KONTEN[kr].privatsteuern);
+  return {
+    // Private Spenden (Zuwendungen, Spenden) sind Entnahmen wie jede andere
+    entnahmen: saldo((kr) => ACCOUNTS[kr].privatentnahmen) + saldo((kr) => ACCOUNTS[kr].spenden) + Math.max(0, privatsteuern),
+    einlagen: -saldo((kr) => ACCOUNTS[kr].privateinlagen) + Math.max(0, -privatsteuern) || 0,
+  };
 }
 
 export interface EuerYear {
@@ -243,10 +317,20 @@ export interface EuerYear {
   anlagen: AveuerAnlage[];
   /** Anlagen, deren AfA bzw. Privatnutzung für das Jahr noch nicht gebucht ist */
   pendingAssets: number;
+  /** Lohnzahlungen um den Jahreswechsel (§ 11 Abs. 2 Satz 2 EStG), siehe lohnZahlungenUmJahreswechsel */
+  lohnUmJahreswechsel: number;
+  /** Umsatzsteuer früherer Jahre um den Jahreswechsel, siehe umsatzsteuerVorjahreUmJahreswechsel */
+  ustUmJahreswechsel: number;
 }
 
 export async function euerYear(year: number): Promise<EuerYear> {
-  const [euer, movements, assets] = await Promise.all([euerForYear(year), privateMovements(year), listAssets(year)]);
+  const [euer, movements, assets, lohnUmJahreswechsel, ustUmJahreswechsel] = await Promise.all([
+    euerForYear(year),
+    privateMovements(year),
+    listAssets(year),
+    lohnZahlungenUmJahreswechsel(year),
+    umsatzsteuerVorjahreUmJahreswechsel(year),
+  ]);
   const figures: EuerFigures = { ...euerFigures(euer), ...movements };
   const anlagen: AveuerAnlage[] = assets
     .filter((a) => a.year && a.method !== "gwg")
@@ -260,10 +344,10 @@ export async function euerYear(year: number): Promise<EuerYear> {
       afa: a.year!.depreciation,
       abgang: a.year!.disposal,
       buchwertEnde: a.year!.closing,
-      // Antrieb ist nur bei erfasster Privatnutzung bekannt; ohne Angabe gilt das Kfz als Verbrenner
-      ...(a.kind === "kfz" ? { elektro: a.privateUse ? a.privateUse.drive !== "verbrenner" : false } : {}),
+      // Antrieb ist bei erfasster Privatnutzung und bei der AfA nach § 7 Abs. 2a EStG bekannt; sonst gilt das Kfz als Verbrenner
+      ...(a.kind === "kfz" ? { elektro: a.method === "elektro" || (a.privateUse ? a.privateUse.drive !== "verbrenner" : false) } : {}),
     }));
-  return { figures, ...euerTotals(figures), anlagen, pendingAssets: assets.filter((a) => a.pending).length };
+  return { figures, ...euerTotals(figures), anlagen, pendingAssets: assets.filter((a) => a.pending).length, lohnUmJahreswechsel, ustUmJahreswechsel };
 }
 
 function euerIssues(company: Company, data: EuerYear): Issue[] {
@@ -279,6 +363,20 @@ function euerIssues(company: Company, data: EuerYear): Issue[] {
     });
   }
   if (data.einnahmen === 0 && data.ausgaben === 0) issues.push({ tone: "fehler", text: "Keine Betriebseinnahmen und -ausgaben im Jahr." });
+  if (data.lohnUmJahreswechsel > 0) {
+    issues.push({
+      tone: "hinweis",
+      text: `${data.lohnUmJahreswechsel === 1 ? "Eine Lohnzahlung liegt" : `${data.lohnUmJahreswechsel} Lohnzahlungen liegen`} zwischen 22. Dezember und 10. Januar. Regelmäßig wiederkehrende Ausgaben gehören dann in das Jahr, zu dem sie wirtschaftlich gehören (§ 11 Abs. 2 Satz 2 EStG), etwa die Lohnsteuer für Dezember. Haben zählt sie am Tag der Zahlung; prüfe die Zuordnung mit der Steuerberatung.`,
+      link: "/bank",
+    });
+  }
+  if (data.ustUmJahreswechsel > 0) {
+    issues.push({
+      tone: "hinweis",
+      text: `${data.ustUmJahreswechsel === 1 ? "Eine Zahlung" : `${data.ustUmJahreswechsel} Zahlungen`} „Umsatzsteuer früherer Jahre“ zwischen 22. Dezember und 10. Januar. Eine Abschlusszahlung zählt im Jahr der Zahlung; ist es die Vorauszahlung für Dezember bzw. das vierte Quartal, gehört sie in das Vorjahr (§ 11 Abs. 2 Satz 2 EStG). Ordne sie dann der Voranmeldung zu.`,
+      link: "/bank",
+    });
+  }
   return issues;
 }
 
@@ -314,10 +412,12 @@ async function estYear(year: number, euer?: EuerYear): Promise<EstYear> {
     has(angaben.haushaltsnah.minijobs, angaben.haushaltsnah.dienstleistungen, angaben.haushaltsnah.handwerker) && "Haushaltsnahe Aufwendungen",
     angaben.kinder.length > 0 && `Kind (${angaben.kinder.length})`,
     company.einkunftsart === "gewerbe" ? "G" : company.einkunftsart === "selbstaendig" ? "S" : false,
-    ...([
-      ["a", t.a?.vorname],
-      ["b", zusammen ? t.b?.vorname : undefined],
-    ] as const).map(([p, vorname]) =>
+    ...(
+      [
+        ["a", t.a?.vorname],
+        ["b", zusammen ? t.b?.vorname : undefined],
+      ] as const
+    ).map(([p, vorname]) =>
       (p === "a" || zusammen) && (angaben.arbeitnehmer?.[p]?.bescheinigungen.length ?? 0) > 0 ? `N${vorname ? ` (${vorname})` : ""}` : false,
     ),
     k && (k.guenstigerpruefung || has(k.ertraegeMitSteuerabzug, k.ertraegeOhneSteuerabzugInland, k.ertraegeAusland, k.kapitalertragsteuer)) && "KAP",
@@ -340,7 +440,8 @@ function estIssues(company: Company, euer: EuerYear): Issue[] {
   if (t.veranlagung === "zusammen" && (!t.b || !t.verheiratetSeit)) {
     issues.push({ tone: "fehler", text: "Für die Zusammenveranlagung fehlen Angaben zum Ehegatten oder das Heiratsdatum.", link: "/einstellungen" });
   }
-  if (company.strasse && !splitStrasse(company.strasse)) issues.push({ tone: "fehler", text: "In der Anschrift fehlt die Hausnummer.", link: "/einstellungen" });
+  if (company.strasse && !splitStrasse(company.strasse))
+    issues.push({ tone: "fehler", text: "In der Anschrift fehlt die Hausnummer.", link: "/einstellungen" });
   if (!company.einkunftsart) {
     issues.push({ tone: "fehler", text: "Einkunftsart fehlt; ohne sie weiß Haben nicht, ob der Gewinn in Anlage G oder S gehört.", link: "/einstellungen" });
   }
@@ -379,28 +480,35 @@ function yearIssues(year: number, today: string): Issue[] {
 }
 
 export async function submissions(year: number) {
-  return db
-    .select({
-      id: schema.annualSubmissions.id,
-      form: schema.annualSubmissions.form,
-      kind: schema.annualSubmissions.kind,
-      ok: schema.annualSubmissions.ok,
-      code: schema.annualSubmissions.code,
-      message: schema.annualSubmissions.message,
-      transferTicket: schema.annualSubmissions.transferTicket,
-      hasPdf: sql<boolean>`${schema.annualSubmissions.protocolPdf} is not null`,
-      createdAt: schema.annualSubmissions.createdAt,
-    })
-    .from(schema.annualSubmissions)
-    .where(eq(schema.annualSubmissions.year, year))
-    .orderBy(desc(schema.annualSubmissions.createdAt));
+  return (
+    db
+      .select({
+        id: schema.annualSubmissions.id,
+        form: schema.annualSubmissions.form,
+        kind: schema.annualSubmissions.kind,
+        ok: schema.annualSubmissions.ok,
+        code: schema.annualSubmissions.code,
+        message: schema.annualSubmissions.message,
+        transferTicket: schema.annualSubmissions.transferTicket,
+        hasPdf: sql<boolean>`${schema.annualSubmissions.protocolPdf} is not null`,
+        createdAt: schema.annualSubmissions.createdAt,
+      })
+      .from(schema.annualSubmissions)
+      // Die E-Bilanz steht auf der Abschluss-Seite (ebilanz.ts)
+      .where(and(eq(schema.annualSubmissions.year, year), inArray(schema.annualSubmissions.form, ["ust", "euer", "est", "kst", "gewst"])))
+      .orderBy(desc(schema.annualSubmissions.createdAt))
+      .then((rows) => rows as (Omit<(typeof rows)[number], "form"> & { form: AnnualForm })[])
+  );
 }
 
 export async function annualOverview(year: number, today: string) {
   const company = await loadCompany();
   const [ust, euer, history] = await Promise.all([ustYear(year), euerYear(year), submissions(year)]);
   const est = await estYear(year, euer);
-  const base = [...yearIssues(year, today), ...companyIssues(company).map((text): Issue => ({ tone: "fehler", text: `Firmendaten: ${text}`, link: "/einstellungen" }))];
+  const base = [
+    ...yearIssues(year, today),
+    ...companyIssues(company).map((text): Issue => ({ tone: "fehler", text: `Firmendaten: ${text}`, link: "/einstellungen" })),
+  ];
   const sent = (form: AnnualForm) => history.find((h) => h.form === form && h.kind === "send" && h.ok) ?? null;
   return {
     year,
@@ -409,6 +517,7 @@ export async function annualOverview(year: number, today: string) {
     est: { ...est, issues: [...base, ...estIssues(company, euer), ...(await homeofficeIssues(year, est))], sent: sent("est") },
     history,
     versteuerung: await versteuerungForYear(year),
+    rechtsform: company.rechtsform,
   };
 }
 
@@ -449,24 +558,49 @@ export function submitAnnual(actor: string, form: AnnualForm, year: number, clie
 
 /** Unter der Sendesperre: Prüfungen, schon übermittelt?, XML und die gespeicherten Werte */
 async function prepare(form: AnnualForm, year: number, options: AnnualSubmitOptions, test: boolean, herstellerId: string) {
-  const company = await loadCompany();
-  const data = form === "ust" ? await ustYear(year) : await euerYear(year);
-  const formIssues =
-    form === "ust" ? ustIssues(await kleinunternehmerForYear(year), data as UstYear, year) : form === "euer" ? euerIssues(company, data as EuerYear) : estIssues(company, data as EuerYear);
-  const issues = [
-    ...yearIssues(year, options.today),
-    ...companyIssues(company).map((text): Issue => ({ tone: "fehler", text })),
-    ...formIssues,
-  ].filter((i) => i.tone === "fehler");
-  if (issues.length > 0) throw new AnnualError(issues.map((i) => i.text).join(" "));
-
+  const checked = await checkAnnual(form, year, options.today);
   const [already] = await db
     .select({ id: schema.annualSubmissions.id })
     .from(schema.annualSubmissions)
-    .where(and(eq(schema.annualSubmissions.form, form), eq(schema.annualSubmissions.year, year), eq(schema.annualSubmissions.kind, "send"), eq(schema.annualSubmissions.ok, true)));
+    .where(
+      and(
+        eq(schema.annualSubmissions.form, form),
+        eq(schema.annualSubmissions.year, year),
+        eq(schema.annualSubmissions.kind, "send"),
+        eq(schema.annualSubmissions.ok, true),
+      ),
+    );
   if (already && options.kind === "send") {
     throw new AnnualError("Diese Erklärung ist schon übermittelt. Eine Berichtigung geht über das ELSTER-Portal.");
   }
+  return annualXml(form, year, checked, test, herstellerId);
+}
+
+type Checked = { company: Awaited<ReturnType<typeof loadCompany>>; data: UstYear | EuerYear };
+
+/** Firmendaten und Werte des Jahres; Fehler aus den Prüfungen brechen ab */
+export async function checkAnnual(form: AnnualForm, year: number, today: string): Promise<Checked> {
+  const company = await loadCompany();
+  // Eine Kapitalgesellschaft bilanziert und zahlt Körperschaftsteuer: keine Anlage EÜR, keine Einkommensteuer
+  if (form !== "ust" && isKapitalgesellschaft(company.rechtsform)) {
+    throw new AnnualError(`${company.rechtsform === "ug" ? "Eine UG" : "Eine GmbH"} gibt keine Anlage EÜR und keine Einkommensteuererklärung ab.`);
+  }
+  const data = form === "ust" ? await ustYear(year) : await euerYear(year);
+  const formIssues =
+    form === "ust"
+      ? ustIssues(await kleinunternehmerForYear(year), data as UstYear, year)
+      : form === "euer"
+        ? euerIssues(company, data as EuerYear)
+        : estIssues(company, data as EuerYear);
+  const issues = [...yearIssues(year, today), ...companyIssues(company).map((text): Issue => ({ tone: "fehler", text })), ...formIssues].filter(
+    (i) => i.tone === "fehler",
+  );
+  if (issues.length > 0) throw new AnnualError(issues.map((i) => i.text).join(" "));
+  return { company, data };
+}
+
+/** Das XML der Erklärung und die Werte, die mit einem Versuch gespeichert werden */
+export async function annualXml(form: AnnualForm, year: number, { company, data }: Checked, test: boolean, herstellerId: string) {
   const common = {
     year,
     steuernummer13: toElsterSteuernummer(company.steuernummer, company.bundesland!),
@@ -518,7 +652,13 @@ export async function loadAnnualProtocol(id: string) {
     .from(schema.annualSubmissions)
     .where(eq(schema.annualSubmissions.id, id));
   if (!row?.pdf) return null;
-  const name = { ust: "Umsatzsteuererklaerung", euer: "EUER", est: "Einkommensteuererklaerung" }[row.form];
+  const name = {
+    ust: "Umsatzsteuererklaerung",
+    euer: "EUER",
+    est: "Einkommensteuererklaerung",
+    kst: "Koerperschaftsteuererklaerung",
+    gewst: "Gewerbesteuererklaerung",
+    ebilanz: "E-Bilanz",
+  }[row.form];
   return { pdf: row.pdf, filename: `${name}-${row.year}-Protokoll.pdf` };
 }
-

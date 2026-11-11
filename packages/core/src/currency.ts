@@ -78,8 +78,32 @@ export interface PublishedRate {
 }
 
 const MONTH_NAMES: Record<string, number> = {
-  januar: 1, jan: 1, februar: 2, feb: 2, märz: 3, maerz: 3, mär: 3, mrz: 3, april: 4, apr: 4, mai: 5, juni: 6, jun: 6,
-  juli: 7, jul: 7, august: 8, aug: 8, september: 9, sep: 9, sept: 9, oktober: 10, okt: 10, november: 11, nov: 11, dezember: 12, dez: 12,
+  januar: 1,
+  jan: 1,
+  februar: 2,
+  feb: 2,
+  märz: 3,
+  maerz: 3,
+  mär: 3,
+  mrz: 3,
+  april: 4,
+  apr: 4,
+  mai: 5,
+  juni: 6,
+  jun: 6,
+  juli: 7,
+  jul: 7,
+  august: 8,
+  aug: 8,
+  september: 9,
+  sep: 9,
+  sept: 9,
+  oktober: 10,
+  okt: 10,
+  november: 11,
+  nov: 11,
+  dezember: 12,
+  dez: 12,
 };
 
 function cells(line: string, delimiter: string): string[] {
@@ -103,14 +127,33 @@ function cells(line: string, delimiter: string): string[] {
   return result;
 }
 
-/** Monatsspalte aus einer Kopfzelle wie „Januar“, „Jan. 2026“, „01/2026“ oder „01.2026“ */
+/** Länger ist keine Kopfzelle eines Monats; die Grenze hält auch die Laufzeit der Regexe bei fremden Dateien klein */
+const MAX_MONTH_HEADER_LENGTH = 64;
+
+/** Monatsspalte aus einer Kopfzelle wie „Januar“, „Januar[1]“, „Februar [2]“, „Jan. 2026“, „01/2026“ oder „01.2026“ */
 function monthOfHeader(cell: string, year: number): number | null {
-  const numeric = /^(\d{1,2})\s*[/.-]\s*(\d{4})$/.exec(cell.trim());
+  if (cell.length > MAX_MONTH_HEADER_LENGTH) return null;
+  const cleaned = cell.replace(/(?:\s*\[\d+\])+\s*$/, "").trim();
+  const numeric = /^(\d{1,2})\s*[/.-]\s*(\d{4})$/.exec(cleaned);
   if (numeric) return Number(numeric[2]) === year && Number(numeric[1]) >= 1 && Number(numeric[1]) <= 12 ? Number(numeric[1]) : null;
   // Punkte nur bei Monatsnamen entfernen („Jan.“)
-  const word = /^([a-zäö]+)(?:\s+(\d{4}))?$/.exec(cell.toLowerCase().replace(/\./g, "").trim());
+  const word = /^([a-zäö]+)(?:\s+(\d{4}))?$/.exec(cleaned.toLowerCase().replace(/\./g, "").trim());
   if (!word || (word[2] && Number(word[2]) !== year)) return null;
-  return MONTH_NAMES[word[1]!] ?? null;
+  // Nur eigene Schlüssel: „constructor“ träfe sonst Object.prototype
+  return Object.hasOwn(MONTH_NAMES, word[1]!) ? MONTH_NAMES[word[1]!]! : null;
+}
+
+/**
+ * Jahr aus dem Titel über der Tabelle („… Umrechnungskurse 2025 (Euro-Referenzkurse)“), null ohne Jahr im Titel.
+ * Nur die Zahl direkt hinter „Umrechnungskurse“ zählt: Aktenzeichen („S 7329/…“) und Stand-Daten sagen nichts über
+ * das Jahr der Kurse, auch nicht in derselben Zelle.
+ */
+function titleYear(rowsBeforeHeader: string[][]): number | null {
+  for (const cell of rowsBeforeHeader.flat()) {
+    const match = /umrechnungskurse\s+(20\d{2})\b/i.exec(cell);
+    if (match) return Number(match[1]);
+  }
+  return null;
 }
 
 /** Kurszelle wie „1,5523 AUD“, „15.172,93 IDR“ oder „1,0812“ → Kurs und ggf. Code */
@@ -130,11 +173,16 @@ function rateCell(cell: string): { rate: string; code: string | null } | null {
  * Ergebnis. Teilen sich Länder eine Währung, gilt der erste Kurs.
  */
 export function parseBmfRates(text: string, year: number): PublishedRate[] {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((l) => l.trim() !== "");
+  const lines = text
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== "");
   const delimiter = lines.some((l) => l.includes(";")) ? ";" : "\t";
   const rows = lines.map((l) => cells(l, delimiter));
   const headerIndex = rows.findIndex((r) => r.filter((c) => monthOfHeader(c, year) !== null).length >= 1);
   if (headerIndex < 0) return [];
+  const fileYear = titleYear(rows.slice(0, headerIndex));
+  if (fileYear !== null && fileYear !== year) return [];
   const header = rows[headerIndex]!;
   const months = header.map((c) => monthOfHeader(c, year));
   // Spalte mit dem Code der Währung, wenn der Kopf sie benennt; sonst die letzte Zelle mit drei Großbuchstaben vor den
@@ -146,7 +194,9 @@ export function parseBmfRates(text: string, year: number): PublishedRate[] {
     // Code aus einer eigenen Spalte (z. B. „ISO-Code“), falls die Kurszellen keinen tragen
     const named = namedCodeColumn >= 0 ? row[namedCodeColumn] : undefined;
     const codeColumn =
-      named && CURRENCY_CODE.test(named) && named !== "EUR" ? named : (row.filter((c, i) => months[i] === null && CURRENCY_CODE.test(c) && c !== "EUR").at(-1) ?? null);
+      named && CURRENCY_CODE.test(named) && named !== "EUR"
+        ? named
+        : (row.filter((c, i) => months[i] === null && CURRENCY_CODE.test(c) && c !== "EUR").at(-1) ?? null);
     row.forEach((cell, i) => {
       const month = months[i];
       if (!month) return;

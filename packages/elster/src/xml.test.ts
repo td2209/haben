@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildUstvaUpload,
   buildUstvaXml,
   datenartVersionFromXml,
   elsterDecimal,
@@ -18,7 +19,7 @@ const base: UstvaXmlInput = {
   herstellerId: TEST_HERSTELLER_ID,
   produktVersion: "0.1.0",
   test: true,
-  erstellungsdatum: new Date(2026, 3, 5),
+  erstellungsdatum: new Date("2026-04-05T12:00:00Z"),
 };
 
 function tag(xml: string, name: string): string | undefined {
@@ -61,6 +62,17 @@ describe("buildUstvaXml", () => {
     expect(tag(buildUstvaXml({ ...base, period: { year: 2026, month: 12 } }), "Zeitraum")).toBe("12");
   });
 
+  it("schreibt Quartale mit dem Schlüssel 41–44", () => {
+    expect(tag(buildUstvaXml({ ...base, period: { year: 2026, month: 41 } }), "Zeitraum")).toBe("41");
+    expect(tag(buildUstvaXml({ ...base, period: { year: 2026, month: 44 } }), "Zeitraum")).toBe("44");
+  });
+
+  it("lehnt Zeiträume ab, die es nicht gibt", () => {
+    for (const month of [0, 13, 40, 45]) {
+      expect(() => buildUstvaXml({ ...base, period: { year: 2026, month } })).toThrow(`Ungültiger Zeitraum: ${month}`);
+    }
+  });
+
   it("schreibt Kennzahlen im ELSTER-Format", () => {
     const xml = buildUstvaXml(base);
     expect(tag(xml, "Kz81")).toBe("1000");
@@ -90,6 +102,27 @@ describe("buildUstvaXml", () => {
     expect(tag(xml, "Kz67")).toBe("32.95");
     const order = [...xml.matchAll(/<Kz(\d+)>/g)].map((m) => Number(m[1]));
     expect(order).toEqual([9, 46, 47, 67, 83, 84, 85]);
+  });
+
+  it("schreibt innergemeinschaftliche Lieferungen (41), Ausfuhr (43), Erwerbe (89/93 in Euro) und Erwerbsvorsteuer (61 in Cent)", () => {
+    const xml = buildUstvaXml({
+      ...base,
+      figures: { kz81: 0, kz86: 0, kz66: 0, kz41: 300_099, kz43: 120_000, kz89: 50_000, kz93: 10_000, kz61: 10_200, kz83: 0 },
+    });
+    expect(tag(xml, "Kz41")).toBe("3000");
+    expect(tag(xml, "Kz43")).toBe("1200");
+    expect(tag(xml, "Kz89")).toBe("500");
+    expect(tag(xml, "Kz93")).toBe("100");
+    expect(tag(xml, "Kz61")).toBe("102.00");
+    const order = [...xml.matchAll(/<Kz(\d+)>/g)].map((m) => Number(m[1]));
+    expect(order).toEqual([9, 41, 43, 61, 83, 89, 93]);
+  });
+
+  it("schreibt die Einfuhrumsatzsteuer (62 in Cent) nach Kz 61 und vor Kz 66", () => {
+    const xml = buildUstvaXml({ ...base, figures: { kz81: 0, kz86: 0, kz66: 1_900, kz61: 500, kz62: 38_000, kz83: -40_400 } });
+    expect(tag(xml, "Kz62")).toBe("380.00");
+    const order = [...xml.matchAll(/<Kz(\d+)>/g)].map((m) => Number(m[1]));
+    expect(order).toEqual([9, 61, 62, 66, 83]);
   });
 
   it("lässt Nullwerte weg, Kz83 aber nie", () => {
@@ -150,6 +183,14 @@ describe("buildUstvaXml", () => {
     expect(ustvaDatenartVersion(2026)).toBe("UStVA_2026");
     expect(datenartVersionFromXml(buildUstvaXml(base))).toBe("UStVA_2026");
     expect(datenartVersionFromXml("<Elster/>")).toBeUndefined();
+    // Erklärungen der GmbH: Gewerbesteuer und Körperschaftsteuer (Unterfallart 30)
+    expect(datenartVersionFromXml('<E20 xmlns="x" version="2025">')).toBe("GewSt_2025");
+    expect(datenartVersionFromXml('<E30 xmlns="x" version="2025">')).toBe("KSt_30_2025");
+    // E-Bilanz: Taxonomie nach dem Datum im Namensraum
+    const bilanz = (datum: string) => `<DatenArt>Bilanz</DatenArt><xbrli:xbrl xmlns:de-gcd="http://www.xbrl.de/taxonomies/de-gcd-${datum}">`;
+    expect(datenartVersionFromXml(bilanz("2025-04-01"))).toBe("Bilanz_6.9");
+    expect(datenartVersionFromXml(bilanz("2024-04-01"))).toBe("Bilanz_6.8");
+    expect(datenartVersionFromXml(bilanz("2019-04-01"))).toBeUndefined();
   });
 });
 
@@ -158,5 +199,48 @@ describe("elsterDecimal", () => {
     expect(elsterDecimal(123_456_789)).toBe("1234567,89");
     expect(elsterDecimal(5)).toBe("0,05");
     expect(elsterDecimal(-5)).toBe("-0,05");
+  });
+});
+
+describe("buildUstvaUpload (XML-Import in Mein ELSTER)", () => {
+  const latin9 = (bytes: Uint8Array) => new TextDecoder("iso-8859-15").decode(bytes);
+  const upload = (input: Partial<UstvaXmlInput> = {}) => {
+    const { herstellerId: _h, produktVersion: _p, test: _t, ...rest } = { ...base, ...input };
+    return buildUstvaUpload(rest);
+  };
+
+  it("enthält nur die Nutzdaten, dieselben wie beim Versand über ERiC", () => {
+    const xml = latin9(upload());
+    expect(xml.startsWith('<?xml version="1.0" encoding="ISO-8859-15" standalone="no"?>\n<Anmeldungssteuern ')).toBe(true);
+    expect(xml).toContain('xmlns="http://finkonsens.de/elster/elsteranmeldung/ustva/v2026" version="2026"');
+    expect(xml).not.toMatch(/<Elster|TransferHeader|Testmerker|Nutzdatenblock/);
+    const sent = buildUstvaXml(base);
+    const nutzdaten = sent.slice(sent.indexOf("<Anmeldungssteuern"), sent.indexOf("</Anmeldungssteuern>") + "</Anmeldungssteuern>".length);
+    expect(xml.slice(xml.indexOf("<Anmeldungssteuern"))).toBe(nutzdaten);
+  });
+
+  it("Kz09 trägt die Test-Hersteller-ID, die Mein ELSTER beim Import ohnehin nicht übernimmt", () => {
+    expect(tag(latin9(upload()), "Kz09")).toBe(TEST_HERSTELLER_ID);
+  });
+
+  it("schreibt Umlaute und das Euro-Zeichen in ISO-8859-15, Zeichen außerhalb als Zeichenreferenz", () => {
+    const bytes = upload({ datenlieferant: { name: "Müller € GmbH „Nord“", strasse: "Straße 1", plz: "10115", ort: "Köln" } });
+    expect([...bytes].some((b) => b > 0x7f && b !== 0xfc && b !== 0xa4 && b !== 0xdf && b !== 0xf6)).toBe(false);
+    expect(bytes).toContain(0xa4);
+    const xml = latin9(bytes);
+    expect(tag(xml, "Name")).toBe("Müller € GmbH &#8222;Nord&#8220;");
+    expect(tag(xml, "Strasse")).toBe("Straße 1");
+    expect(tag(xml, "Ort")).toBe("Köln");
+  });
+
+  it("lehnt einen ungültigen Zeitraum ab wie der Versand", () => {
+    expect(() => upload({ period: { year: 2026, month: 13 } })).toThrow("Ungültiger Zeitraum: 13");
+  });
+});
+
+describe("Erstellungsdatum", () => {
+  it("ist der Tag in Deutschland, unabhängig von der Zeitzone des Prozesses", () => {
+    // 31.03.2026 22:30 UTC ist in Deutschland schon der 1. April (MESZ)
+    expect(tag(buildUstvaXml({ ...base, erstellungsdatum: new Date("2026-03-31T22:30:00Z") }), "Erstellungsdatum")).toBe("20260401");
   });
 });

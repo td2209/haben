@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { FakeElsterClient, TEST_HERSTELLER_ID, type ElsterClient, type ElsterResult } from "@haben/elster";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setupTestDb, testDatabaseUrl } from "../../test-db.ts";
+import { leeren, setupTestDb, testDatabaseUrl } from "../../test-db.ts";
 
 /** Dateien unter server/ ohne Tests, rekursiv */
 function serverSources(dir = fileURLToPath(new URL("../../", import.meta.url))): string[] {
@@ -32,7 +32,8 @@ function liveClient(log: string[] = [], options: { delay?: number; answer?: Part
 
 describe("ELSTER-Gateway: Struktur", () => {
   it("nur das Gateway kennt Test-Hersteller-ID, simulierten Client, Zertifikat, PIN und Sendesperre", () => {
-    const forbidden = /TEST_HERSTELLER_ID|\.isFake\b|"isFake" in|certificate\.ciphertext|decrypt\(certificate\.pinCiphertext\)|pg_advisory_xact_lock\(hashtext\(\$\{key\}\)\)/;
+    const forbidden =
+      /TEST_HERSTELLER_ID|\.isFake\b|"isFake" in|certificate\.ciphertext|decrypt\(certificate\.pinCiphertext\)|pg_advisory_xact_lock\(hashtext\(\$\{key\}\)\)/;
     const sources = serverSources();
     // Die Suche sieht alle Module, nicht nur diesen Ordner
     expect(sources.some((file) => file.endsWith(join("finanzamt", "postfach.ts")))).toBe(true);
@@ -41,10 +42,11 @@ describe("ELSTER-Gateway: Struktur", () => {
       .filter((file) => forbidden.test(readFileSync(file, "utf8")));
     expect(offenders).toEqual([]);
     // Und kein Dienst importiert ELSTER-Infrastruktur mehr aus der Voranmeldung
-    const fromVat = serverSources().filter((file) => /import \{[^}]*\b(loadActiveCertificate|PRODUKT_VERSION|underSendLock|protocolSubmission)\b[^}]*\} from "[^"]*vat\.ts"/.test(readFileSync(file, "utf8")));
+    const fromVat = serverSources().filter((file) =>
+      /import \{[^}]*\b(loadActiveCertificate|PRODUKT_VERSION|underSendLock|protocolSubmission)\b[^}]*\} from "[^"]*vat\.ts"/.test(readFileSync(file, "utf8")),
+    );
     expect(fromVat).toEqual([]);
   });
-
 });
 
 describe.skipIf(!testDatabaseUrl)("ELSTER-Gateway (Postgres)", () => {
@@ -70,7 +72,7 @@ describe.skipIf(!testDatabaseUrl)("ELSTER-Gateway (Postgres)", () => {
   });
 
   beforeEach(async () => {
-    await sql`truncate elster_certificates, elster_messages, brm_requests, company cascade`;
+    await leeren(sql)`truncate elster_certificates, elster_messages, brm_requests, company cascade`;
     await sql`insert into company (id, name, strasse, plz, ort, steuernummer, bundesland, email) values (1, 'Testfirma', 'Musterstraße 1', '93047', 'Regensburg', '198/113/10010', 'BY', 'max@example.com')`;
   });
 
@@ -107,7 +109,9 @@ describe.skipIf(!testDatabaseUrl)("ELSTER-Gateway (Postgres)", () => {
       ).rejects.toThrow(/Transferticket tt-1.*nicht erneut senden/);
       // Bei Test oder Fehlschlag kein Sonderweg: der ursprüngliche Fehler
       await expect(gateway.protocolSubmission("test", ok, "<xml/>", async () => Promise.reject(new Error("DB weg")))).rejects.toThrow("DB weg");
-      await expect(gateway.protocolSubmission("send", { ...ok, ok: false }, "<xml/>", async () => Promise.reject(new Error("DB weg")))).rejects.toThrow("DB weg");
+      await expect(gateway.protocolSubmission("send", { ...ok, ok: false }, "<xml/>", async () => Promise.reject(new Error("DB weg")))).rejects.toThrow(
+        "DB weg",
+      );
     } finally {
       console.error = original;
     }
@@ -167,7 +171,15 @@ describe.skipIf(!testDatabaseUrl)("ELSTER-Gateway (Postgres)", () => {
   });
 
   it("Berechtigungen: echte Anträge unter der Sendesperre, das Protokoll abgesichert", async () => {
-    const person = (idnr: string, vorname: string) => ({ idnr, anrede: "Herrn" as const, vorname, name: "Muster", geburtsdatum: "1987-03-01", religion: "11", beruf: "" });
+    const person = (idnr: string, vorname: string) => ({
+      idnr,
+      anrede: "Herrn" as const,
+      vorname,
+      name: "Muster",
+      geburtsdatum: "1987-03-01",
+      religion: "11",
+      beruf: "",
+    });
     await taxpayer.saveTaxpayer(actor, { a: person("65929970489", "Max"), b: person("86095742719", "Erika"), veranlagung: "zusammen" });
     await certificate("1234");
     const client = liveClient([], { delay: 100 });
@@ -181,7 +193,15 @@ describe.skipIf(!testDatabaseUrl)("ELSTER-Gateway (Postgres)", () => {
   });
 
   it("scheitert das Protokoll nach einer echten Freischaltung, steht der Freischaltcode nicht im Server-Log", async () => {
-    const person = (idnr: string, vorname: string) => ({ idnr, anrede: "Herrn" as const, vorname, name: "Muster", geburtsdatum: "1987-03-01", religion: "11", beruf: "" });
+    const person = (idnr: string, vorname: string) => ({
+      idnr,
+      anrede: "Herrn" as const,
+      vorname,
+      name: "Muster",
+      geburtsdatum: "1987-03-01",
+      religion: "11",
+      beruf: "",
+    });
     await taxpayer.saveTaxpayer(actor, { a: person("65929970489", "Max"), b: person("86095742719", "Erika"), veranlagung: "zusammen" });
     await certificate("1234");
     const client = liveClient();
@@ -193,9 +213,9 @@ describe.skipIf(!testDatabaseUrl)("ELSTER-Gateway (Postgres)", () => {
     const original = console.error;
     console.error = (...args: unknown[]) => void logged.push(args);
     try {
-      await expect(
-        brm.activateBerechtigung(actor, client, { kind: "send", herstellerId: "12345", freischaltcode: "abcd efgh 1234" }),
-      ).rejects.toThrow(/nicht erneut senden/);
+      await expect(brm.activateBerechtigung(actor, client, { kind: "send", herstellerId: "12345", freischaltcode: "abcd efgh 1234" })).rejects.toThrow(
+        /nicht erneut senden/,
+      );
     } finally {
       console.error = original;
       await sql`drop trigger haben_test_fail on brm_requests`;

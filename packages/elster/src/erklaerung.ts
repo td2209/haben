@@ -41,7 +41,7 @@ export interface ErklaerungAbsender {
 }
 
 export interface Envelope {
-  datenArt: "USt" | "EUER" | "ESt";
+  datenArt: "USt" | "EUER" | "ESt" | "GewSt" | "KSt";
   year: number;
   steuernummer13: string;
   /** Kürzel des Bundeslands, z. B. "BW"; Empfänger im TransferHeader */
@@ -61,7 +61,7 @@ export function checkEnvelope(input: Envelope) {
 }
 
 /** Identifikationsnummern stehen bei der Einkommensteuer im Vorsatz, nicht in den Personendaten */
-export function vorsatz(unterfallart: "10" | "50" | "77", input: Envelope, idnr?: { a: string; b?: string }): XmlNode {
+export function vorsatz(unterfallart: "10" | "20" | "30" | "50" | "77", input: Envelope, idnr?: { a: string; b?: string }): XmlNode {
   const a = input.absender;
   return [
     "Vorsatz",
@@ -249,8 +249,13 @@ export interface EuerFigures {
   erstatteteUst?: Cents;
   anlagenabgang?: Cents;
   privateKfz?: Cents;
+  /** Sonstige Sach-, Nutzungs- und Leistungsentnahmen (Sachentnahme, freie Buchung) */
+  sachentnahmen?: Cents;
   // Betriebsausgaben
+  waren?: Cents;
   fremdleistungen?: Cents;
+  /** Ausgaben für eigenes Personal: Löhne und Gehälter, Lohnsteuer und Beiträge zur Sozialversicherung */
+  personal?: Cents;
   afaBeweglich?: Cents;
   gwg?: Cents;
   sammelposten?: Cents;
@@ -263,6 +268,9 @@ export interface EuerFigures {
   edv?: Cents;
   arbeitsmittel?: Cents;
   werbung?: Cents;
+  /** Schuldzinsen zur Finanzierung von Anschaffungs- und Herstellungskosten von Anlagevermögen bzw. übrige (Darlehen) */
+  schuldzinsenAnlage?: Cents;
+  schuldzinsen?: Cents;
   vorsteuer?: Cents;
   gezahlteUst?: Cents;
   uebrige?: Cents;
@@ -271,11 +279,20 @@ export interface EuerFigures {
   bewirtung?: Cents;
   /** Nicht abziehbare 30 % der Bewirtung; nur zur Information, nicht in den Betriebsausgaben */
   bewirtungNichtAbziehbar?: Cents;
+  /**
+   * Gewerbesteuer und Nebenleistungen darauf, abzüglich Erstattungen, und Hinterziehungszinsen: keine Betriebsausgabe (§ 4
+   * Abs. 5b, Abs. 5 Satz 1 Nr. 8a EStG); nach der
+   * Anleitung zur Anlage EÜR in der Zeile der sonstigen beschränkt abziehbaren Betriebsausgaben, Spalte „nicht abziehbar“
+   */
+  gewerbesteuerNichtAbziehbar?: Cents;
   verpflegung?: Cents;
   tagespauschale?: Cents;
   kfzLeasing?: Cents;
   kfzSteuerVersicherung?: Cents;
   kfzSonstige?: Cents;
+  /** Zeile 39 (Kz 150) und Zeile 48 (Kz 225) */
+  miete?: Cents;
+  erhaltung?: Cents;
   /** Fahrten mit dem Privatfahrzeug (Kilometersatz), als Nutzungseinlage */
   fahrtNutzungseinlage?: Cents;
   // Entnahmen und Einlagen (Einzelunternehmen)
@@ -283,21 +300,36 @@ export interface EuerFigures {
   einlagen?: Cents;
 }
 
-export const EUER_EINNAHMEN = ["kleinunternehmer", "steuerpflichtig", "steuerfrei", "vereinnahmteUst", "erstatteteUst", "anlagenabgang", "privateKfz"] as const;
+export const EUER_EINNAHMEN = [
+  "kleinunternehmer",
+  "steuerpflichtig",
+  "steuerfrei",
+  "vereinnahmteUst",
+  "erstatteteUst",
+  "anlagenabgang",
+  "privateKfz",
+  "sachentnahmen",
+] as const;
 export const EUER_AUSGABEN = [
+  "waren",
   "fremdleistungen",
+  "personal",
   "afaBeweglich",
   "gwg",
   "sammelposten",
   "restbuchwert",
+  "miete",
   "telekommunikation",
   "reisekosten",
   "fortbildung",
   "beratung",
+  "erhaltung",
   "beitraegeVersicherungen",
   "edv",
   "arbeitsmittel",
   "werbung",
+  "schuldzinsenAnlage",
+  "schuldzinsen",
   "vorsteuer",
   "gezahlteUst",
   "uebrige",
@@ -314,7 +346,10 @@ export const EUER_AUSGABEN = [
 export type EuerFigureKey = (typeof EUER_EINNAHMEN)[number] | (typeof EUER_AUSGABEN)[number];
 
 /** Zeile der Anlage EÜR 2025 und amtlicher Text, für die Vorschau */
-export const EUER_FIELDS: Record<EuerFigureKey | "bewirtungNichtAbziehbar" | "entnahmen" | "einlagen", { kz: string; label: string }> = {
+export const EUER_FIELDS: Record<
+  EuerFigureKey | "bewirtungNichtAbziehbar" | "gewerbesteuerNichtAbziehbar" | "entnahmen" | "einlagen",
+  { kz: string; label: string }
+> = {
   kleinunternehmer: { kz: "E6000101", label: "Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer" },
   steuerpflichtig: { kz: "E6000401", label: "Umsatzsteuerpflichtige Betriebseinnahmen" },
   steuerfrei: {
@@ -325,7 +360,14 @@ export const EUER_FIELDS: Record<EuerFigureKey | "bewirtungNichtAbziehbar" | "en
   erstatteteUst: { kz: "E6000701", label: "Vom Finanzamt erstattete und ggf. verrechnete Umsatzsteuer" },
   anlagenabgang: { kz: "E6000801", label: "Veräußerung oder Entnahme von Anlagevermögen" },
   privateKfz: { kz: "E6000901", label: "Private Kfz-Nutzung" },
+  // Schema E77-2023 bis E77-2026 im Dokumentationspaket von ERiC 44.3.6.0 bzw. 45.1.5.0: /EUER/BEin/Entnahme_Sonst/Sum/E6001001
+  // (2023 Zeile 20, ab 2024 Zeile 21); nicht E6301001, das ist dieselbe Zeile der Sonderbetriebseinnahmen
+  sachentnahmen: { kz: "E6001001", label: "Sonstige Sach-, Nutzungs- und Leistungsentnahmen" },
+  // Kennung und Element aus den ERiC-Plugins libcheckEUER_2023 bis _2025: /EUER/BAus/Ware_Rohstoff_Hilfsstoff/Sum/E6001601
+  waren: { kz: "E6001601", label: "Waren, Rohstoffe und Hilfsstoffe einschließlich der Nebenkosten" },
   fremdleistungen: { kz: "E6001701", label: "Bezogene Fremdleistungen" },
+  // Schema E77-2023 bis E77-2026 im ERiC-Paket: /EUER/BAus/Personal/Sum/E6001801
+  personal: { kz: "E6001801", label: "Ausgaben für eigenes Personal (z. B. Gehälter, Löhne und Versicherungsbeiträge)" },
   afaBeweglich: { kz: "E6002101", label: "AfA auf bewegliche Wirtschaftsgüter" },
   gwg: { kz: "E6002301", label: "Aufwendungen für geringwertige Wirtschaftsgüter" },
   sammelposten: { kz: "E6003302", label: "Auflösung Sammelposten nach § 6 Abs. 2a EStG" },
@@ -338,16 +380,31 @@ export const EUER_FIELDS: Record<EuerFigureKey | "bewirtungNichtAbziehbar" | "en
   edv: { kz: "E6004405", label: "Laufende EDV-Kosten" },
   arbeitsmittel: { kz: "E6004408", label: "Arbeitsmittel (z. B. Bürobedarf, Porto, Fachliteratur)" },
   werbung: { kz: "E6004501", label: "Werbekosten" },
+  // Schema E77-2023 bis E77-2026: /EUER/BAus/Sonst_unbeschraenkt/Schuldzins_AnlageVerm/Sum/E6004202 und …/Schuldzins_Uebrige/Sum/E6004303
+  schuldzinsenAnlage: {
+    kz: "E6004202",
+    label: "Schuldzinsen zur Finanzierung von Anschaffungs- und Herstellungskosten von Wirtschaftsgütern des Anlagevermögens",
+  },
+  schuldzinsen: { kz: "E6004303", label: "Übrige Schuldzinsen" },
   vorsteuer: { kz: "E6005001", label: "Gezahlte Vorsteuerbeträge" },
   gezahlteUst: { kz: "E6005101", label: "An das Finanzamt gezahlte und ggf. verrechnete Umsatzsteuer" },
   uebrige: { kz: "E6004901", label: "Übrige unbeschränkt abziehbare Betriebsausgaben" },
   kfzLeasing: { kz: "E6005801", label: "Leasingkosten für Kraftfahrzeuge" },
   kfzSteuerVersicherung: { kz: "E6005903", label: "Steuern, Versicherungen und Maut für Kraftfahrzeuge" },
   kfzSonstige: { kz: "E6006003", label: "Sonstige tatsächliche Fahrtkosten ohne AfA und Zinsen" },
+  // Schema E77-2023 bis E77-2025 im Dokumentationspaket von ERiC 44.3.6.0: /EUER/BAus/Raumkosten_u_sonst/Miete_Pacht/Sum/E6003201
+  // (Zeile 39, Kz 150) und /EUER/BAus/Sonst_unbeschraenkt/Erhaltungsaufwand/Sum/E6004313 (Zeile 48, Kz 225)
+  miete: { kz: "E6003201", label: "Miete/Pacht für Geschäftsräume und betrieblich genutzte Grundstücke" },
+  erhaltung: { kz: "E6004313", label: "Erhaltungsaufwendungen (z. B. Instandhaltung, Wartung, Reparatur; ohne solche für Gebäude und Kfz)" },
   // Kennungen und Reihenfolge wie im EÜR-Formular 2025 von EasyCash&Tax, das ECTElster in dieser Reihenfolge übermittelt
   geschenke: { kz: "E6004002", label: "Geschenke (abziehbar)" },
   bewirtung: { kz: "E6004102", label: "Bewirtungsaufwendungen (abziehbar)" },
   bewirtungNichtAbziehbar: { kz: "E6004101", label: "Bewirtungsaufwendungen (nicht abziehbar)" },
+  // Schema E77-2023 bis E77-2026: /EUER/BAus/Beschr_abziehbar/Nicht_abziehbar/Sonst/Sum/E6004301, darf negativ sein
+  gewerbesteuerNichtAbziehbar: {
+    kz: "E6004301",
+    label: "Sonstige beschränkt abziehbare Betriebsausgaben (nicht abziehbar): Gewerbesteuer, Hinterziehungszinsen",
+  },
   verpflegung: { kz: "E6005002", label: "Verpflegungsmehraufwendungen" },
   tagespauschale: { kz: "E6006405", label: "Tagespauschale für die Tätigkeit in der häuslichen Wohnung" },
   fahrtNutzungseinlage: { kz: "E6006103", label: "Fahrtkosten für nicht zum Betriebsvermögen gehörende Fahrzeuge (Nutzungseinlage)" },
@@ -414,8 +471,7 @@ const SAMMELPOSTEN_VORJAHRE = [
   { kontext: "Sammelposten_VZm4", ak: "E6017404", bwBeginn: "E6017405", afa: "E6017406", bwEnde: undefined },
 ] as const;
 
-const sum = (list: AveuerAnlage[], key: "anschaffungskosten" | "buchwertBeginn" | "afa" | "abgang" | "buchwertEnde") =>
-  list.reduce((s, a) => s + a[key], 0);
+const sum = (list: AveuerAnlage[], key: "anschaffungskosten" | "buchwertBeginn" | "afa" | "abgang" | "buchwertEnde") => list.reduce((s, a) => s + a[key], 0);
 
 function aveuer(year: number, anlagen: AveuerAnlage[]): XmlNode | null {
   const beweglich = (["kfz", "buero", "andere"] as const).map((gruppe) => {
@@ -532,8 +588,7 @@ const RECHTSFORM = { gewerbe: "120", selbstaendig: "140" } as const;
 /** Einkunftsart: 2 = Gewerbebetrieb, 3 = selbständige Arbeit */
 const EINKUNFTSART = { gewerbe: "2", selbstaendig: "3" } as const;
 
-const sumNode = (kontext: string, kz: string, cents: Cents | undefined): XmlNode | null =>
-  cents ? [kontext, [["Sum", [[kz, elsterDecimal(cents)]]]]] : null;
+const sumNode = (kontext: string, kz: string, cents: Cents | undefined): XmlNode | null => (cents ? [kontext, [["Sum", [[kz, elsterDecimal(cents)]]]]] : null);
 
 export function buildEuerXml(input: EuerXmlInput): string {
   const envelopeInput: Envelope = { ...input, datenArt: "EUER" };
@@ -568,6 +623,8 @@ export function buildEuerXml(input: EuerXmlInput): string {
           sumNode("USt_Erstattet_Verrechnet", kz("erstatteteUst"), f.erstatteteUst),
           sumNode("Anlagevermoegen", kz("anlagenabgang"), f.anlagenabgang),
           sumNode("Nutzung_Priv_Kfz", kz("privateKfz"), f.privateKfz),
+          // Im Schema direkt nach der Kfz-Nutzung, vor Weitere_Angabe (2023) bzw. Ruecklagen_Ausgleichsposten (ab 2024)
+          sumNode("Entnahme_Sonst", kz("sachentnahmen"), f.sachentnahmen),
           // Summe der Einnahmen: 2023 unter „Weitere_Angabe“, ab 2024 unter „GesamtSum“
           [input.year >= 2024 ? "GesamtSum" : "Weitere_Angabe", [["E6001201", elsterDecimal(einnahmen)]]],
         ],
@@ -575,7 +632,9 @@ export function buildEuerXml(input: EuerXmlInput): string {
       [
         "BAus",
         [
+          sumNode("Ware_Rohstoff_Hilfsstoff", kz("waren"), f.waren),
           sumNode("Fremdleistung", kz("fremdleistungen"), f.fremdleistungen),
+          sumNode("Personal", kz("personal"), f.personal),
           [
             "AfA",
             [
@@ -590,6 +649,8 @@ export function buildEuerXml(input: EuerXmlInput): string {
               ],
             ],
           ],
+          // Zeile 39; im Schema zwischen AfA und den sonstigen unbeschränkt abziehbaren Betriebsausgaben
+          ["Raumkosten_u_sonst", [sumNode("Miete_Pacht", kz("miete"), f.miete)]],
           [
             "Sonst_unbeschraenkt",
             [
@@ -597,10 +658,14 @@ export function buildEuerXml(input: EuerXmlInput): string {
               sumNode("Auswertstaetigkeit", kz("reisekosten"), f.reisekosten),
               sumNode("Fortbildung", kz("fortbildung"), f.fortbildung),
               sumNode("Rechtsberatung_StB_Buchf", kz("beratung"), f.beratung),
+              // Zeile 48; im Schema nach Miete/Leasing beweglicher Wirtschaftsgüter, vor den Beiträgen
+              sumNode("Erhaltungsaufwand", kz("erhaltung"), f.erhaltung),
               sumNode("Beitrag_Gebuehr_Abgabe_Versicherung", kz("beitraegeVersicherungen"), f.beitraegeVersicherungen),
               sumNode("EDV", kz("edv"), f.edv),
               sumNode("Arbeitsmittel", kz("arbeitsmittel"), f.arbeitsmittel),
               sumNode("Werbung", kz("werbung"), f.werbung),
+              sumNode("Schuldzins_AnlageVerm", kz("schuldzinsenAnlage"), f.schuldzinsenAnlage),
+              sumNode("Schuldzins_Uebrige", kz("schuldzinsen"), f.schuldzinsen),
               sumNode("Vorsteuer", kz("vorsteuer"), f.vorsteuer),
               sumNode("USt", kz("gezahlteUst"), f.gezahlteUst),
               sumNode("Sonst_unbeschr_abziehbar", kz("uebrige"), f.uebrige),
@@ -609,8 +674,15 @@ export function buildEuerXml(input: EuerXmlInput): string {
           [
             "Beschr_abziehbar",
             [
-              // Der nicht abziehbare Teil steht nur nachrichtlich in der Anlage und muss positiv sein
-              (f.bewirtungNichtAbziehbar ?? 0) > 0 && ["Nicht_abziehbar", [sumNode("Bewirtung", EUER_FIELDS.bewirtungNichtAbziehbar.kz, f.bewirtungNichtAbziehbar)]],
+              // Nicht abziehbare Beträge stehen nur nachrichtlich in der Anlage: die Bewirtung muss positiv sein, die
+              // Gewerbesteuer ist nach Erstattungen auch negativ möglich
+              ((f.bewirtungNichtAbziehbar ?? 0) > 0 || (f.gewerbesteuerNichtAbziehbar ?? 0) !== 0) && [
+                "Nicht_abziehbar",
+                [
+                  (f.bewirtungNichtAbziehbar ?? 0) > 0 ? sumNode("Bewirtung", EUER_FIELDS.bewirtungNichtAbziehbar.kz, f.bewirtungNichtAbziehbar) : null,
+                  sumNode("Sonst", EUER_FIELDS.gewerbesteuerNichtAbziehbar.kz, f.gewerbesteuerNichtAbziehbar),
+                ],
+              ],
               [
                 "Abziehbar",
                 [
@@ -619,7 +691,9 @@ export function buildEuerXml(input: EuerXmlInput): string {
                   sumNode("Verpflegung", kz("verpflegung"), f.verpflegung),
                   // Ab 2024 eigene Tagespauschale ohne Sum-Ebene, 2023 noch unter „Tätigkeit in der häuslichen Wohnung“
                   input.year >= 2024
-                    ? f.tagespauschale ? ["Tagespauschale_1", [[kz("tagespauschale"), elsterDecimal(f.tagespauschale)]]] : null
+                    ? f.tagespauschale
+                      ? ["Tagespauschale_1", [[kz("tagespauschale"), elsterDecimal(f.tagespauschale)]]]
+                      : null
                     : sumNode("Arbeitszimmer", "E6003101", f.tagespauschale),
                 ],
               ],
